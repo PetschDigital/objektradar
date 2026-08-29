@@ -1,0 +1,28 @@
+# Datenbank fuer Objektradar.
+# Port 5433 auf dem Host, weil 5432 von einem anderen Projekt belegt ist.
+services:
+  db:
+    image: postgres:17
+    container_name: objektradar-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - objektradar-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  objektradar-pgdata:
+    # Name gepinnt. Ohne das leitet Compose ein Praefix vom Ordnernamen ab
+    # (objektradar_objektradar-pgdata). Auf dem VPS oder nach einer Umbenennung
+    # sucht es dann ein Volume, das dort nicht existiert, legt ein leeres neues
+    # an - und die Datenbank wirkt leer.
+    name: objektradar-pgdata

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titel %}Objektradar{% endblock %}</title>
+</head>
+<body>
+  <header>
+    <a href="{% url 'objektliste' %}">Objektradar</a>
+    {% if user.is_authenticated %}
+      <span>{{ user.anzeigename }}</span>
+      <form method="post" action="{% url 'logout' %}">
+        {% csrf_token %}
+        <button type="submit">abmelden</button>
+      </form>
+    {% endif %}
+  </header>
+
+  {% if messages %}
+    <ul>
+      {% for meldung in messages %}<li>{{ meldung }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+
+  <main>
+    {% block inhalt %}{% endblock %}
+  </main>
+</body>
+</html>

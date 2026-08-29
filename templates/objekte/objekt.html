@@ -1,0 +1,118 @@
+{% extends "basis.html" %}
+
+{% block titel %}{{ objekt }} · Objektradar{% endblock %}
+
+{% block inhalt %}
+  <p><a href="{% url 'objektliste' %}">zurück zur Liste</a></p>
+
+  <h1>{{ objekt }}</h1>
+  <p>
+    {% if objekt.aktueller_preis %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}kein Preis erfasst{% endif %}
+    {% if objekt.qm_preis %}· {{ objekt.qm_preis|floatformat:0 }} €/m²{% endif %}
+    · {{ objekt.get_status_display }}
+    · <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
+  </p>
+
+  <h2>Daten</h2>
+  <dl>
+    {% if objekt.titel %}<dt>Titel</dt><dd>{{ objekt.titel }}</dd>{% endif %}
+    {% if objekt.ort %}<dt>Ort</dt><dd>{{ objekt.ort }}</dd>{% endif %}
+    {% if objekt.region %}<dt>Region</dt><dd>{{ objekt.region }}</dd>{% endif %}
+    {% if objekt.land %}<dt>Land</dt><dd>{{ objekt.get_land_display }}</dd>{% endif %}
+    {% if objekt.objekttyp %}<dt>Objekttyp</dt><dd>{{ objekt.get_objekttyp_display }}</dd>{% endif %}
+    {% if objekt.wohnflaeche %}<dt>Wohnfläche</dt><dd>{{ objekt.wohnflaeche|floatformat:0 }} m²</dd>{% endif %}
+    {% if objekt.grundstuecksgroesse %}<dt>Grundstück</dt><dd>{{ objekt.grundstuecksgroesse|floatformat:0 }} m²</dd>{% endif %}
+    {% if objekt.zimmer %}<dt>Zimmer</dt><dd>{{ objekt.zimmer|floatformat:"-1" }}</dd>{% endif %}
+    {% if objekt.baujahr %}<dt>Baujahr</dt><dd>{{ objekt.baujahr }}</dd>{% endif %}
+    {% if objekt.zustand %}<dt>Zustand</dt><dd>{{ objekt.get_zustand_display }}</dd>{% endif %}
+    {% if objekt.wert_nach_renovierung %}<dt>Wert nach Renovierung</dt><dd>{{ objekt.wert_nach_renovierung|floatformat:0 }} €</dd>{% endif %}
+    {% if objekt.portal %}<dt>Portal</dt><dd>{{ objekt.get_portal_display }}</dd>{% endif %}
+    {% if objekt.inserats_id %}<dt>Inserats-ID</dt><dd>{{ objekt.inserats_id }}</dd>{% endif %}
+    {% if objekt.beschreibung %}<dt>Beschreibung</dt><dd>{{ objekt.beschreibung|linebreaksbr }}</dd>{% endif %}
+  </dl>
+  <p><a href="{% url 'objekt_bearbeiten' objekt.pk %}">Bearbeiten</a></p>
+
+  {% if objekt.bilder.all %}
+    <h2>Bilder</h2>
+    {% for bild in objekt.bilder.all %}
+      <img src="{{ bild.url }}" alt="" loading="lazy" width="320">
+    {% endfor %}
+  {% endif %}
+
+  <h2>Votum</h2>
+  <form method="post" action="{% url 'votum_setzen' objekt.pk %}">
+    {% csrf_token %}
+    <label for="id_begruendung">Begründung</label>
+    <textarea name="begruendung" id="id_begruendung" rows="2">{{ eigenes_votum.begruendung|default:"" }}</textarea>
+    {% for wert, beschriftung in wertungen %}
+      <button type="submit" name="wertung" value="{{ wert }}"{% if eigenes_votum.wertung == wert %} aria-pressed="true"{% endif %}>{{ beschriftung }}{% if eigenes_votum.wertung == wert %} ✓{% endif %}</button>
+    {% endfor %}
+  </form>
+
+  {% if andere_vota %}
+    <ul>
+      {% for votum in andere_vota %}
+        <li>{{ votum.person.anzeigename }}: {{ votum.get_wertung_display }}{% if votum.begruendung %} — {{ votum.begruendung }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <h2>Status</h2>
+  <form method="post" action="{% url 'status_setzen' objekt.pk %}">
+    {% csrf_token %}
+    <label for="id_status">Status</label>
+    <select name="status" id="id_status">
+      {% for wert, beschriftung in statusauswahl %}
+        <option value="{{ wert }}"{% if objekt.status == wert %} selected{% endif %}>{{ beschriftung }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Status setzen</button>
+  </form>
+
+  {% if statusaenderungen %}
+    <ul>
+      {% for aenderung in statusaenderungen %}
+        <li>{{ aenderung.datum|date:"d.m.Y H:i" }} — {{ aenderung.person.anzeigename|default:"—" }}: {{ aenderung.get_alter_status_display }} → {{ aenderung.get_neuer_status_display }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if objekt.preise.all %}
+    <h2>Preisverlauf</h2>
+    <table>
+      <thead><tr><th>Datum</th><th>Preis</th><th>Quelle</th></tr></thead>
+      <tbody>
+        {% for eintrag in objekt.preise.all %}
+          <tr>
+            <td>{{ eintrag.datum|date:"d.m.Y" }}</td>
+            <td>{{ eintrag.preis|floatformat:0 }} €</td>
+            <td>{{ eintrag.get_quelle_display }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>Notizen</h2>
+  <form method="post" action="{% url 'notiz_anlegen' objekt.pk %}">
+    {% csrf_token %}
+    <label for="id_text">Neue Notiz</label>
+    <textarea name="text" id="id_text" rows="3" required></textarea>
+    <button type="submit">Notiz speichern</button>
+  </form>
+
+  {% if notizen %}
+    <ul>
+      {% for notiz in notizen %}
+        <li>{{ notiz.erstellt_am|date:"d.m.Y H:i" }} — {{ notiz.person.anzeigename }}: {{ notiz.text|linebreaksbr }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <hr>
+  <p>
+    {{ objekt.get_quelle_display }}
+    · eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
+    · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
+  </p>
+{% endblock %}

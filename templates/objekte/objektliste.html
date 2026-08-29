@@ -1,0 +1,49 @@
+{% extends "basis.html" %}
+
+{% block titel %}Objekte · Objektradar{% endblock %}
+
+{% block inhalt %}
+  <h1>Objekte</h1>
+
+  <form method="post" action="{% url 'objekt_anlegen' %}">
+    {% csrf_token %}
+    <label for="id_url">Link zum Inserat</label>
+    <input type="url" name="url" id="id_url" placeholder="https://…" autofocus required>
+    <button type="submit">Einwerfen</button>
+  </form>
+
+  {% if objekte %}
+    <table>
+      <thead>
+        <tr>
+          <th>Objekt</th>
+          <th>Ort</th>
+          <th>Region / Land</th>
+          <th>Wohnfläche</th>
+          <th>Grundstück</th>
+          <th>Kaufpreis</th>
+          <th>€/m²</th>
+          <th>Zustand</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in objekte %}
+          <tr>
+            <td><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
+            <td>{{ o.ort|default:"—" }}</td>
+            <td>{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
+            <td>{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>
+            <td>{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</td>
+            <td>{% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
+            <td>{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
+            <td>{{ o.get_zustand_display }}</td>
+            <td>{{ o.get_status_display }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>Noch kein Objekt in der Liste.</p>
+  {% endif %}
+{% endblock %}
