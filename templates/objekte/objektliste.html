@@ -12,38 +12,95 @@
     <button type="submit">Einwerfen</button>
   </form>
 
+  {# Ein GET-Formular, damit ein gefilterter Stand teilbar ist. `seite` steht
+     bewusst NICHT darin: ein neuer Filter faengt auf Seite 1 an. #}
+  <form method="get" class="filter">
+    {{ filterform.as_p }}
+    {# Nur wenn wirklich sortiert wurde, und mit dem GEPRUEFTEN Wert: ein
+       Filtern soll die Sortierung nicht abwerfen, aber auch keinen Unfug aus
+       der Adresse in die naechste Adresse tragen. #}
+    {% if request.GET.sortierung %}
+      <input type="hidden" name="sortierung" value="{{ sortierung }}">
+    {% endif %}
+    <button type="submit">Filtern</button>
+  </form>
+
+  {% if ist_gefiltert %}
+    <p class="treffer">
+      {{ trefferzahl }} von {{ gesamtzahl }} Objekten ·
+      <a href="{% url 'objektliste' %}">Filter zurücksetzen</a>
+    </p>
+  {% endif %}
+
+  {# Eigene Leiste statt Verweise in den Spaltenkoepfen: unter 48rem ist die
+     Tabelle eine Kartenliste, `thead` steht dort nur noch fuer Screenreader
+     und waere mit der Maus nicht erreichbar. `seite=None` wirft die
+     Seitenzahl ab - eine neue Sortierung faengt vorn an. #}
+  <p class="sortierung">
+    Sortierung:
+    {% for spalte in sortierbar %}
+      <span>{{ spalte.beschriftung }}<a
+        href="{% querystring sortierung=spalte.aufsteigend seite=None %}"
+        title="{{ spalte.beschriftung }} aufsteigend"
+        {% if sortierung == spalte.aufsteigend %}aria-current="true"{% endif %}>↑</a><a
+        href="{% querystring sortierung=spalte.absteigend seite=None %}"
+        title="{{ spalte.beschriftung }} absteigend"
+        {% if sortierung == spalte.absteigend %}aria-current="true"{% endif %}>↓</a></span>
+    {% endfor %}
+  </p>
+
   {% if objekte %}
-    <table>
-      <thead>
-        <tr>
-          <th>Objekt</th>
-          <th>Ort</th>
-          <th>Region / Land</th>
-          <th>Wohnfläche</th>
-          <th>Grundstück</th>
-          <th>Kaufpreis</th>
-          <th>€/m²</th>
-          <th>Zustand</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for o in objekte %}
+    <div class="tabelle">
+      <table>
+        <thead>
           <tr>
-            <td><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
-            <td>{{ o.ort|default:"—" }}</td>
-            <td>{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
-            <td>{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>
-            <td>{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</td>
-            <td>{% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
-            <td>{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
-            <td>{{ o.get_zustand_display }}</td>
-            <td>{{ o.get_status_display }}</td>
+            <th data-spalte="Objekt">Objekt</th>
+            <th data-spalte="Ort">Ort</th>
+            <th data-spalte="Region / Land">Region / Land</th>
+            <th data-spalte="Wohnfläche">Wohnfläche</th>
+            <th data-spalte="Grundstück">Grundstück</th>
+            <th data-spalte="Kaufpreis">Kaufpreis</th>
+            <th data-spalte="€/m²">€/m²</th>
+            <th data-spalte="Zustand">Zustand</th>
+            <th data-spalte="Status">Status</th>
+            <th data-spalte="Votum">Votum</th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for o in objekte %}
+            <tr>
+              <td data-spalte="Objekt"><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
+              <td data-spalte="Ort">{{ o.ort|default:"—" }}</td>
+              <td data-spalte="Region / Land">{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
+              <td data-spalte="Wohnfläche">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>
+              <td data-spalte="Grundstück">{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</td>
+              <td data-spalte="Kaufpreis">{% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
+              <td data-spalte="€/m²">{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
+              <td data-spalte="Zustand">{{ o.get_zustand_display }}</td>
+              <td data-spalte="Status">{{ o.get_status_display }}</td>
+              <td data-spalte="Votum">{{ o.votum_uebersicht }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if page_obj.has_other_pages %}
+      {# `{% querystring %}` uebernimmt die uebrigen Parameter unveraendert und
+         tauscht nur `seite` aus - ein mehrfach gesetztes `status` vollstaendig
+         mitgefuehrt. Genau darum wird das nicht von Hand gebaut. #}
+      <nav class="blaettern">
+        {% if page_obj.has_previous %}
+          <a href="{% querystring seite=page_obj.previous_page_number %}" rel="prev">zurück</a>
+        {% endif %}
+        <span>Seite {{ page_obj.number }} von {{ page_obj.paginator.num_pages }}</span>
+        {% if page_obj.has_next %}
+          <a href="{% querystring seite=page_obj.next_page_number %}" rel="next">weiter</a>
+        {% endif %}
+      </nav>
+    {% endif %}
+  {% elif ist_gefiltert %}
+    <p class="leer">Kein Objekt passt zu diesem Filter.</p>
   {% else %}
-    <p>Noch kein Objekt in der Liste.</p>
+    <p class="leer">Noch kein Objekt in der Liste. Wirf oben den Link zu einem Inserat ein.</p>
   {% endif %}
 {% endblock %}

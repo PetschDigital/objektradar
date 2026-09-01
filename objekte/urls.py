@@ -5,6 +5,9 @@ from . import views
 urlpatterns = [
     path("", views.ObjektlisteView.as_view(), name="objektliste"),
     path("einwerfen/", views.objekt_anlegen, name="objekt_anlegen"),
+    # Eine Adresse, zwei Stationen: GET zeigt die Vorschau, POST uebernimmt.
+    path("uebernehmen/", views.UebernehmenView.as_view(), name="uebernehmen"),
+    path("lesezeichen/", views.LesezeichenView.as_view(), name="lesezeichen"),
     path("objekt/<int:pk>/", views.ObjektView.as_view(), name="objekt"),
     path(
         "objekt/<int:pk>/bearbeiten/",

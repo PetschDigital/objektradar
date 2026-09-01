@@ -1,0 +1,46 @@
+{% extends "basis.html" %}
+
+{% block titel %}{% if objekt %}Objekt ergänzen{% else %}Neues Objekt übernehmen{% endif %} · Objektradar{% endblock %}
+
+{% block inhalt %}
+  <h1>{% if objekt %}Objekt ergänzen{% else %}Neues Objekt übernehmen{% endif %}</h1>
+
+  <p class="quelle">
+    <a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ url }}</a>
+  </p>
+
+  {% if objekt %}
+    <p>
+      Dieses Inserat liegt schon in der Liste:
+      <a href="{% url 'objekt' objekt.pk %}">{{ objekt }}</a>
+    </p>
+    <p class="hinweis">
+      Vorbelegt ist der gespeicherte Stand. Was das Lesezeichen abweichend
+      gelesen hat, steht unter dem Feld — übernommen wird es erst, wenn du es
+      einträgst.
+    </p>
+  {% endif %}
+
+  <form method="post" action="{% url 'uebernehmen' %}">
+    {% csrf_token %}
+    <input type="hidden" name="url" value="{{ url }}">
+    <input type="hidden" name="portal" value="{{ portal }}">
+    <input type="hidden" name="inserats_id" value="{{ inserats_id }}">
+    {% for bild in bilder %}<input type="hidden" name="bilder" value="{{ bild }}">{% endfor %}
+
+    {{ form.non_field_errors }}
+
+    {% for feld, gelesen in felder %}
+      <p>
+        {{ feld.label_tag }}
+        {{ feld }}
+        {{ feld.errors }}
+        {% if gelesen %}<span class="gelesen">gelesen: {{ gelesen }}</span>{% endif %}
+        {% if feld.help_text %}<span class="helptext">{{ feld.help_text }}</span>{% endif %}
+      </p>
+    {% endfor %}
+
+    <button type="submit">{% if objekt %}Ergänzen{% else %}Übernehmen{% endif %}</button>
+    <a href="{% url 'objektliste' %}">Abbrechen</a>
+  </form>
+{% endblock %}

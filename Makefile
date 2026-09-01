@@ -36,5 +36,5 @@ superuser:        ## Konto von Hand anlegen - es gibt keinen Registrierungsweg
 shell:
 	$(PY) manage.py shell
 
-test:
-	$(PY) manage.py test
+test:              ## make test [TESTS=objekte.tests.UebernahmeTests]
+	$(PY) manage.py test $(TESTS)

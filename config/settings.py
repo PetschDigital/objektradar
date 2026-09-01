@@ -135,6 +135,11 @@ USE_THOUSAND_SEPARATOR = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Ohne diese Zeile findet Django `static/objektradar.css` NICHT: der Pfad liegt
+# auf Projektebene, und der `AppDirectoriesFinder` sieht nur in
+# `<app>/static/` nach. Der Fehler waere stumm - die Seite saehe einfach
+# weiter unformatiert aus, und niemand bekaeme eine Meldung.
+STATICFILES_DIRS = [BASE_DIR / "static"]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

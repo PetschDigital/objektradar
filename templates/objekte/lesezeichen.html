@@ -1,0 +1,50 @@
+{% extends "basis.html" %}
+
+{% block titel %}Lesezeichen · Objektradar{% endblock %}
+
+{% block inhalt %}
+  <h1>Lesezeichen</h1>
+
+  <p>
+    Das Lesezeichen liest ein geöffnetes Inserat im Browser und übergibt die
+    gefundenen Felder an die Vorschau. Es legt selbst nichts an — was übernommen
+    wird, entscheidest du dort.
+  </p>
+
+  <h2>Einrichten</h2>
+  <ol>
+    <li>Lesezeichenleiste einblenden (⌘⇧B beziehungsweise Strg+Umschalt+B).</li>
+    <li>Den Link unten in die Lesezeichenleiste ziehen.</li>
+    <li>Ein Inserat öffnen und das Lesezeichen anklicken.</li>
+  </ol>
+
+  <p><a class="lesezeichen" href="{{ skript }}">Ins Objektradar</a></p>
+
+  <p class="hinweis">
+    Nur im Desktop-Browser. Mobile Browser haben keine Lesezeichenleiste, in die
+    sich der Link ziehen ließe.
+  </p>
+
+  <h2>Zum Kopieren</h2>
+  <p>
+    Falls das Ziehen nicht geht: den Text unten kopieren und von Hand als
+    Lesezeichen mit dieser Adresse anlegen.
+  </p>
+  <p>
+    <label for="id_skript">Adresse des Lesezeichens</label>
+    <textarea id="id_skript" rows="6" readonly>{{ skript }}</textarea>
+  </p>
+
+  <h2>Was gelesen wird</h2>
+  <p>
+    Link, Titel, Beschreibung, bis zu fünf Bilder sowie — soweit sie sich im
+    Seitentext sicher erkennen lassen — Kaufpreis, Wohnfläche und Zimmerzahl.
+    Grundstücksgröße, Baujahr, Ort, Region, Objekttyp und Zustand werden nicht
+    gelesen: ein verwechselter Wert wäre schlimmer als ein leeres Feld. Makler-
+    und Kontaktdaten werden nicht gelesen, nicht übertragen und nicht gespeichert.
+  </p>
+  <p class="hinweis">
+    Ändert sich die Adresse dieses Werkzeugs, zieh das Lesezeichen neu — die
+    Zieladresse steht fest im Lesezeichen: {{ ziel }}
+  </p>
+{% endblock %}

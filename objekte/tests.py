@@ -9,25 +9,46 @@ zweite nicht mehr, sobald die erste faellt.
 """
 
 import ast
+import html as htmlwerkzeug
+import inspect
 import re
+import textwrap
 from datetime import date, timedelta
+from html.parser import HTMLParser
 from importlib import import_module
+from urllib.parse import parse_qs, urlparse
 from unittest import mock
 from decimal import Decimal
 
+from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.core.exceptions import FieldError
 from django.db import IntegrityError, connection, migrations, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.forms import modelform_factory
-from django.test import RequestFactory, SimpleTestCase, TestCase
+from django.templatetags.static import static
+from django.urls import reverse
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from django.utils.html import escape
 
-from . import portale, views
-from .choices import Land, PreisQuelle, Portal, Quelle, Status, Wertung, Zustand
+from . import forms, lesezeichen, portale, views
+from .choices import (
+    STATUS_AUSGEBLENDET,
+    Land,
+    Objekttyp,
+    Portal,
+    PreisQuelle,
+    Quelle,
+    Status,
+    Wertung,
+    Zustand,
+)
+from .forms import STATUS_VORBELEGUNG
 from .models import Notiz, Objekt, Preisverlauf, Votum
 from .portale import portal_und_id
 
@@ -595,8 +616,15 @@ class SchnellerfassungTests(TestCase):
         self.assertEqual(self._einwerfen()["Location"], "/")
 
     def test_das_eingeworfene_objekt_steht_danach_in_der_liste(self):
+        """Seit Abschnitt 4 steht in der Objektspalte `Portal · ID`, nicht die URL.
+
+        Geprueft wird die verlinkte Zeile, nicht nur die Bezeichnung: eine
+        Bezeichnung ohne Link waere in einer Liste, aus der man ins Objekt
+        springt, nur die halbe Zusage.
+        """
         antwort = self._einwerfen(follow=True)
-        self.assertContains(antwort, "https://www.idealista.com/inmueble/12345/")
+        pk = Objekt.objects.get().pk
+        self.assertContains(antwort, f'<a href="/objekt/{pk}/">idealista · 12345</a>')
 
     def test_die_bestaetigung_verlinkt_auf_die_objektansicht(self):
         antwort = self._einwerfen(follow=True)
@@ -894,21 +922,76 @@ class ObjektlisteTests(TestCase):
         self.assertIn('"id" desc', sql)
 
     def test_mehr_objekte_kosten_nicht_mehr_abfragen(self):
-        """Riegel gegen ein N+1 beim naechsten Spaltenzuwachs.
+        """Riegel gegen ein N+1. In Punkt 5 von 1 gegen 7 auf 5 gegen 50 gezogen.
 
-        Gezaehlt wird der Unterschied, nicht die absolute Zahl: Sitzung und
-        Besuchs-Middleware fragen ohnehin mit, und deren Zahl ist nicht die
-        Zusage, die hier gehalten werden soll.
+        Sieben Zeilen waren zu wenig, um ein N+1 sichtbar zu machen. Punkt 5
+        ist die Runde, in der es zaehlt: Paginator, drei Aggregate ueber
+        `vota` und die Zahl der aktiven Personen kommen gleichzeitig dazu, und
+        jede dieser drei Stellen liesse sich versehentlich je Zeile abfragen.
+
+        Gemessen wird MIT gesetztem Filter und gesetzter Sortierung. Beides
+        veraendert den Abfragepfad; ein N+1, das nur im gefilterten Stand
+        auftraete, bliebe sonst unentdeckt.
+
+        Die erwartete Zahl wird beim ersten Durchgang ERMITTELT und nicht
+        hingeschrieben: Sitzung und Middleware fragen ohnehin mit, und deren
+        Zahl ist nicht die Zusage, die hier gehalten werden soll. Fuenfzig ist
+        die Seitengroesse - beide Messungen liegen damit auf einer Seite, und
+        gezaehlt wird der Zeilenzuwachs und nicht der Sprung ins Blaettern.
         """
-        self._seite()  # Aufwaermen, damit Verbindungsaufbau nicht mitzaehlt.
-        Objekt.objects.create(url="https://x/1")
-        with CaptureQueriesContext(connection) as mit_einem:
-            self._seite()
-        for nummer in range(2, 8):
+        adresse = "/?status=neu&sortierung=-qm_preis"
+        self.client.get(adresse)  # Aufwaermen, damit Verbindungsaufbau nicht mitzaehlt.
+        for nummer in range(5):
             Objekt.objects.create(url=f"https://x/{nummer}")
-        with CaptureQueriesContext(connection) as mit_sieben:
-            self._seite()
-        self.assertEqual(len(mit_sieben), len(mit_einem))
+        with CaptureQueriesContext(connection) as mit_fuenf:
+            self.client.get(adresse)
+        for nummer in range(5, views.OBJEKTE_JE_SEITE):
+            Objekt.objects.create(url=f"https://x/{nummer}")
+        with self.assertNumQueries(len(mit_fuenf)):
+            self.client.get(adresse)
+
+    def test_der_einwerfer_steht_ohne_zusatzabfrage_bereit(self):
+        """`select_related("eingestellt_von")` - und der Zeuge, der ihn haelt.
+
+        Die Gegenprobe zu Punkt 5 hat gezeigt: den Aufruf zu entfernen liess
+        die ganze Testreihe gruen. Er war eine blinde Zusage, weil die Vorlage
+        das Feld heute nicht anzeigt - und die erste Spalte "eingeworfen von"
+        braechte damit ein N+1 mit, das niemand kommen sieht.
+
+        Gemessen wird der ZUGRIFF, nicht die Anwesenheit des Aufrufs: ein
+        Strukturtest auf `select_related` im Quelltext bewiese nur, dass da
+        ein Wort steht.
+        """
+        for nummer in range(5):
+            Objekt.objects.create(url=f"https://x/{nummer}", eingestellt_von=self.person)
+        objekte = self._seite().context["objekte"]
+        with self.assertNumQueries(0):
+            for objekt in objekte:
+                self.assertEqual(objekt.eingestellt_von, self.person)
+
+    def test_mehr_vota_kosten_nicht_mehr_abfragen(self):
+        """Derselbe Riegel fuer die Votum-Spalte.
+
+        Der Zeuge darueber legt Objekte OHNE Vota an - eine Zaehlschleife
+        ueber `objekt.vota` bliebe dort zwar auch teuer, aber eine
+        Implementierung, die nur bei vorhandenen Vota nachfragt, kaeme
+        ungesehen durch.
+        """
+        adresse = "/?status=neu&sortierung=-qm_preis"
+        weitere = [Person.objects.create_user(f"person{n}") for n in range(4)]
+        self.client.get(adresse)  # Aufwaermen.
+        for nummer in range(5):
+            objekt = Objekt.objects.create(url=f"https://x/{nummer}")
+            for person in weitere:
+                Votum.objects.create(objekt=objekt, person=person, wertung=Wertung.DAFUER)
+        with CaptureQueriesContext(connection) as mit_fuenf:
+            self.client.get(adresse)
+        for nummer in range(5, views.OBJEKTE_JE_SEITE):
+            objekt = Objekt.objects.create(url=f"https://x/{nummer}")
+            for person in weitere:
+                Votum.objects.create(objekt=objekt, person=person, wertung=Wertung.DAFUER)
+        with self.assertNumQueries(len(mit_fuenf)):
+            self.client.get(adresse)
 
 
 class ObjektansichtTests(TestCase):
@@ -2005,3 +2088,1863 @@ class NachtragsmigrationTests(TestCase):
         Objekt.objects.create(url="https://www.idealista.com/en/inmueble/54321/?x=1")
         self._nachtragen()
         self.assertEqual(Objekt.objects.count(), 2)
+
+
+class SpaltenParser(HTMLParser):
+    """Liest Spaltenkoepfe und `data-spalte` je Zeile aus der Objektliste.
+
+    Von Hand statt mit einer Bibliothek: das Projekt haengt an Django,
+    psycopg und dotenv - eine vierte Abhaengigkeit fuer einen Zeugen waere ein
+    schlechter Tausch.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.kopf = []      # Text je <th> im <thead>
+        self.zellen = []    # Liste der data-spalte-Werte je <tbody>-Zeile
+        self._im_thead = False
+        self._im_th = False
+        self._text = ""
+        self._zeile = None
+
+    def handle_starttag(self, tag, attrs):
+        werte = dict(attrs)
+        if tag == "thead":
+            self._im_thead = True
+        elif tag == "th" and self._im_thead:
+            self._im_th = True
+            self._text = ""
+        elif tag == "tr" and not self._im_thead:
+            self._zeile = []
+        elif tag == "td" and self._zeile is not None:
+            self._zeile.append(werte.get("data-spalte"))
+
+    def handle_endtag(self, tag):
+        if tag == "thead":
+            self._im_thead = False
+        elif tag == "th" and self._im_th:
+            self._im_th = False
+            self.kopf.append(self._text.strip())
+        elif tag == "tr" and self._zeile is not None:
+            self.zellen.append(self._zeile)
+            self._zeile = None
+
+    def handle_data(self, daten):
+        if self._im_th:
+            self._text += daten
+
+
+class StylesheetTests(TestCase):
+    """Zusagen 10 bis 12. Teil B ist der Teil, den kein Test wirklich abnimmt -
+    diese drei sind das, was sich ueberhaupt bezeugen laesst. Wie die Seite
+    aussieht, entscheidet der Blick auf den Bildschirm."""
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="ein-langes-passwort", first_name="Steffen", last_name="P."
+        )
+        self.client.force_login(self.person)
+
+    def _seite(self):
+        return self.client.get("/")
+
+    # --- Zusage 10 --------------------------------------------------------
+
+    def test_das_stylesheet_ist_ueber_die_static_konfiguration_auffindbar(self):
+        """Der eigentliche Zeuge fuer Zusage 10.
+
+        Eine Pruefung auf die Zeichenkette im Template bliebe gruen, wenn
+        `STATICFILES_DIRS` wieder verschwaende: `{% static %}` baut die URL
+        auch dann noch zusammen. Die Datei waere nur nicht mehr auffindbar,
+        die Seite bliebe stumm unformatiert - genau der Fehler, den die
+        Spezifikation unter B1 beschreibt.
+        """
+        self.assertIsNotNone(finders.find("objektradar.css"))
+
+    def test_die_seite_verweist_auf_das_stylesheet(self):
+        self.assertContains(self._seite(), f'href="{static("objektradar.css")}"')
+
+    def test_der_verweis_steht_auf_jeder_seite(self):
+        # Er haengt in `basis.html`, nicht in einer einzelnen Vorlage. Die
+        # Anmeldeseite ist die einzige ohne Anmeldung - und erbt ihn trotzdem.
+        self.client.logout()
+        self.assertContains(
+            self.client.get(reverse("login")), f'href="{static("objektradar.css")}"'
+        )
+
+    # --- Zusage 11 --------------------------------------------------------
+
+    def _geparst(self):
+        Objekt.objects.create(url="https://x/1", titel="Erstes", ort="Palma")
+        Objekt.objects.create(url="https://x/2", titel="Zweites", ort="Sóller")
+        parser = SpaltenParser()
+        parser.feed(self._seite().content.decode())
+        return parser
+
+    def test_die_liste_hat_ueberhaupt_spaltenkoepfe(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darunter.
+
+        Faende der Parser keinen Kopf, verglichen die Zusage-11-Zeugen zwei
+        leere Listen und blieben gruen - auch wenn kein einziges `data-spalte`
+        im Template steht.
+        """
+        self.assertNotEqual(self._geparst().kopf, [])
+
+    def test_die_liste_hat_ueberhaupt_zeilen(self):
+        self.assertNotEqual(self._geparst().zellen, [])
+
+    def test_jede_zelle_traegt_die_bezeichnung_ihres_spaltenkopfs(self):
+        """Ohne diesen Zeugen faellt eine spaeter ergaenzte Spalte in der
+        Kartenansicht ohne Bezeichnung heraus, und niemand merkt es.
+
+        Verglichen wird gegen den TEXT des Spaltenkopfs, nicht gegen dessen
+        eigenes `data-spalte`: sonst pruefte der Zeuge zwei Attribute
+        gegeneinander, die man gemeinsam falsch setzen kann.
+        """
+        geparst = self._geparst()
+        self.assertEqual(geparst.zellen, [geparst.kopf] * len(geparst.zellen))
+
+    def test_das_stylesheet_nennt_ueberhaupt_benannte_spalten(self):
+        self.assertNotEqual(self._benannte_spalten_aus_dem_stylesheet(), set())
+
+    def test_die_benannten_spalten_des_stylesheets_gibt_es_in_der_liste(self):
+        """Das Stylesheet richtet die Zahlenspalten ueber ihren NAMEN aus.
+
+        `nth-child` waere gegen eine spaeter eingeschobene Spalte blind - der
+        Name ist es nicht. Der Preis dafuer: eine Umbenennung faellt STILL aus,
+        die Regel greift dann einfach nicht mehr und die Zahlen stehen wieder
+        linksbuendig. Dieser Zeuge ist der Riegel dagegen.
+
+        Die Namen werden aus der CSS-Datei GELESEN, nicht hier wiederholt -
+        eine zweite Liste driftet von der ersten weg.
+        """
+        self.assertLessEqual(
+            self._benannte_spalten_aus_dem_stylesheet(), set(self._geparst().kopf)
+        )
+
+    def _benannte_spalten_aus_dem_stylesheet(self):
+        quelle = (settings.BASE_DIR / "static" / "objektradar.css").read_text(
+            encoding="utf-8"
+        )
+        return set(re.findall(r'\[data-spalte="([^"]+)"\]', quelle))
+
+    # --- Zusage 12 --------------------------------------------------------
+
+    def test_der_leere_zustand_nennt_den_einwurf(self):
+        # Ein leerer Bildschirm sagt, was als Naechstes zu tun ist.
+        self.assertContains(self._seite(), "Wirf oben den Link zu einem Inserat ein.")
+
+
+# =========================================================================
+# Schritt 2, Abschnitt 4: die beiden Korrekturen aus der Sichtpruefung
+# =========================================================================
+
+
+class ObjektbezeichnungTests(TestCase):
+    """Zusage 12: Titel, ersatzweise Portal und ID, ersatzweise die URL.
+
+    Drei getrennte Zeugen, weil es drei getrennte Zweige sind. In einer
+    Methode zusammengefasst maesse die zweite Behauptung nichts mehr, sobald
+    die erste faellt.
+    """
+
+    def test_der_titel_steht_fuer_das_objekt(self):
+        # Portal und ID sind gesetzt und treten trotzdem nicht an: der Titel
+        # geht vor. Ohne diese beiden Zusatzwerte bewiese der Zeuge nur, dass
+        # irgendetwas den Titel zurueckgibt - nicht, dass er Vorrang hat.
+        o = Objekt.objects.create(
+            url="https://www.immobilienscout24.de/expose/12345",
+            portal=Portal.IMMOSCOUT24,
+            inserats_id="12345",
+            titel="Finca bei Sóller",
+        )
+        self.assertEqual(str(o), "Finca bei Sóller")
+
+    def test_ohne_titel_stehen_portal_und_inserats_id(self):
+        """Gemessen an ImmoScout24, nicht an idealista.
+
+        Bei idealista sind Schluessel und Beschriftung dasselbe Wort - der
+        Zeuge bliebe gruen, auch wenn hier der rohe Schluessel statt
+        `get_portal_display()` stuende. "immoscout24" gegen "ImmoScout24"
+        macht den Unterschied messbar.
+        """
+        o = Objekt.objects.create(
+            url="https://www.immobilienscout24.de/expose/12345",
+            portal=Portal.IMMOSCOUT24,
+            inserats_id="12345",
+        )
+        self.assertEqual(str(o), "ImmoScout24 · 12345")
+
+    def test_ohne_titel_und_ohne_schluessel_steht_die_url(self):
+        o = Objekt.objects.create(url="https://www.beispiel.de/x/")
+        self.assertEqual(str(o), "https://www.beispiel.de/x/")
+
+    def test_ein_halb_gefuelltes_paar_traegt_die_bezeichnung_nicht(self):
+        """Riegel: `Portal · ` mit leerer ID waere keine Bezeichnung.
+
+        Das halb gefuellte Paar ist der Normalfall bei jedem Portal ohne
+        bekanntes ID-Muster - siehe `portale.LEER`.
+        """
+        o = Objekt.objects.create(url="https://www.beispiel.de/x/", portal=Portal.SONSTIGES)
+        self.assertEqual(str(o), "https://www.beispiel.de/x/")
+
+    def test_der_ort_traegt_die_bezeichnung_nicht_mehr(self):
+        """Bewusst aus der Kette gefallen - die Liste hat eine eigene Ortsspalte.
+
+        Ohne diesen Zeugen liesse sich `ort` unbemerkt wieder einschieben, und
+        die Objektspalte zeigte denselben Wert wie die Spalte daneben.
+        """
+        o = Objekt.objects.create(url="https://www.beispiel.de/x/", ort="Palma")
+        self.assertEqual(str(o), "https://www.beispiel.de/x/")
+
+
+class StylesheetKorrekturenTests(TestCase):
+    """Abschnitt 4 im Stylesheet: gekappte Objektspalte, eigene Fehlerfarbe.
+
+    Gelesen wird die CSS-Datei. Wie die Seite aussieht, entscheidet weiterhin
+    der Blick auf den Bildschirm - diese Zeugen halten nur die beiden
+    Festlegungen fest, die sich still zuruecknehmen liessen.
+    """
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _block_ab_48rem(self):
+        """Der Inhalt des `@media (min-width: 48rem)`-Blocks, ueber Klammerzaehlung.
+
+        Ohne diese Eingrenzung koennte die Kappungsregel auf oberster Ebene
+        stehen und der Zeuge bliebe gruen - waehrend die Kartenansicht unter
+        48rem ihre Objektzeile auf eine Zeile zusammenzoege und abschnitte.
+        """
+        quelle = self._quelle()
+        start = quelle.index("@media (min-width: 48rem)")
+        offen = quelle.index("{", start)
+        tiefe = 0
+        for stelle in range(offen, len(quelle)):
+            if quelle[stelle] == "{":
+                tiefe += 1
+            elif quelle[stelle] == "}":
+                tiefe -= 1
+                if tiefe == 0:
+                    return quelle[offen : stelle + 1]
+        raise AssertionError("Der Media-Block ist nicht geschlossen.")
+
+    # --- 4.1: die Objektspalte kappen -------------------------------------
+
+    def test_der_media_block_ist_ueberhaupt_auffindbar(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darunter.
+
+        Waere der Block leer, faende `assertIn` nichts und meldete sich - aber
+        `_block_ab_48rem` wuerfe schon vorher. Dieser Zeuge macht sichtbar,
+        welcher der beiden Faelle vorliegt.
+        """
+        self.assertNotEqual(self._block_ab_48rem().strip("{} \n"), "")
+
+    def test_die_objektzelle_wird_ab_48rem_gekappt(self):
+        block = self._block_ab_48rem()
+        regel = block[block.index('[data-spalte="Objekt"]') :]
+        regel = regel[: regel.index("}")]
+        for eigenschaft in (
+            "max-width: 22rem",
+            "overflow: hidden",
+            "text-overflow: ellipsis",
+            "white-space: nowrap",
+        ):
+            with self.subTest(eigenschaft=eigenschaft):
+                self.assertIn(eigenschaft, regel)
+
+    def test_unter_48rem_bleibt_die_objektzelle_ungekappt(self):
+        """Die Kappungsregel steht NUR im Media-Block.
+
+        In der Kartenansicht ist die Objektzelle die Ueberschrift der Karte und
+        hat die ganze Zeilenbreite - dort ist Platz, dort darf sie umbrechen.
+        """
+        quelle = self._quelle()
+        ausserhalb = quelle.replace(self._block_ab_48rem(), "")
+        self.assertNotIn('[data-spalte="Objekt"]', ausserhalb)
+
+    # --- 4.2: Fehlerfarbe von der Preissenkung trennen --------------------
+
+    def test_es_gibt_eine_eigene_fehlerfarbe(self):
+        self.assertIn("--fehler:", self._quelle())
+
+    def test_die_meldungsregel_greift_auf_die_fehlerfarbe_zu(self):
+        quelle = self._quelle()
+        regel = quelle[quelle.index(".meldungen li.error") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--fehler)", regel)
+
+    def test_die_signalfarbe_wird_nirgends_verwendet(self):
+        """`--signal` bleibt der Preissenkung vorbehalten.
+
+        Gemessen an `var(--signal)`, nicht an `--signal` - die Definition
+        selbst soll ja stehen bleiben. Faellt dieser Zeuge, hat sich die
+        lauteste Farbe des Werkzeugs an eine Stelle gesetzt, an der sie das
+        Kaufsignal abstumpft.
+        """
+        self.assertNotIn("var(--signal)", self._quelle())
+
+
+# =========================================================================
+# Schritt 2, Abschnitt 3: Vorschau (GET) und Uebernahme (POST)
+# =========================================================================
+
+
+class UebernahmeTests(TestCase):
+    """Zusagen 1 bis 11 des Lesezeichen-Zulaufs.
+
+    Die drei Stationen sind bewusst geschnitten: das Lesezeichen legt nichts
+    an, die Vorschau legt nichts an, erst die Uebernahme schreibt. Die Zeugen
+    hier halten diesen Schnitt.
+    """
+
+    INSERAT = "https://www.idealista.com/inmueble/12345/"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    # --- Handgriffe -------------------------------------------------------
+
+    def _parameter(self, **abweichungen):
+        """Ein vollstaendiger Satz, so wie ihn das Lesezeichen uebergibt."""
+        daten = {
+            "url": self.INSERAT,
+            "titel": "Villa am Hang",
+            "beschreibung": "Blick über die Bucht.",
+            "preis": "750000",
+            "wohnflaeche": "200",
+            "zimmer": "4",
+        }
+        daten.update(abweichungen)
+        return {k: v for k, v in daten.items() if v not in (None, "")}
+
+    def _vorschau(self, **abweichungen):
+        return self.client.get("/uebernehmen/", self._parameter(**abweichungen))
+
+    def _post_rumpf(self, antwort, **abweichungen):
+        """Der POST-Rumpf, so wie ihn der Browser aus der Vorschau sendet.
+
+        Ueber `widget.format_value()` und nicht ueber die Rohwerte - genau der
+        gerenderte Text geht zurueck. Ein Test, der stattdessen "200" schickt,
+        wo das Formular "200,00" anzeigt, prueft den Rundlauf nicht, sondern
+        umgeht ihn. Dieselbe Bauart wie in `BearbeitenTests`.
+        """
+        formular = antwort.context["form"]
+        daten = {}
+        for name, feld in formular.fields.items():
+            gerendert = feld.widget.format_value(formular[name].value())
+            if isinstance(gerendert, list):
+                gerendert = gerendert[0] if gerendert else ""
+            daten[name] = "" if gerendert is None else gerendert
+        for verstecktes in ("url", "portal", "inserats_id", "bilder"):
+            daten[verstecktes] = antwort.context[verstecktes]
+        daten.update(abweichungen)
+        return daten
+
+    def _uebernehmen(self, abweichungen=None, **parameter):
+        """Der ganze Weg: Vorschau aufrufen, dann absenden, was dort steht."""
+        antwort = self._vorschau(**parameter)
+        return self.client.post(
+            "/uebernehmen/", self._post_rumpf(antwort, **(abweichungen or {}))
+        )
+
+    def _bestandsobjekt(self, **abweichungen):
+        werte = {
+            "url": self.INSERAT,
+            "portal": Portal.IDEALISTA,
+            "inserats_id": "12345",
+            "titel": "Finca",
+            "wohnflaeche": Decimal("140"),
+            "aktueller_preis": Decimal("250000"),
+        }
+        werte.update(abweichungen)
+        return Objekt.objects.create(**werte)
+
+    # --- Zusage 1: ohne Anmeldung geht nichts -----------------------------
+
+    def test_die_vorschau_ohne_anmeldung_fuehrt_auf_die_anmeldeseite(self):
+        self.client.logout()
+        antwort = self._vorschau()
+        self.assertTrue(
+            antwort["Location"].startswith("/anmelden/?next="), antwort["Location"]
+        )
+
+    def test_die_vorschau_ohne_anmeldung_zeigt_nichts(self):
+        self.client.logout()
+        self.assertEqual(self._vorschau().status_code, 302)
+
+    def test_die_uebernahme_ohne_anmeldung_legt_nichts_an(self):
+        """Der Riegel gilt auch fuer POST, nicht nur fuer die Vorschau.
+
+        Aufgebaut wird der Rumpf angemeldet - sonst gaebe es keine Vorschau,
+        aus der er stammen koennte. Abgeschickt wird abgemeldet.
+        """
+        rumpf = self._post_rumpf(self._vorschau())
+        self.client.logout()
+        self.client.post("/uebernehmen/", rumpf)
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    # --- Zusage 2: GET legt nichts an -------------------------------------
+
+    def test_die_vorschau_legt_kein_objekt_an(self):
+        self._vorschau()
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_dieselben_werte_legen_per_post_sehr_wohl_ein_objekt_an(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn koennte die Vorschau an unvollstaendigen Parametern
+        scheitern, und "es wurde nichts angelegt" bezeugte nicht die Trennung
+        von Lesen und Schreiben, sondern nur einen kaputten Aufruf. Hier
+        laeuft derselbe Parametersatz einmal als GET und einmal als POST.
+        """
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_die_vorschau_legt_auch_beim_zweiten_aufruf_nichts_an(self):
+        self._vorschau()
+        self._vorschau()
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_die_vorschau_aendert_am_bestehenden_objekt_nichts(self):
+        objekt = self._bestandsobjekt()
+        self._vorschau(titel="Villa am Hang", preis="750000")
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.titel, "Finca")
+
+    def test_die_vorschau_schreibt_am_bestehenden_objekt_keinen_preis_fort(self):
+        objekt = self._bestandsobjekt()
+        self._vorschau(preis="750000")
+        self.assertEqual(objekt.preise.count(), 1)
+
+    def test_die_vorschau_legt_keine_bilder_an(self):
+        objekt = self._bestandsobjekt()
+        self._vorschau(bilder=["https://bild.example/1.jpg"])
+        self.assertEqual(objekt.bilder.count(), 0)
+
+    # --- Zusage 3: ohne url ------------------------------------------------
+
+    def test_die_vorschau_ohne_link_leitet_auf_die_liste(self):
+        antwort = self.client.get("/uebernehmen/")
+        self.assertEqual(antwort["Location"], "/")
+
+    def test_die_vorschau_ohne_link_meldet_was_zu_tun_ist(self):
+        antwort = self.client.get("/uebernehmen/", follow=True)
+        self.assertContains(
+            antwort,
+            "Kein Link übergeben. Öffne das Inserat und klicke das Lesezeichen erneut.",
+        )
+
+    def test_die_vorschau_mit_leerem_link_meldet_dasselbe(self):
+        # Ein Lesezeichen auf einer Seite ohne brauchbare Adresse schickt
+        # `url=` mit - das ist derselbe Sachverhalt wie gar kein Parameter.
+        antwort = self.client.get("/uebernehmen/", {"url": "  "}, follow=True)
+        self.assertContains(antwort, "Kein Link übergeben.")
+
+    def test_ein_kaputter_link_meldet_sich_ebenfalls(self):
+        antwort = self.client.get("/uebernehmen/", {"url": "kein-link"}, follow=True)
+        self.assertContains(antwort, "Das ist kein gültiger Link.")
+
+    def test_ein_zu_langer_link_meldet_sich_ebenfalls(self):
+        antwort = self.client.get(
+            "/uebernehmen/", {"url": "https://beispiel.de/" + "a" * 600}, follow=True
+        )
+        self.assertContains(antwort, "länger als")
+
+    # --- Zusage 4: das bestehende Objekt wird erkannt ----------------------
+
+    ANDERE_SCHREIBWEISE = "https://www.idealista.it/en/inmueble/12345?utm_source=mail"
+
+    def test_die_vorschau_erkennt_das_bestehende_objekt_ueber_den_schluessel(self):
+        """Andere Laenderdomain, Sprachpraefix, Tracking-Parameter, kein
+        abschliessender Schraegstrich - und trotzdem dasselbe Inserat.
+
+        Ueber die Roh-URL faende es keiner der beiden Vergleiche; ueber Portal
+        und Inserats-ID schon.
+        """
+        objekt = self._bestandsobjekt()
+        antwort = self._vorschau(url=self.ANDERE_SCHREIBWEISE)
+        self.assertEqual(antwort.context["objekt"], objekt)
+
+    def test_bei_einem_treffer_lautet_die_ueberschrift_ergaenzen(self):
+        self._bestandsobjekt()
+        self.assertContains(self._vorschau(url=self.ANDERE_SCHREIBWEISE), "Objekt ergänzen")
+
+    def test_bei_einem_treffer_steht_der_weg_zur_objektansicht_offen(self):
+        objekt = self._bestandsobjekt()
+        self.assertContains(
+            self._vorschau(url=self.ANDERE_SCHREIBWEISE), f'href="/objekt/{objekt.pk}/"'
+        )
+
+    def test_ohne_treffer_lautet_die_ueberschrift_uebernehmen(self):
+        """Der Riegel: die Ergaenzungs-Ansicht darf nicht immer erscheinen."""
+        self.assertContains(self._vorschau(), "Neues Objekt übernehmen")
+
+    def test_eine_andere_inserats_id_ist_ein_anderes_objekt(self):
+        self._bestandsobjekt()
+        antwort = self._vorschau(url="https://www.idealista.com/inmueble/99999/")
+        self.assertIsNone(antwort.context["objekt"])
+
+    # --- Zusage 5: der Bestandswert gewinnt --------------------------------
+
+    def test_das_titelfeld_traegt_den_bestandswert(self):
+        self._bestandsobjekt()
+        antwort = self._vorschau(titel="Villa am Hang")
+        self.assertEqual(antwort.context["form"]["titel"].value(), "Finca")
+
+    def test_das_titelfeld_traegt_NICHT_den_gelesenen_wert(self):
+        """Getrennt vom Zeugen darueber, weil er etwas anderes misst.
+
+        Der obere faellt auch, wenn das Feld leer bleibt; dieser faellt genau
+        dann, wenn der gelesene Wert den Bestand verdraengt hat.
+        """
+        self._bestandsobjekt()
+        antwort = self._vorschau(titel="Villa am Hang")
+        self.assertNotEqual(antwort.context["form"]["titel"].value(), "Villa am Hang")
+
+    def test_das_preisfeld_traegt_den_bestandswert(self):
+        self._bestandsobjekt()
+        antwort = self._vorschau(preis="750000")
+        self.assertEqual(antwort.context["form"]["kaufpreis"].value(), Decimal("250000.00"))
+
+    def test_der_abweichende_gelesene_wert_steht_als_hinweis_darunter(self):
+        self._bestandsobjekt()
+        self.assertContains(self._vorschau(preis="750000"), "gelesen: 750.000 €")
+
+    def test_der_hinweis_nennt_auch_die_abweichende_flaeche(self):
+        self._bestandsobjekt()
+        self.assertContains(self._vorschau(wohnflaeche="200"), "gelesen: 200 m²")
+
+    def test_ein_gelesener_wert_gleich_dem_bestand_erzeugt_KEINEN_hinweis(self):
+        """Der zweite Riegel gegen einen blinden Zeugen.
+
+        Verglichen wird im Typ des Feldes: die gelesene "140" und der
+        gespeicherte `Decimal("140.00")` sind derselbe Wert. Als Zeichenketten
+        verglichen waeren sie verschieden, und unter jedem Zahlenfeld staende
+        ein Hinweis, der nichts meldet - und der Zeuge darueber bliebe
+        trotzdem gruen.
+        """
+        self._bestandsobjekt()
+        antwort = self._vorschau(wohnflaeche="140", preis="250000", titel="Finca")
+        self.assertNotContains(antwort, "gelesen:")
+
+    def test_wo_kein_bestandswert_steht_gewinnt_der_gelesene(self):
+        # `beschreibung` ist am Bestandsobjekt leer - dort ist der gelesene
+        # Wert die Vorbelegung, nicht ein Hinweis darunter.
+        self._bestandsobjekt()
+        antwort = self._vorschau(beschreibung="Blick über die Bucht.")
+        self.assertEqual(
+            antwort.context["form"]["beschreibung"].value(), "Blick über die Bucht."
+        )
+
+    def test_beim_neuen_objekt_stehen_die_gelesenen_werte_im_feld(self):
+        antwort = self._vorschau()
+        self.assertEqual(antwort.context["form"]["titel"].value(), "Villa am Hang")
+
+    def test_beim_neuen_objekt_steht_kein_hinweis_darunter(self):
+        # Es gibt keinen Bestandswert, von dem etwas abweichen koennte - ein
+        # Hinweis wiederholte nur, was im Feld steht.
+        self.assertNotContains(self._vorschau(), "gelesen:")
+
+    # --- Zusage 6: die Uebernahme legt an ----------------------------------
+
+    def test_die_uebernahme_legt_ein_objekt_an(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_das_angelegte_objekt_traegt_das_portal(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().portal, Portal.IDEALISTA)
+
+    def test_das_angelegte_objekt_traegt_die_inserats_id(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().inserats_id, "12345")
+
+    def test_das_angelegte_objekt_traegt_die_quelle_url_eingeworfen(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().quelle, Quelle.URL_EINGEWORFEN)
+
+    def test_das_angelegte_objekt_kennt_die_einstellende_person(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().eingestellt_von, self.person)
+
+    def test_das_angelegte_objekt_traegt_die_gelesenen_werte(self):
+        self._uebernehmen()
+        objekt = Objekt.objects.get()
+        self.assertEqual(objekt.titel, "Villa am Hang")
+
+    def test_das_angelegte_objekt_traegt_die_gelesene_wohnflaeche(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().wohnflaeche, Decimal("200"))
+
+    def test_das_angelegte_objekt_traegt_die_url_im_original(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().url, self.INSERAT)
+
+    def test_nach_der_uebernahme_fuehrt_der_weg_auf_die_objektansicht(self):
+        """Anders als der Einwurf, der auf die Liste zurueckfuehrt.
+
+        Hier hat die Person gerade Daten geprueft und will sehen, was daraus
+        wurde.
+        """
+        antwort = self._uebernehmen()
+        self.assertEqual(antwort["Location"], f"/objekt/{Objekt.objects.get().pk}/")
+
+    def test_die_uebernahme_meldet_sich(self):
+        antwort = self._uebernehmen()
+        self.assertEqual(
+            [str(m) for m in antwort.wsgi_request._messages], ["Objekt übernommen."]
+        )
+
+    def test_die_uebernahme_ergaenzt_das_bestehende_objekt(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(abweichungen={"titel": "Villa am Hang"})
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.titel, "Villa am Hang")
+
+    def test_die_uebernahme_legt_kein_zweites_objekt_an(self):
+        self._bestandsobjekt()
+        self._uebernehmen(url=self.ANDERE_SCHREIBWEISE)
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_die_ergaenzung_ruehrt_den_dublettenschluessel_nicht_an(self):
+        """Portal, ID und URL des Bestands bleiben stehen.
+
+        Sie sind der Dublettenschluessel. Ihn nebenbei aus einer Heuristik zu
+        ueberschreiben waere genau das stillschweigende Ueberschreiben, das
+        dieser Weg vermeiden soll.
+        """
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(url=self.ANDERE_SCHREIBWEISE)
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.url, self.INSERAT)
+
+    def test_die_ergaenzung_setzt_zuletzt_gesehen(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen()
+        objekt.refresh_from_db()
+        self.assertIsNotNone(objekt.zuletzt_gesehen)
+
+    def test_die_ergaenzung_schreibt_die_aendernde_person_fort(self):
+        anna = Person.objects.create_user("anna", password="lang-genug-123")
+        objekt = self._bestandsobjekt(zuletzt_geaendert_von=anna)
+        self._uebernehmen()
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.zuletzt_geaendert_von, self.person)
+
+    # --- Zusage 7: genau ein Preiseintrag ----------------------------------
+
+    def test_ein_uebermittelter_preis_erzeugt_genau_einen_eintrag(self):
+        """Genau einen, nicht zwei.
+
+        `Objekt.save()` legt beim Anlegen selbst einen Eintrag an, sobald
+        `aktueller_preis` gesetzt ist. Liefe der Preis nicht ausschliesslich
+        ueber `preis_setzen()`, staenden hier zwei Eintraege - einer davon mit
+        der falschen Quelle.
+        """
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().preise.count(), 1)
+
+    def test_der_eintrag_traegt_die_quelle_erneuter_abruf(self):
+        self._uebernehmen()
+        self.assertEqual(
+            Objekt.objects.get().preise.get().quelle, PreisQuelle.ERNEUTER_ABRUF
+        )
+
+    def test_der_eintrag_traegt_den_uebermittelten_preis(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().preise.get().preis, Decimal("750000"))
+
+    def test_der_preis_steht_danach_auch_am_objekt(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().aktueller_preis, Decimal("750000"))
+
+    def test_ein_abweichender_preis_am_bestand_erzeugt_einen_zweiten_eintrag(self):
+        """Der Riegel gegen einen blinden Zeugen bei Zusage 8.
+
+        Ohne ihn koennte der Preisweg vollstaendig tot sein, und "kein zweiter
+        Eintrag" bezeugte nichts.
+        """
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(abweichungen={"kaufpreis": "240.000,00"})
+        self.assertEqual(objekt.preise.count(), 2)
+
+    def test_der_zweite_eintrag_am_bestand_traegt_erneuter_abruf(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(abweichungen={"kaufpreis": "240.000,00"})
+        self.assertEqual(objekt.preise.first().quelle, PreisQuelle.ERNEUTER_ABRUF)
+
+    # --- Zusage 8: derselbe Preis erzeugt keinen zweiten Eintrag ------------
+
+    def test_ein_unveraenderter_preis_erzeugt_keinen_zweiten_eintrag(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(preis="250000")
+        self.assertEqual(objekt.preise.count(), 1)
+
+    def test_der_bestehende_eintrag_behaelt_dabei_seine_quelle(self):
+        # Ein "erneuter Abruf", der nichts Neues gemessen hat, darf den
+        # urspruenglichen Eintrag nicht umschreiben.
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(preis="250000")
+        self.assertEqual(objekt.preise.get().quelle, PreisQuelle.VON_HAND)
+
+    def test_ein_unveraenderter_preis_laesst_den_preis_am_objekt_stehen(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(preis="250000")
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.aktueller_preis, Decimal("250000.00"))
+
+    # --- Zusage 9: kein Preis, kein Eintrag --------------------------------
+
+    def test_ohne_uebermittelten_preis_entsteht_kein_eintrag(self):
+        self._uebernehmen(preis=None)
+        self.assertEqual(Objekt.objects.get().preise.count(), 0)
+
+    def test_ohne_uebermittelten_preis_bleibt_das_objekt_ohne_preis(self):
+        self._uebernehmen(preis=None)
+        self.assertIsNone(Objekt.objects.get().aktueller_preis)
+
+    def test_ein_leeres_preisfeld_loescht_den_bestehenden_eintrag_nicht(self):
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(preis=None, abweichungen={"kaufpreis": ""})
+        self.assertEqual(objekt.preise.count(), 1)
+
+    def test_ein_leeres_preisfeld_laesst_den_preis_am_objekt_stehen(self):
+        """Leer heisst "nicht aendern", nicht "Preis loeschen".
+
+        `Preisverlauf.preis` ist nicht nullbar, und ein Verlauf, aus dem
+        Eintraege verschwinden, waere keiner.
+        """
+        objekt = self._bestandsobjekt()
+        self._uebernehmen(preis=None, abweichungen={"kaufpreis": ""})
+        objekt.refresh_from_db()
+        self.assertEqual(objekt.aktueller_preis, Decimal("250000.00"))
+
+    # --- Zusage 10: Bilder --------------------------------------------------
+
+    BILDER = ["https://bild.example/1.jpg", "https://bild.example/2.jpg"]
+
+    def test_uebermittelte_bilder_werden_angelegt(self):
+        self._uebernehmen(bilder=self.BILDER)
+        self.assertEqual(Objekt.objects.get().bilder.count(), 2)
+
+    def test_die_bilder_tragen_die_uebermittelten_adressen(self):
+        self._uebernehmen(bilder=self.BILDER)
+        self.assertEqual(
+            list(Objekt.objects.get().bilder.values_list("url", flat=True)), self.BILDER
+        )
+
+    def test_ein_zweiter_aufruf_mit_denselben_bildern_legt_keine_dubletten_an(self):
+        self._uebernehmen(bilder=self.BILDER)
+        self._uebernehmen(bilder=self.BILDER)
+        self.assertEqual(Objekt.objects.get().bilder.count(), 2)
+
+    def test_ein_neues_bild_kommt_dazu_ohne_die_alten_zu_loeschen(self):
+        neu = "https://bild.example/3.jpg"
+        self._uebernehmen(bilder=self.BILDER)
+        self._uebernehmen(bilder=[self.BILDER[1], neu])
+        self.assertEqual(
+            list(Objekt.objects.get().bilder.values_list("url", flat=True)),
+            self.BILDER + [neu],
+        )
+
+    def test_eine_unbrauchbare_bildadresse_bricht_die_uebernahme_nicht_ab(self):
+        """Sie faellt heraus, das Objekt entsteht trotzdem.
+
+        Die Adressen stammen aus fremdem Markup; eine davon unlesbar zu finden
+        ist kein Grund, die geprueften Daten wegzuwerfen.
+        """
+        self._uebernehmen(bilder=["kein-bild", self.BILDER[0]])
+        self.assertEqual(
+            list(Objekt.objects.get().bilder.values_list("url", flat=True)),
+            [self.BILDER[0]],
+        )
+
+    def test_ohne_bilder_entsteht_kein_bild(self):
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.get().bilder.count(), 0)
+
+    # --- Zusage 11: CSRF ----------------------------------------------------
+
+    def _strenger_client(self):
+        from django.test import Client
+
+        streng = Client(enforce_csrf_checks=True)
+        streng.force_login(self.person)
+        return streng
+
+    def test_die_uebernahme_ohne_csrf_token_wird_abgewiesen(self):
+        streng = self._strenger_client()
+        rumpf = self._post_rumpf(self._vorschau())
+        self.assertEqual(streng.post("/uebernehmen/", rumpf).status_code, 403)
+
+    def test_die_uebernahme_ohne_csrf_token_legt_nichts_an(self):
+        streng = self._strenger_client()
+        rumpf = self._post_rumpf(self._vorschau())
+        streng.post("/uebernehmen/", rumpf)
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_mit_csrf_token_laeuft_derselbe_aufruf_durch(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn koennte der 403 aus einem ganz anderen Grund kommen - einem
+        fehlenden Pflichtfeld etwa - und die Zusage waere nicht bezeugt.
+        """
+        streng = self._strenger_client()
+        antwort = streng.get("/uebernehmen/", self._parameter())
+        rumpf = self._post_rumpf(antwort)
+        rumpf["csrfmiddlewaretoken"] = streng.cookies["csrftoken"].value
+        streng.post("/uebernehmen/", rumpf)
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_die_uebernahme_traegt_kein_csrf_exempt(self):
+        """Strukturell, nicht nur am Verhalten gemessen.
+
+        `csrf_exempt` setzt ein Attribut an der Ansicht. Es zu pruefen faengt
+        den Fall, in dem jemand es setzt und der Verhaltenszeuge oben aus
+        einem anderen Grund gruen bleibt.
+        """
+        from .urls import urlpatterns
+
+        ansicht = next(m for m in urlpatterns if m.name == "uebernehmen").callback
+        self.assertFalse(getattr(ansicht, "csrf_exempt", False))
+
+    # --- Fehlerverhalten ----------------------------------------------------
+
+    def test_ein_ungueltiges_feld_kommt_als_formular_zurueck(self):
+        antwort = self._uebernehmen(abweichungen={"baujahr": "vorgestern"})
+        self.assertEqual(antwort.status_code, 200)
+
+    def test_ein_ungueltiges_feld_legt_nichts_an(self):
+        self._uebernehmen(abweichungen={"baujahr": "vorgestern"})
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_ein_ungueltiges_feld_sagt_was_zu_tun_ist(self):
+        antwort = self._uebernehmen(abweichungen={"baujahr": "vorgestern"})
+        self.assertContains(antwort, "Bitte die markierten Felder prüfen.")
+
+    def test_die_uebernahme_ohne_link_leitet_um_und_meldet_sich(self):
+        antwort = self.client.post("/uebernehmen/", {}, follow=True)
+        self.assertContains(antwort, "Kein Link übergeben.")
+
+    # --- Zuschnitt der Vorschau ---------------------------------------------
+
+    def test_die_versteckten_felder_tragen_die_url(self):
+        self.assertContains(
+            self._vorschau(), f'<input type="hidden" name="url" value="{self.INSERAT}">'
+        )
+
+    def test_die_versteckten_felder_tragen_das_portal(self):
+        self.assertContains(
+            self._vorschau(), '<input type="hidden" name="portal" value="idealista">'
+        )
+
+    def test_die_versteckten_felder_tragen_die_inserats_id(self):
+        self.assertContains(
+            self._vorschau(), '<input type="hidden" name="inserats_id" value="12345">'
+        )
+
+    def test_die_versteckten_felder_tragen_die_bilder(self):
+        self.assertContains(
+            self._vorschau(bilder=self.BILDER),
+            f'<input type="hidden" name="bilder" value="{self.BILDER[0]}">',
+        )
+
+    def test_die_url_ist_kein_von_hand_pflegbares_feld(self):
+        # Sie steht versteckt im Formular, nicht als Eingabefeld: wer sie hier
+        # aendert, aendert den Dublettenschluessel im Vorbeigehen.
+        self.assertNotIn("url", self._vorschau().context["form"].fields)
+
+    def test_der_status_ist_auch_hier_nicht_im_formular(self):
+        # Er laeuft ueber `status_setzen()`, das die Aenderung protokolliert.
+        self.assertNotIn("status", self._vorschau().context["form"].fields)
+
+    def test_der_aktuelle_preis_ist_auch_hier_kein_formularfeld(self):
+        self.assertNotIn("aktueller_preis", self._vorschau().context["form"].fields)
+
+    def test_die_vorschau_nimmt_nur_die_vereinbarten_parameter_an(self):
+        """Was nicht in `GELESENE_FELDER` steht, wird nicht uebernommen.
+
+        Sonst waere die Vorschau-Adresse ein offenes Formular: wer sie baut,
+        setzte Status, Quelle oder die einstellende Person gleich mit.
+        """
+        antwort = self._vorschau(ort="Palma", status=Status.HEISSE_SPUR)
+        self.assertNotEqual(antwort.context["form"]["ort"].value(), "Palma")
+
+
+# =========================================================================
+# Schritt 2, Abschnitt 2: die Lesezeichen-Seite und das Skript
+# =========================================================================
+
+
+class LesezeichenSkriptTests(SimpleTestCase):
+    """Das Skript selbst - ohne Datenbank, ohne Anfrage.
+
+    Was hier steht, laesst sich nicht am Verhalten messen: das Skript laeuft
+    in einem fremden Browser auf einer fremden Seite. Diese Zeugen halten die
+    drei Festlegungen, an denen es sonst still zerbricht.
+    """
+
+    def test_das_skript_ist_eine_zeile(self):
+        """Ein Zeilenumbruch im `href` beendet das Lesezeichen an dieser Stelle."""
+        self.assertNotIn("\n", lesezeichen.SKRIPT)
+
+    def test_das_skript_enthaelt_keine_doppelten_anfuehrungszeichen(self):
+        """Ein `"` spraenge das `href`-Attribut, in dem das Skript steht."""
+        self.assertNotIn('"', lesezeichen.SKRIPT)
+
+    def test_das_skript_oeffnet_ein_neues_fenster(self):
+        self.assertIn("window.open(", lesezeichen.SKRIPT)
+
+    def test_das_skript_ruft_nichts_per_fetch_ab(self):
+        """`fetch`, `XMLHttpRequest` und ein nachgeladenes Skript scheitern alle
+        drei an der Content-Security-Policy der Portalseiten oder an CORS.
+
+        `window.open` ist eine Navigation und von beidem nicht betroffen. Faellt
+        dieser Zeuge, hat jemand den einen Weg verlassen, der funktioniert.
+        """
+        for verboten in ("fetch(", "XMLHttpRequest", "createElement"):
+            with self.subTest(verboten=verboten):
+                self.assertNotIn(verboten, lesezeichen.SKRIPT)
+
+    def test_das_skript_begrenzt_den_query_string(self):
+        """Ein abgeschnittener Aufruf waere ein stiller Fehler."""
+        self.assertIn(str(lesezeichen.QUERY_MAXLAENGE), lesezeichen.SKRIPT)
+
+    def test_die_zieladresse_hat_genau_eine_stelle_im_skript(self):
+        self.assertEqual(lesezeichen.SKRIPT.count(lesezeichen.PLATZHALTER), 1)
+
+    def test_der_platzhalter_verschwindet_beim_einsetzen(self):
+        fertig = lesezeichen.skript_fuer("https://ziel.example/uebernehmen/")
+        self.assertNotIn(lesezeichen.PLATZHALTER, fertig)
+
+    def test_die_eingesetzte_adresse_steht_im_skript(self):
+        fertig = lesezeichen.skript_fuer("https://ziel.example/uebernehmen/")
+        self.assertIn("https://ziel.example/uebernehmen/", fertig)
+
+    def test_das_skript_uebergibt_genau_die_felder_die_die_vorschau_annimmt(self):
+        """Beide Seiten aus derselben Liste gelesen, nicht zweimal geschrieben.
+
+        Eine Umbenennung auf einer Seite fiele sonst STILL aus: das Lesezeichen
+        schickte weiter den alten Namen, die Vorschau liesse ihn fallen, und
+        das Feld bliebe ohne jede Meldung leer.
+
+        `url` und `bilder` stehen nicht in `GELESENE_FELDER` - die erste ist
+        Pflicht und laeuft durch die URL-Pruefung, die zweiten laufen am
+        Formular vorbei.
+        """
+        gesendet = set(re.findall(r"setze\('([a-z_]+)'", lesezeichen.SKRIPT))
+        self.assertEqual(gesendet, set(views.GELESENE_FELDER) | {"url", "bilder"})
+
+    def test_das_skript_liest_die_grundstuecksgroesse_nicht(self):
+        """Sie ist von der Wohnflaeche im Fliesstext nicht sicher zu
+        unterscheiden; ein verwechselter Wert waere schlimmer als ein leerer."""
+        self.assertNotIn("grundstuecksgroesse", lesezeichen.SKRIPT)
+
+    def test_das_skript_kuerzt_die_beschreibung(self):
+        self.assertIn(str(lesezeichen.BESCHREIBUNG_MAXLAENGE), lesezeichen.SKRIPT)
+
+    def test_das_skript_begrenzt_die_zahl_der_bilder(self):
+        self.assertIn(f"slice(0,{lesezeichen.BILDER_MAX})", lesezeichen.SKRIPT)
+
+
+@override_settings(ALLOWED_HOSTS=["localhost", "objektradar.example", "testserver"])
+class LesezeichenSeiteTests(TestCase):
+    """Zusage 13: die Zieladresse ist aus der Anfrage abgeleitet.
+
+    Zu bezeugen ueber zwei Aufrufe unter verschiedenem `HTTP_HOST` - ein
+    einzelner Aufruf saehe bei einer hartkodierten Adresse genauso aus.
+    """
+
+    HOST_A = "localhost:8347"
+    HOST_B = "objektradar.example"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _seite(self, host):
+        return self.client.get("/lesezeichen/", HTTP_HOST=host)
+
+    def _ziel(self, host):
+        # Aus dem Urlconf abgeleitet und nicht als Pfad abgeschrieben: eine
+        # Umbenennung der Adresse zoege den Zeugen sonst nicht mit.
+        return f"http://{host}{reverse('uebernehmen')}"
+
+    # --- Zusage 13 ---------------------------------------------------------
+
+    def test_die_seite_nennt_die_absolute_zieladresse(self):
+        self.assertContains(self._seite(self.HOST_A), self._ziel(self.HOST_A))
+
+    def test_unter_einem_anderen_host_steht_die_andere_adresse(self):
+        self.assertContains(self._seite(self.HOST_B), self._ziel(self.HOST_B))
+
+    def test_unter_dem_anderen_host_steht_der_erste_NICHT_mehr(self):
+        """Der eigentliche Zeuge gegen eine hartkodierte Adresse.
+
+        Die beiden darueber blieben gruen, wenn die Seite beide Adressen
+        naenne - oder wenn eine feste Adresse zufaellig zu einem der beiden
+        Hosts passte. Erst die Abwesenheit des anderen Hosts misst, dass die
+        Adresse aus der ANFRAGE stammt.
+        """
+        self.assertNotContains(self._seite(self.HOST_B), self.HOST_A)
+
+    def test_der_ziehbare_link_traegt_das_ganze_skript(self):
+        ziel = self._ziel(self.HOST_A)
+        self.assertContains(
+            self._seite(self.HOST_A),
+            f'href="{escape(lesezeichen.skript_fuer(ziel))}"',
+        )
+
+    def test_derselbe_text_steht_im_textfeld_zum_kopieren(self):
+        """Fuer Browser, in denen das Ziehen nicht geht."""
+        ziel = self._ziel(self.HOST_A)
+        self.assertContains(
+            self._seite(self.HOST_A),
+            f">{escape(lesezeichen.skript_fuer(ziel))}</textarea>",
+        )
+
+    # --- die Seite ---------------------------------------------------------
+
+    def test_die_seite_verlangt_eine_anmeldung(self):
+        self.client.logout()
+        self.assertEqual(self._seite(self.HOST_A).status_code, 302)
+
+    def test_die_seite_erklaert_das_hineinziehen(self):
+        self.assertContains(self._seite(self.HOST_A), "Lesezeichenleiste")
+
+    def test_die_seite_nennt_die_beschraenkung_auf_den_desktop(self):
+        self.assertContains(self._seite(self.HOST_A), "Desktop-Browser")
+
+    def test_der_kopf_verweist_auf_die_lesezeichenseite(self):
+        self.assertContains(self.client.get("/"), 'href="/lesezeichen/"')
+
+    def test_der_verweis_steht_auf_jeder_seite(self):
+        # Er haengt in `basis.html`, nicht in einer einzelnen Vorlage.
+        objekt = Objekt.objects.create(url="https://beispiel.de/1")
+        self.assertContains(
+            self.client.get(f"/objekt/{objekt.pk}/"), 'href="/lesezeichen/"'
+        )
+
+    def test_der_verweis_fehlt_ohne_anmeldung(self):
+        # Er fuehrt auf eine Seite, die ohne Anmeldung nichts zeigt.
+        self.client.logout()
+        self.assertNotContains(self.client.get(reverse("login")), 'href="/lesezeichen/"')
+
+
+# =========================================================================
+# Punkt 5: Filter, Sortierung, Blaettern, Votum-Uebersicht
+# =========================================================================
+
+
+class ListenTestBasis(TestCase):
+    """Gemeinsamer Unterbau der Zeugen zu Punkt 5.
+
+    Die Liste verlangt eine Anmeldung; ohne sie messen alle Zeugen unten
+    dieselbe Umleitung und niemand merkt es.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="ein-langes-passwort")
+        self.client.force_login(self.person)
+
+    def _seite(self, adresse="/"):
+        return self.client.get(adresse)
+
+    def _pks(self, adresse="/"):
+        """Die IDs der Objekte auf der Seite, in ihrer Reihenfolge."""
+        return [o.pk for o in self._seite(adresse).context["objekte"]]
+
+    def _menge(self, adresse="/"):
+        return set(self._pks(adresse))
+
+    def _objekt(self, **felder):
+        felder.setdefault("url", f"https://x/{Objekt.objects.count() + 1}")
+        return Objekt.objects.create(**felder)
+
+
+class StatusfilterVorbelegungTests(SimpleTestCase):
+    """Die Vorbelegung ist abgeleitet, nicht abgeschrieben - und trotzdem gepruefte Zusage.
+
+    Die Ableitung aus `STATUS_AUSGEBLENDET` haelt Liste und `sichtbar()`
+    zusammen. Sie koennte aber still etwas anderes ergeben als die vier Werte,
+    die die Spezifikation nennt - etwa wenn jemand einen Status ergaenzt.
+    Deshalb stehen die vier hier ausgeschrieben.
+    """
+
+    def test_die_vorbelegung_traegt_genau_die_vier_werte(self):
+        self.assertEqual(
+            list(STATUS_VORBELEGUNG),
+            [Status.NEU, Status.IN_PRUEFUNG, Status.BESICHTIGUNG, Status.HEISSE_SPUR],
+        )
+
+    def test_die_vorbelegung_traegt_keinen_ausgeblendeten_status(self):
+        # Der eigentliche Riegel: waeren RAUS oder VOM_MARKT vorbelegt, waere
+        # die Zusage aus `02_Datenmodell.md` gebrochen.
+        self.assertEqual(set(STATUS_VORBELEGUNG) & set(STATUS_AUSGEBLENDET), set())
+
+
+class StatusfilterTests(ListenTestBasis):
+    """Abschnitt 1: der Statusfilter ist die einzige Stelle, die Status ausblendet."""
+
+    def setUp(self):
+        super().setUp()
+        self.nach_status = {
+            status: self._objekt(url=f"https://x/{status}", status=status, titel=str(status))
+            for status in Status
+        }
+
+    def _pk(self, status):
+        return self.nach_status[status].pk
+
+    # --- ohne Parameter: die Vorbelegung ----------------------------------
+
+    def test_ohne_parameter_erscheint_raus_nicht(self):
+        self.assertNotIn(self._pk(Status.RAUS), self._menge())
+
+    def test_ohne_parameter_erscheint_vom_markt_nicht(self):
+        self.assertNotIn(self._pk(Status.VOM_MARKT), self._menge())
+
+    def test_ohne_parameter_erscheinen_alle_vier_uebrigen(self):
+        self.assertEqual(
+            self._menge(),
+            {self._pk(s) for s in STATUS_VORBELEGUNG},
+        )
+
+    # --- mit Parameter ----------------------------------------------------
+
+    def test_ein_gewaehlter_status_zeigt_ausschliesslich_diesen(self):
+        self.assertEqual(self._menge("/?status=raus"), {self._pk(Status.RAUS)})
+
+    def test_zwei_gewaehlte_status_zeigen_beide(self):
+        self.assertEqual(
+            self._menge("/?status=raus&status=vom_markt"),
+            {self._pk(Status.RAUS), self._pk(Status.VOM_MARKT)},
+        )
+
+    def test_der_leere_statusfilter_liefert_null_treffer(self):
+        """`?status=` heisst "keiner der Werte" - und das ist GEWOLLT.
+
+        Es wird ausdruecklich nicht auf die Vorbelegung zurueckgefallen. Sonst
+        liesse sich eine leere Auswahl gar nicht ausdruecken: wer alle
+        Kaestchen abwaehlt, saehe wieder die Vorbelegung und haette den
+        Eindruck, der Filter sei kaputt.
+
+        Faellt dieser Zeuge, ist das kein Fehler im Zeugen. Dann hat jemand
+        den Rueckfall auf die Vorbelegung eingebaut.
+        """
+        self.assertEqual(self._menge("/?status="), set())
+
+    def test_ein_unbekannter_status_wirft_keinen_fehler(self):
+        self.assertEqual(self._seite("/?status=gibtsnicht").status_code, 200)
+
+    def test_ein_unbekannter_status_wird_abgewiesen(self):
+        # Abgewiesen heisst: das Feld faellt heraus und es gilt die
+        # Vorbelegung. Ein Durchreichen an `filter()` waere ein 500er, ein
+        # stilles Uebernehmen eine Auswahl, die niemand getroffen hat.
+        self.assertEqual(
+            self._menge("/?status=gibtsnicht"),
+            {self._pk(s) for s in STATUS_VORBELEGUNG},
+        )
+
+    def test_ein_unbekannter_status_zieht_den_gueltigen_daneben_mit_heraus(self):
+        """Kein halbes Uebernehmen: die Auswahl gilt als Ganzes oder gar nicht.
+
+        Sonst laege zwischen "raus und Unfug" und "raus" kein Unterschied -
+        und ein vertippter Wert veraenderte die Auswahl still.
+        """
+        self.assertEqual(
+            self._menge("/?status=raus&status=gibtsnicht"),
+            {self._pk(s) for s in STATUS_VORBELEGUNG},
+        )
+
+    # --- der Riegel gegen den zweiten Mechanismus -------------------------
+
+    def _aufrufe_im_abfragepfad(self):
+        """Die Namen aller Methodenaufrufe in Liste und Filterformular.
+
+        Ueber den Syntaxbaum, nicht ueber die Zeichenkette: die Begruendung im
+        Docstring nennt `sichtbar()` selbst, und eine Textsuche faende sie.
+        """
+        namen = []
+        for gegenstand in (views.ObjektlisteView, forms.ObjektFilterForm):
+            baum = ast.parse(textwrap.dedent(inspect.getsource(gegenstand)))
+            namen += [
+                knoten.func.attr
+                for knoten in ast.walk(baum)
+                if isinstance(knoten, ast.Call) and isinstance(knoten.func, ast.Attribute)
+            ]
+        return namen
+
+    def test_die_liste_ruft_sichtbar_nicht_mehr_auf(self):
+        """Strukturtest. Der Verhaltenszeuge daneben kann blind-gruen werden.
+
+        Solange `sichtbar()` noch im Abfragepfad steht, faengt es RAUS und
+        VOM_MARKT auch dann ab, wenn die Vorbelegung des Statusfilters
+        ausgefallen ist - und `?status=raus` liefe ins Leere, ohne dass ein
+        Zeuge sich meldet. Zwei Mechanismen fuer dieselbe Entscheidung
+        verdecken sich gegenseitig; einer davon muss weg sein.
+        """
+        self.assertNotIn("sichtbar", self._aufrufe_im_abfragepfad())
+
+    def test_der_strukturtest_sieht_ueberhaupt_aufrufe(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Faende der Syntaxbaum gar keine Aufrufe - weil `getsource` etwas
+        anderes liefert oder die Klasse umbenannt wurde -, waere der Zeuge
+        darueber immer gruen und bewachte nichts.
+        """
+        self.assertIn("mit_qm_preis", self._aufrufe_im_abfragepfad())
+
+    def test_sichtbar_steht_unveraendert_im_modell(self):
+        # Entfernt wird die Methode NICHT - andere Aufrufer haengen daran.
+        o = self._objekt(url="https://x/probe", status=Status.RAUS)
+        self.assertFalse(Objekt.objects.sichtbar().filter(pk=o.pk).exists())
+
+
+class ListenfilterTests(ListenTestBasis):
+    """Abschnitt 2: jeder Filter greift nur bei gesetztem Wert."""
+
+    def test_ein_leerer_filterwert_schraenkt_nicht_ein(self):
+        o = self._objekt(titel="Bleibt stehen")
+        self.assertIn(o.pk, self._menge("/?land=&objekttyp=&suche=&region="))
+
+    def test_ein_leerer_filterwert_verbirgt_den_bestand_nicht(self):
+        """Der eigentliche Schaden: `land=""` traefe jedes Objekt OHNE Land.
+
+        `land`, `portal` und `objekttyp` sind `blank=True, default=""`. Ein
+        Filter, der den leeren Wert mitprueft, ist kein leerer Filter - er ist
+        ein sehr wirksamer.
+        """
+        mit = self._objekt(titel="Mit Land", land=Land.ES)
+        ohne = self._objekt(titel="Ohne Land")
+        self.assertEqual(self._menge("/?land="), {mit.pk, ohne.pk})
+
+    def test_ein_gesetzter_landfilter_verbirgt_objekte_ohne_land(self):
+        """GEWOLLT, kein Fehler.
+
+        Wer nach Spanien filtert, will keine Objekte sehen, von denen niemand
+        weiss, wo sie stehen. Dieser Zeuge steht hier, damit die Entscheidung
+        nicht spaeter fuer einen Fehler gehalten und "repariert" wird.
+        """
+        mit = self._objekt(titel="Mit Land", land=Land.ES)
+        self._objekt(titel="Ohne Land")
+        self.assertEqual(self._menge("/?land=ES"), {mit.pk})
+
+    # --- Freitext ---------------------------------------------------------
+
+    def test_der_freitext_trifft_im_titel(self):
+        o = self._objekt(titel="Finca bei Ronda")
+        self.assertEqual(self._menge("/?suche=finca"), {o.pk})
+
+    def test_der_freitext_trifft_im_ort(self):
+        o = self._objekt(ort="Ronda")
+        self.assertEqual(self._menge("/?suche=ronda"), {o.pk})
+
+    def test_der_freitext_trifft_in_der_region(self):
+        o = self._objekt(region="Serranía de Ronda")
+        self.assertEqual(self._menge("/?suche=serran"), {o.pk})
+
+    def test_der_freitext_trifft_in_der_beschreibung(self):
+        o = self._objekt(beschreibung="Alter Olivenhain am Hang")
+        self.assertEqual(self._menge("/?suche=olivenhain"), {o.pk})
+
+    def test_der_freitext_verbindet_die_vier_spalten_mit_ODER(self):
+        """Sonst muesste ein Wort in allen vier Spalten stehen - und traefe nie."""
+        im_titel = self._objekt(titel="Ronda")
+        im_ort = self._objekt(ort="Ronda")
+        self.assertEqual(self._menge("/?suche=Ronda"), {im_titel.pk, im_ort.pk})
+
+    def test_der_freitext_unterscheidet_keine_gross_und_kleinschreibung(self):
+        o = self._objekt(titel="Finca bei Ronda")
+        self.assertEqual(self._menge("/?suche=FINCA"), {o.pk})
+
+    # --- Grenzen ----------------------------------------------------------
+
+    def test_die_preisuntergrenze_wirkt(self):
+        guenstig = self._objekt(aktueller_preis=Decimal("100000"))
+        teuer = self._objekt(aktueller_preis=Decimal("300000"))
+        self.assertEqual(self._menge("/?preis_von=200000"), {teuer.pk})
+        self.assertNotIn(guenstig.pk, self._menge("/?preis_von=200000"))
+
+    def test_die_preisobergrenze_wirkt(self):
+        guenstig = self._objekt(aktueller_preis=Decimal("100000"))
+        self._objekt(aktueller_preis=Decimal("300000"))
+        self.assertEqual(self._menge("/?preis_bis=200000"), {guenstig.pk})
+
+    def test_beide_preisgrenzen_wirken_gemeinsam(self):
+        self._objekt(aktueller_preis=Decimal("100000"))
+        mitte = self._objekt(aktueller_preis=Decimal("200000"))
+        self._objekt(aktueller_preis=Decimal("300000"))
+        self.assertEqual(
+            self._menge("/?preis_von=150000&preis_bis=250000"), {mitte.pk}
+        )
+
+    def test_die_flaechenuntergrenze_wirkt(self):
+        klein = self._objekt(wohnflaeche=Decimal("80"))
+        gross = self._objekt(wohnflaeche=Decimal("200"))
+        self.assertEqual(self._menge("/?flaeche_von=150"), {gross.pk})
+        self.assertNotIn(klein.pk, self._menge("/?flaeche_von=150"))
+
+    def test_die_flaechenobergrenze_wirkt(self):
+        klein = self._objekt(wohnflaeche=Decimal("80"))
+        self._objekt(wohnflaeche=Decimal("200"))
+        self.assertEqual(self._menge("/?flaeche_bis=150"), {klein.pk})
+
+    def test_beide_flaechengrenzen_wirken_gemeinsam(self):
+        self._objekt(wohnflaeche=Decimal("80"))
+        mitte = self._objekt(wohnflaeche=Decimal("140"))
+        self._objekt(wohnflaeche=Decimal("200"))
+        self.assertEqual(self._menge("/?flaeche_von=100&flaeche_bis=180"), {mitte.pk})
+
+    # --- die uebrigen Einfachfilter ---------------------------------------
+
+    def test_der_portalfilter_trifft(self):
+        """`portal` ist neu gegenueber der alten Spezifikation.
+
+        Vorher stand in der Spalte nichts; seit Schritt 2 wird sie aus der URL
+        abgeleitet und ein Filter darauf hat erstmals einen Gegenstand.
+        """
+        idealista = self._objekt(portal=Portal.IDEALISTA)
+        self._objekt(portal=Portal.IMMOSCOUT24)
+        self.assertEqual(self._menge("/?portal=idealista"), {idealista.pk})
+
+    def test_der_objekttypfilter_trifft(self):
+        finca = self._objekt(objekttyp=Objekttyp.FINCA)
+        self._objekt(objekttyp=Objekttyp.WOHNUNG)
+        self.assertEqual(self._menge("/?objekttyp=finca"), {finca.pk})
+
+    def test_der_zustandsfilter_trifft(self):
+        kern = self._objekt(zustand=Zustand.KERNSANIERUNG)
+        self._objekt(zustand=Zustand.KOSMETISCH)
+        self.assertEqual(self._menge("/?zustand=kernsanierung"), {kern.pk})
+
+    def test_der_regionsfilter_trifft_als_teilzeichenkette(self):
+        # Freitext, kein `choices`: der Suchraum ist offen und wird nicht
+        # vorab festgelegt.
+        o = self._objekt(region="Serranía de Ronda")
+        self.assertEqual(self._menge("/?region=ronda"), {o.pk})
+
+    def test_zwei_filter_wirken_gemeinsam(self):
+        treffer = self._objekt(land=Land.ES, objekttyp=Objekttyp.FINCA)
+        self._objekt(land=Land.ES, objekttyp=Objekttyp.WOHNUNG)
+        self._objekt(land=Land.DE, objekttyp=Objekttyp.FINCA)
+        self.assertEqual(self._menge("/?land=ES&objekttyp=finca"), {treffer.pk})
+
+    def test_ein_ungueltiger_zahlenwert_wirft_keinen_fehler(self):
+        self._objekt(aktueller_preis=Decimal("100000"))
+        self.assertEqual(self._seite("/?preis_von=viel").status_code, 200)
+
+
+class TrefferanzeigeTests(ListenTestBasis):
+    """Abschnitt 2, letzter Teil: Trefferzahl, Gesamtzahl, Zuruecksetzen."""
+
+    def test_ohne_filter_steht_keine_trefferanzeige(self):
+        self._objekt(titel="Eins")
+        self.assertFalse(self._seite().context["ist_gefiltert"])
+
+    def test_ein_gesetzter_filter_loest_die_anzeige_aus(self):
+        self.assertTrue(self._seite("/?land=ES").context["ist_gefiltert"])
+
+    def test_die_sortierung_allein_loest_die_anzeige_nicht_aus(self):
+        self.assertFalse(self._seite("/?sortierung=qm_preis").context["ist_gefiltert"])
+
+    def test_die_seitenzahl_allein_loest_die_anzeige_nicht_aus(self):
+        self.assertFalse(self._seite("/?seite=1").context["ist_gefiltert"])
+
+    def test_der_leere_statusfilter_loest_die_anzeige_aus(self):
+        """Sonst stuende die leere Liste ohne jede Erklaerung da."""
+        self.assertTrue(self._seite("/?status=").context["ist_gefiltert"])
+
+    def test_die_trefferzahl_ist_die_zahl_der_gefilterten(self):
+        self._objekt(land=Land.ES)
+        self._objekt(land=Land.ES)
+        self._objekt(land=Land.DE)
+        self.assertEqual(self._seite("/?land=ES").context["trefferzahl"], 2)
+
+    def test_die_gesamtzahl_zaehlt_alle_objekte_ohne_jeden_filter(self):
+        """Nicht die Zahl der sichtbaren.
+
+        "2 von 4" beantwortet die Frage "wie viel blende ich gerade aus".
+        "2 von 3" - unter Auslassung des verworfenen - beantwortete sie nicht.
+        """
+        self._objekt(land=Land.ES)
+        self._objekt(land=Land.ES)
+        self._objekt(land=Land.DE)
+        self._objekt(status=Status.RAUS)
+        self.assertEqual(self._seite("/?land=ES").context["gesamtzahl"], 4)
+
+    def test_der_zuruecksetzen_verweis_zeigt_auf_die_nackte_adresse(self):
+        antwort = self._seite("/?land=ES&status=raus")
+        self.assertContains(antwort, 'href="/">Filter zurücksetzen</a>')
+
+
+class SortierungTests(ListenTestBasis):
+    """Abschnitt 3: Positivliste, `nulls_last` in beide Richtungen, `-id` am Ende."""
+
+    def _mit_qm_preis(self):
+        """Zwei Objekte mit €/m², eines ohne Wohnflaeche - also mit NULL."""
+        teuer = self._objekt(
+            url="https://x/teuer", aktueller_preis=Decimal("200000"),
+            wohnflaeche=Decimal("100"),
+        )
+        guenstig = self._objekt(
+            url="https://x/guenstig", aktueller_preis=Decimal("100000"),
+            wohnflaeche=Decimal("100"),
+        )
+        ohne = self._objekt(url="https://x/ohne", aktueller_preis=Decimal("150000"))
+        return teuer, guenstig, ohne
+
+    # --- die Positivliste -------------------------------------------------
+
+    def test_der_standard_ist_das_zuletzt_eingeworfene_zuerst(self):
+        self.assertEqual(views.geprueft_sortierung(""), "-eingestellt_am")
+
+    def test_jeder_schluessel_wird_in_beide_richtungen_angenommen(self):
+        for schluessel in views.SORTIERSCHLUESSEL:
+            for wert in (schluessel, f"-{schluessel}"):
+                with self.subTest(wert=wert):
+                    self.assertEqual(views.geprueft_sortierung(wert), wert)
+
+    def test_ein_unbekannter_wert_faellt_auf_den_standard(self):
+        self.assertEqual(views.geprueft_sortierung("gibtsnicht"), "-eingestellt_am")
+
+    def test_ein_unbekannter_wert_wirft_keinen_fehler(self):
+        self._objekt()
+        self.assertEqual(self._seite("/?sortierung=gibtsnicht").status_code, 200)
+
+    def test_ein_feldaehnlicher_wert_wird_nicht_durchgereicht(self):
+        """`passwort` sieht aus wie ein Feldname und ist keiner.
+
+        Durchgereicht an `order_by()` waere das ein `FieldError` und damit ein
+        500er auf der meistbesuchten Seite des Werkzeugs.
+        """
+        self._objekt()
+        self.assertEqual(self._seite("/?sortierung=passwort").status_code, 200)
+        self.assertEqual(views.geprueft_sortierung("passwort"), "-eingestellt_am")
+
+    def test_ein_echter_feldname_ausserhalb_der_liste_wird_nicht_uebernommen(self):
+        """Der schaerfere Fall: `titel` IST ein Feld - `order_by("titel")` liefe.
+
+        Ohne Positivliste faende hier niemand einen Fehler: die Seite kaeme
+        mit 200 zurueck, nur eben nach einer Spalte sortiert, die nicht zur
+        Auswahl steht. Deshalb wird gegen die REIHENFOLGE geprueft und nicht
+        gegen den Statuscode.
+        """
+        zuerst = self._objekt(url="https://x/1", titel="AAA zuerst eingeworfen")
+        zuletzt = self._objekt(url="https://x/2", titel="ZZZ zuletzt eingeworfen")
+        # Verschiedene Zeitpunkte, nicht gleiche: sonst haengt der Zeuge am
+        # zweiten Sortierkriterium mit und faellt auch, wenn `-id` fehlt -
+        # dann misst er zwei Zusagen auf einmal und keine davon genau.
+        jetzt = timezone.now()
+        Objekt.objects.filter(pk=zuerst.pk).update(eingestellt_am=jetzt - timedelta(days=1))
+        Objekt.objects.filter(pk=zuletzt.pk).update(eingestellt_am=jetzt)
+        # Nach `titel` aufsteigend stuende "AAA" oben; der Standard stellt das
+        # zuletzt Eingeworfene nach oben.
+        self.assertEqual(self._pks("/?sortierung=titel")[0], zuletzt.pk)
+
+    def test_ein_doppeltes_minus_wird_nicht_durchgereicht(self):
+        # Ein blosses `lstrip("-")` haette hier "eingestellt_am" gefunden und
+        # den Wert durchgelassen.
+        self.assertEqual(views.geprueft_sortierung("--eingestellt_am"), "-eingestellt_am")
+
+    # --- nulls_last, beide Richtungen -------------------------------------
+
+    def test_absteigend_stehen_objekte_ohne_wohnflaeche_am_ende(self):
+        teuer, guenstig, ohne = self._mit_qm_preis()
+        self.assertEqual(self._pks("/?sortierung=-qm_preis"), [teuer.pk, guenstig.pk, ohne.pk])
+
+    def test_aufsteigend_stehen_objekte_ohne_wohnflaeche_ebenfalls_am_ende(self):
+        """Die Richtung, die man vergisst.
+
+        Aufsteigend schiebt PostgreSQL NULL von sich aus ans Ende - ein Zeuge
+        nur fuer diese Richtung bliebe auch ohne `nulls_last` gruen. Er steht
+        hier trotzdem: faellt spaeter jemand auf die Idee, `nulls_last` nur
+        absteigend zu setzen, meldet sich sonst niemand, wenn die Voreinstellung
+        der Datenbank einmal eine andere ist.
+        """
+        teuer, guenstig, ohne = self._mit_qm_preis()
+        self.assertEqual(self._pks("/?sortierung=qm_preis"), [guenstig.pk, teuer.pk, ohne.pk])
+
+    def test_absteigend_stehen_objekte_ohne_preis_am_ende(self):
+        mit = self._objekt(url="https://x/mit", aktueller_preis=Decimal("100000"))
+        ohne = self._objekt(url="https://x/ohne")
+        self.assertEqual(self._pks("/?sortierung=-aktueller_preis"), [mit.pk, ohne.pk])
+
+    def test_aufsteigend_stehen_objekte_ohne_preis_am_ende(self):
+        mit = self._objekt(url="https://x/mit", aktueller_preis=Decimal("100000"))
+        ohne = self._objekt(url="https://x/ohne")
+        self.assertEqual(self._pks("/?sortierung=aktueller_preis"), [mit.pk, ohne.pk])
+
+    def test_absteigend_stehen_objekte_ohne_wohnflaechenangabe_am_ende(self):
+        mit = self._objekt(url="https://x/mit", wohnflaeche=Decimal("120"))
+        ohne = self._objekt(url="https://x/ohne")
+        self.assertEqual(self._pks("/?sortierung=-wohnflaeche"), [mit.pk, ohne.pk])
+
+    def test_aufsteigend_stehen_objekte_ohne_wohnflaechenangabe_am_ende(self):
+        mit = self._objekt(url="https://x/mit", wohnflaeche=Decimal("120"))
+        ohne = self._objekt(url="https://x/ohne")
+        self.assertEqual(self._pks("/?sortierung=wohnflaeche"), [mit.pk, ohne.pk])
+
+    # --- die kompilierte Abfrage ------------------------------------------
+
+    def _order_by(self, adresse):
+        """Die `ORDER BY`-Klausel der sortierten Abfrage auf `objekte_objekt`.
+
+        Strukturtest neben den Verhaltenstests darueber: liefert die Datenbank
+        die gewuenschte Reihenfolge zufaellig geschenkt - etwa ueber einen
+        Index oder die Einfuegereihenfolge -, bleiben jene gruen, obwohl das
+        Kriterium fehlt.
+        """
+        with CaptureQueriesContext(connection) as abfragen:
+            self._seite(adresse)
+        sortierte = [
+            q["sql"].lower()
+            for q in abfragen.captured_queries
+            if "objekte_objekt" in q["sql"] and "order by" in q["sql"].lower()
+        ]
+        self.assertTrue(sortierte, "keine sortierte Abfrage auf objekte_objekt")
+        klausel = sortierte[-1][sortierte[-1].rindex("order by") :]
+        return klausel.split(" limit ")[0]
+
+    def test_jede_sortierung_endet_auf_die_id(self):
+        self._objekt()
+        for wert in ("", "qm_preis", "-qm_preis", "aktueller_preis", "-wohnflaeche"):
+            with self.subTest(sortierung=wert):
+                self.assertTrue(
+                    self._order_by(f"/?sortierung={wert}").rstrip().endswith('"id" desc'),
+                    self._order_by(f"/?sortierung={wert}"),
+                )
+
+    def test_nulls_last_steht_absteigend_in_der_abfrage(self):
+        self._objekt()
+        self.assertIn("nulls last", self._order_by("/?sortierung=-qm_preis"))
+
+    def test_nulls_last_steht_aufsteigend_in_der_abfrage(self):
+        self._objekt()
+        self.assertIn("nulls last", self._order_by("/?sortierung=qm_preis"))
+
+    # --- die Leiste ueber der Liste ---------------------------------------
+
+    def test_jeder_sortierschluessel_hat_eine_beschriftung(self):
+        # Sonst wirft der Aufbau der Leiste einen `KeyError` - und zwar erst
+        # beim Rendern, nicht beim Ergaenzen des Schluessels.
+        for schluessel in views.SORTIERSCHLUESSEL:
+            with self.subTest(schluessel=schluessel):
+                self.assertIn(schluessel, views.SORTIERBESCHRIFTUNG)
+
+    def test_die_leiste_traegt_jeden_schluessel_in_beide_richtungen(self):
+        antwort = self._seite()
+        for schluessel in views.SORTIERSCHLUESSEL:
+            for wert in (schluessel, f"-{schluessel}"):
+                with self.subTest(wert=wert):
+                    self.assertContains(antwort, escape(f"sortierung={wert}"))
+
+
+class BlaetternTests(ListenTestBasis):
+    """Abschnitt 4: Seitengroesse als Konstante, Parametererhalt, stiller Rueckfall."""
+
+    def _verweise(self, adresse="/"):
+        """Alle Ziele der Seite als geparste Parameterverzeichnisse.
+
+        Ueber `parse_qs` und nicht ueber einen Textvergleich: `{% querystring %}`
+        legt die Parameter in der Reihenfolge ab, in der sie ankamen, und ein
+        Zeuge auf eine bestimmte Zeichenkette waere von dieser Reihenfolge
+        abhaengig statt vom Inhalt.
+        """
+        inhalt = self._seite(adresse).content.decode()
+        return [
+            parse_qs(urlparse(htmlwerkzeug.unescape(ziel)).query)
+            for ziel in re.findall(r'href="([^"]*)"', inhalt)
+        ]
+
+    def _blaetterlink(self, adresse):
+        for parameter in self._verweise(adresse):
+            if parameter.get("seite") == ["2"]:
+                return parameter
+        self.fail("kein Blaetterlink auf Seite 2 gefunden")
+
+    def _sortierlink(self, adresse, wert):
+        for parameter in self._verweise(adresse):
+            if parameter.get("sortierung") == [wert]:
+                return parameter
+        self.fail(f"kein Sortierlink auf {wert} gefunden")
+
+    def _viele(self, anzahl, **felder):
+        return [self._objekt(url=f"https://x/{n}", **felder) for n in range(anzahl)]
+
+    # --- die Seitengroesse ------------------------------------------------
+
+    def test_die_seitengroesse_steht_als_modulkonstante(self):
+        self.assertEqual(views.OBJEKTE_JE_SEITE, 50)
+
+    def test_die_seitengroesse_laesst_sich_heruntersetzen(self):
+        """Ohne das waere der Stabilitaetszeuge unten unbaubar.
+
+        Ein Klassenattribut `paginate_by = OBJEKTE_JE_SEITE` waere zur
+        Importzeit festgeschrieben; ein `mock.patch` auf die Modulkonstante
+        liefe dann ins Leere und der Zeuge bliebe still gruen.
+        """
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertEqual(len(self._pks()), 2)
+
+    def test_die_liste_blaettert_ueberhaupt(self):
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertTrue(self._seite().context["page_obj"].has_other_pages())
+
+    # --- stiller Rueckfall ------------------------------------------------
+
+    def test_eine_ungueltige_seitenzahl_wirft_keinen_fehler(self):
+        self._viele(3)
+        self.assertEqual(self._seite("/?seite=abc").status_code, 200)
+
+    def test_eine_ungueltige_seitenzahl_faellt_auf_seite_eins(self):
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertEqual(self._seite("/?seite=abc").context["page_obj"].number, 1)
+
+    def test_eine_zu_hohe_seitenzahl_faellt_auf_seite_eins(self):
+        """Nicht auf die LETZTE Seite.
+
+        `Paginator.get_page()` schickt eine zu hohe Zahl auf die letzte Seite;
+        das ist ein anderes Versprechen. Faellt dieser Zeuge, ist vermutlich
+        `get_page()` an die Stelle von `page()` getreten.
+        """
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertEqual(self._seite("/?seite=900").context["page_obj"].number, 1)
+
+    def test_eine_negative_seitenzahl_faellt_auf_seite_eins(self):
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertEqual(self._seite("/?seite=-4").context["page_obj"].number, 1)
+
+    def test_die_leere_liste_blaettert_ohne_fehler(self):
+        self.assertEqual(self._seite("/?seite=2").status_code, 200)
+
+    # --- Parametererhalt --------------------------------------------------
+
+    def test_ein_blaetterlink_traegt_den_filter_mit(self):
+        self._viele(3, land=Land.ES)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self.assertEqual(self._blaetterlink("/?land=ES").get("land"), ["ES"])
+
+    def test_ein_blaetterlink_traegt_die_sortierung_mit(self):
+        self._viele(3)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            parameter = self._blaetterlink("/?sortierung=qm_preis")
+        self.assertEqual(parameter.get("sortierung"), ["qm_preis"])
+
+    def test_ein_blaetterlink_traegt_mehrfach_gesetzte_status_vollstaendig_mit(self):
+        self._viele(3, status=Status.RAUS)
+        self._viele(1, status=Status.VOM_MARKT)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            parameter = self._blaetterlink("/?status=raus&status=vom_markt")
+        self.assertEqual(sorted(parameter.get("status", [])), ["raus", "vom_markt"])
+
+    def test_ein_sortierlink_traegt_mehrfach_gesetzte_status_vollstaendig_mit(self):
+        """Der Fall, an dem eine handgebaute Hilfsfunktion scheitert.
+
+        Faellt `status` beim Sortieren aus der Adresse, greift die
+        Vorbelegung - und die Auswahl der Person ist stillschweigend weg,
+        ohne dass irgendetwas danach aussieht.
+        """
+        self._viele(2, status=Status.RAUS)
+        parameter = self._sortierlink("/?status=raus&status=vom_markt", "qm_preis")
+        self.assertEqual(sorted(parameter.get("status", [])), ["raus", "vom_markt"])
+
+    def test_ein_sortierlink_traegt_den_filter_mit(self):
+        self._viele(2, land=Land.ES)
+        parameter = self._sortierlink("/?land=ES", "-aktueller_preis")
+        self.assertEqual(parameter.get("land"), ["ES"])
+
+    def test_ein_sortierlink_setzt_die_seitenzahl_zurueck(self):
+        """Eine neue Sortierung faengt vorn an.
+
+        Sonst stuende man nach dem Sortieren auf Seite 4 einer voellig anderen
+        Reihenfolge - und haelt sie fuer leer, wenn die neue Liste kuerzer ist.
+        """
+        self._viele(5)
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            parameter = self._sortierlink("/?seite=2", "qm_preis")
+        self.assertNotIn("seite", parameter)
+
+    # --- der wichtigste neue Zeuge ----------------------------------------
+
+    def test_beim_blaettern_erscheint_jedes_objekt_genau_einmal(self):
+        """Sortierstabilitaet ueber Seitengrenzen hinweg.
+
+        Fuenf Objekte OHNE Wohnflaeche haben alle `qm_preis = NULL` - der
+        Sortierwert ist bei allen fuenf derselbe. Ohne zweites Kriterium darf
+        PostgreSQL bei jeder Abfrage anders sortieren, und dann erscheint ein
+        Objekt auf Seite 1 UND auf Seite 2 - oder auf keiner.
+
+        Gezaehlt werden deshalb nicht die Treffer je Seite, sondern die IDs
+        ueber alle Seiten: genau fuenf verschiedene, keine doppelt, keine
+        fehlend.
+
+        ACHTUNG - dieser Zeuge bewacht die Zusage NICHT allein. Die Gegenprobe
+        hat gezeigt: `-id` aus `reihenfolge()` zu entfernen laesst ihn gruen.
+        Der Grund ist genau die Sorte Verdeckung, gegen die die Gegenprobe
+        laeuft - die drei `Count`-Annotationen ueber `vota` erzwingen ein
+        `GROUP BY objekte_objekt.id`, und PostgreSQL waehlt dafuer hier einen
+        Plan, der die Zeilen ohnehin in ID-Folge liefert. Das ist eine
+        Eigenschaft des Ausfuehrungsplans, keine Zusage: bei groesseren
+        Tabellen darf der Planer eine Hash-Aggregation waehlen, und dann ist
+        die Folge wieder unbestimmt.
+
+        Der Zeuge, der `-id` wirklich bewacht, ist deshalb
+        `SortierungTests.test_jede_sortierung_endet_auf_die_id` - er liest die
+        kompilierte Abfrage und faellt bei jeder der fuenf geprueften
+        Sortierungen. Dieser hier bleibt daneben stehen, weil er den
+        Sachverhalt beschreibt, um den es geht: kein Objekt doppelt, keines
+        fehlend.
+        """
+        erwartet = {o.pk for o in self._viele(5)}
+        gesehen = []
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            for nummer in (1, 2, 3):
+                gesehen += self._pks(f"/?sortierung=-qm_preis&seite={nummer}")
+        self.assertEqual(len(gesehen), 5)
+        self.assertEqual(set(gesehen), erwartet)
+
+    def test_beim_blaettern_nach_eingangsdatum_erscheint_jedes_objekt_genau_einmal(self):
+        """Derselbe Zeuge fuer den Standardfall.
+
+        Beim Einwerfen mehrerer Objekte in einer Minute ist `eingestellt_am`
+        gleich - ab Schritt 3 der Normalfall, weil der Mail-Parser mehrere
+        Objekte am Stueck anlegt.
+        """
+        erwartet = {o.pk for o in self._viele(5)}
+        Objekt.objects.filter(pk__in=erwartet).update(eingestellt_am=timezone.now())
+        gesehen = []
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            for nummer in (1, 2, 3):
+                gesehen += self._pks(f"/?seite={nummer}")
+        self.assertEqual(len(gesehen), 5)
+        self.assertEqual(set(gesehen), erwartet)
+
+
+class VotumUebersichtTests(ListenTestBasis):
+    """Abschnitt 5: die Votum-Spalte der Liste."""
+
+    def setUp(self):
+        super().setUp()
+        # Vier weitere Personen: mit nur einer waere "offen" immer 0 und der
+        # interessante Teil der Spalte nie zu sehen.
+        self.weitere = [
+            Person.objects.create_user(name)
+            for name in ("anna", "bernd", "clara", "doris")
+        ]
+        self.objekt = self._objekt(url="https://x/votum", titel="Zur Abstimmung")
+
+    def _uebersicht(self, adresse="/"):
+        return self._seite(adresse).context["objekte"][0].votum_uebersicht
+
+    def _stimmen(self, wertungen):
+        for person, wertung in zip([self.person, *self.weitere], wertungen):
+            Votum.objects.create(objekt=self.objekt, person=person, wertung=wertung)
+
+    # --- die Zaehlung -----------------------------------------------------
+
+    def test_gemischte_vota_werden_richtig_gezaehlt(self):
+        self._stimmen([Wertung.DAFUER, Wertung.DAFUER, Wertung.DAFUER, Wertung.RAUS])
+        self.assertEqual(self._uebersicht(), "3 dafür · 1 raus · 1 offen")
+
+    def test_alle_drei_kategorien_erscheinen(self):
+        self._stimmen(
+            [Wertung.DAFUER, Wertung.ANSCHAUEN, Wertung.RAUS, Wertung.RAUS, Wertung.DAFUER]
+        )
+        self.assertEqual(self._uebersicht(), "2 dafür · 1 anschauen · 2 raus")
+
+    def test_die_zaehlung_bleibt_am_richtigen_objekt(self):
+        """Riegel gegen eine Zaehlung, die ueber alle Objekte laeuft."""
+        zweites = self._objekt(url="https://x/zweites", titel="Ohne Stimmen")
+        self._stimmen([Wertung.DAFUER])
+        nach_pk = {
+            o.pk: o.votum_uebersicht for o in self._seite().context["objekte"]
+        }
+        self.assertEqual(nach_pk[zweites.pk], "noch kein Votum")
+        self.assertEqual(nach_pk[self.objekt.pk], "1 dafür · 4 offen")
+
+    # --- "offen" ----------------------------------------------------------
+
+    def test_offen_zaehlt_die_personen_ohne_stimme(self):
+        self._stimmen([Wertung.DAFUER])
+        self.assertEqual(self._uebersicht(), "1 dafür · 4 offen")
+
+    def test_offen_faellt_weg_wenn_alle_abgestimmt_haben(self):
+        self._stimmen([Wertung.DAFUER] * 5)
+        self.assertEqual(self._uebersicht(), "5 dafür")
+
+    def test_eine_stillgelegte_person_zaehlt_nicht_mehr_in_offen(self):
+        """`is_active=False` heisst: die Person gehoert nicht mehr dazu.
+
+        Sonst stuende in jeder Zeile fuer immer ein "offen", auf das niemand
+        mehr antworten kann - und die Spalte behauptete eine Abstimmung, die
+        nicht mehr laeuft.
+        """
+        self._stimmen([Wertung.DAFUER])
+        self.assertEqual(self._uebersicht(), "1 dafür · 4 offen")
+        Person.objects.filter(pk=self.weitere[0].pk).update(is_active=False)
+        self.assertEqual(self._uebersicht(), "1 dafür · 3 offen")
+
+    def test_das_votum_einer_stillgelegten_person_zaehlt_weiter(self):
+        """Die Stimme bleibt stehen - abgezogen wird nur bei "offen".
+
+        Andernfalls verschwaende eine abgegebene Wertung mit dem Konto, und
+        die Liste zeigte eine Zahl, die nie jemand so gesehen hat.
+        """
+        self._stimmen([Wertung.DAFUER, Wertung.RAUS])
+        Person.objects.filter(pk=self.weitere[0].pk).update(is_active=False)
+        self.assertEqual(self._uebersicht(), "1 dafür · 1 raus · 2 offen")
+
+    def test_mehr_stimmen_als_aktive_personen_zeigen_kein_negatives_offen(self):
+        self._stimmen([Wertung.DAFUER] * 5)
+        Person.objects.filter(pk__in=[p.pk for p in self.weitere]).update(is_active=False)
+        self.assertEqual(self._uebersicht(), "5 dafür")
+
+    # --- die Darstellung --------------------------------------------------
+
+    def test_eine_kategorie_mit_null_erscheint_nicht(self):
+        """Sonst stuende in jeder Zeile "0 anschauen · 0 raus"."""
+        self._stimmen([Wertung.DAFUER])
+        self.assertNotIn("0 ", self._uebersicht())
+
+    def test_ohne_jedes_votum_steht_ein_eigener_satz(self):
+        self.assertEqual(self._uebersicht(), "noch kein Votum")
+
+    def test_ohne_jedes_votum_steht_dort_nicht_die_zahl_der_offenen(self):
+        # "5 offen" saehe aus wie ein Zwischenstand einer laufenden Abstimmung.
+        self.assertNotIn("offen", self._uebersicht())
+
+    def test_die_spalte_steht_in_der_liste(self):
+        self._stimmen([Wertung.DAFUER, Wertung.RAUS])
+        antwort = self._seite()
+        self.assertContains(antwort, 'data-spalte="Votum"')
+        self.assertContains(antwort, "1 dafür · 1 raus · 3 offen")
+
+    # --- der Riegel gegen das Kreuzprodukt --------------------------------
+
+    def test_notizen_verfaelschen_die_zaehlung_nicht(self):
+        """Zwei Aggregate ueber verschiedene Relationen erzeugten ein Kreuzprodukt.
+
+        Hier wird nur ueber `vota` aggregiert - Notizen liegen daneben und
+        duerfen die Zahlen nicht anfassen. Der Zeuge steht da, damit ein
+        spaeter ergaenztes `Count("notizen")` sofort auffaellt, statt die
+        Vota still zu vervielfachen.
+        """
+        self._stimmen([Wertung.DAFUER, Wertung.RAUS])
+        for text in ("erste Notiz", "zweite Notiz", "dritte Notiz"):
+            Notiz.objects.create(objekt=self.objekt, person=self.person, text=text)
+        self.assertEqual(self._uebersicht(), "1 dafür · 1 raus · 3 offen")
+
+    def test_die_zaehlung_ueberlebt_filter_und_sortierung(self):
+        self._stimmen([Wertung.DAFUER, Wertung.RAUS])
+        self.assertEqual(
+            self._uebersicht("/?status=neu&sortierung=-qm_preis"),
+            "1 dafür · 1 raus · 3 offen",
+        )

@@ -1,0 +1,390 @@
+/* Objektradar - handgeschrieben, mobil zuerst.
+   Kein Framework, kein Build-Schritt, keine Webfonts. Webfonts fallen
+   zusaetzlich aus, weil ein Nachladen von fremden Servern eine
+   Datenschutzfrage aufwirft, die dieses Werkzeug nicht braucht.
+
+   Ein Arbeitsgeraet fuer fuenf Personen, die Zahlen nebeneinanderlegen. Es
+   soll ruhig sein und Zahlen lesbar machen. Alles, was Farbe traegt, traegt
+   Bedeutung. */
+
+:root {
+  --papier:    #FBFBF9;  /* Seitengrund */
+  --flaeche:   #FFFFFF;  /* Karten, Tabellenzeilen */
+  --linie:     #DEDCD5;  /* Rahmen, Trenner */
+  --text:      #22262B;  /* Fliesstext */
+  --gedaempft: #6B7178;  /* Nebenangaben, Spaltenkoepfe, "—" */
+  --akzent:    #2F5D62;  /* Links, Fokus, aktive Bedienelemente */
+
+  /* Die einzige laute Farbe. Reserviert fuer Preissenkungen - das wichtigste
+     Kaufsignal - und deshalb bis heute an keiner Stelle verwendet. Der Zeuge
+     `test_die_signalfarbe_wird_nirgends_verwendet` haelt sie frei. */
+  --signal:    #B4531F;
+
+  /* Fehlermeldungen. Eigene Farbe, weil ein Tippfehler im Formular nicht
+     aussehen darf wie eine Preissenkung: sonst stumpft genau das Signal ab,
+     auf das die Liste hinarbeitet. */
+  --fehler:    #8C2F2F;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--papier);
+  color: var(--text);
+  /* Systemstack. Kein Webfont, also auch kein Nachladen von fremden Servern. */
+  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Inhaltsrahmen. Die Objektliste darf breiter laufen als der Fliesstext einer
+   Objektansicht - deshalb 78rem und nicht die uebliche Lesebreite. */
+header,
+.meldungen,
+main {
+  max-width: 78rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+main { padding-block: 1.5rem 3rem; }
+
+a { color: var(--akzent); }
+
+/* Ruhige Groessenstaffelung, normale Staerke. Keine serifenbetonte
+   Displayschrift, keine Versalien-Eyebrows, keine Nummerierungen: die Liste
+   ist keine Erzaehlung mit Reihenfolge. */
+h1, h2 { font-weight: normal; line-height: 1.25; }
+h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+h2 { font-size: 1.125rem; margin: 2rem 0 .5rem; }
+
+hr { border: 0; border-top: 1px solid var(--linie); margin: 2rem 0 1rem; }
+
+/* --- Kopf ---------------------------------------------------------------
+   Eine Zeile: Werkzeugname links, dann Lesezeichen, Person und "abmelden"
+   rechts. Das `margin-right: auto` am Werkzeugnamen schiebt alles Uebrige
+   nach rechts, ohne dass im Markup ein Huellelement noetig waere. Bewusst
+   `:first-child` und nicht `header > a`: seit der Lesezeichen-Verweis
+   danebensteht, traegt sonst auch er den Schub und der Kopf faellt in zwei
+   Haelften auseinander. */
+header {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding-block: .75rem;
+  border-bottom: 1px solid var(--linie);
+}
+header > a:first-child { margin-right: auto; }
+header span { color: var(--gedaempft); }
+
+/* Darf die Zeile nicht umbrechen. */
+header form { margin: 0; flex: 0 0 auto; white-space: nowrap; }
+
+/* Im Kopf ist der Knopf Navigation, kein Bedienelement des Inhalts - deshalb
+   ruhig statt gefuellt. Die gefuellte Form gilt fuer `main` (siehe unten);
+   die Spezifikation fuehrt Kopf und Formularknoepfe in getrennten Abschnitten. */
+header button {
+  min-height: 2.75rem;
+  padding: 0 .25rem;
+  border: 0;
+  background: none;
+  color: var(--akzent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* --- Meldungen ----------------------------------------------------------
+   Kasten ueber dem Inhalt, linker Balken 3px. Keine Symbole, keine
+   Hintergrundfarbe ausser einer sehr hellen Toenung. */
+.meldungen { list-style: none; margin: 1rem auto 0; padding-inline: 1rem; }
+.meldungen li {
+  border-left: 3px solid var(--gedaempft);
+  background: color-mix(in srgb, var(--gedaempft) 6%, var(--flaeche));
+  padding: .6rem .75rem;
+  margin-bottom: .5rem;
+}
+.meldungen li.success {
+  border-left-color: var(--akzent);
+  background: color-mix(in srgb, var(--akzent) 6%, var(--flaeche));
+}
+.meldungen li.error {
+  border-left-color: var(--fehler);
+  background: color-mix(in srgb, var(--fehler) 6%, var(--flaeche));
+}
+
+/* --- Formulare ----------------------------------------------------------
+   Zeilen untereinander, Beschriftung ueber dem Feld. `form.as_p` liefert
+   `<p><label></label> <input></p>`; die beiden `display: block` machen daraus
+   die gewuenschte Stapelung, ohne dass das Template etwas davon wissen muss. */
+main label { display: block; color: var(--gedaempft); }
+
+main input,
+main select,
+main textarea {
+  display: block;
+  width: 100%;
+  max-width: 30rem;
+  min-height: 2.75rem;
+  padding: .5rem .6rem;
+  border: 1px solid var(--linie);
+  border-radius: 4px;
+  background: var(--flaeche);
+  color: var(--text);
+  font: inherit;
+}
+main textarea { min-height: 4rem; resize: vertical; }
+
+main button {
+  min-height: 2.75rem;
+  padding: .6rem 1rem;
+  border: none;
+  border-radius: 4px;
+  background: var(--akzent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+/* Die Votum-Knoepfe stehen nebeneinander und duerfen umbrechen - das leistet
+   die Zeilenbox von `inline-block` ohne weiteres Zutun. */
+main button + button { margin-left: .5rem; }
+main form p { margin: 0 0 1rem; }
+
+/* --- Das Einwurf-Feld ---------------------------------------------------
+   Das wichtigste Bedienelement der Seite. Volle Breite, Knopf darunter
+   (mobil) beziehungsweise daneben (ab 48rem). Mindesthoehe 2.75rem, damit es
+   am Daumen bedienbar ist - die erbt es von den Regeln darueber. */
+main input[type="url"] { max-width: none; }
+main input[type="url"] + button { margin-top: .5rem; }
+
+/* --- Filter, Sortierung, Blaettern ---------------------------------------
+   Drei Leisten ueber und unter der Liste. Sie sind Bedienung, nicht Inhalt -
+   sie bleiben deshalb ruhig und treten hinter die Zahlen zurueck. */
+
+/* `form.as_p` liefert ein `<p>` je Feld. Das Raster greift direkt darauf zu,
+   damit das Template kein Huellelement je Feld braucht. Unter 26rem Restbreite
+   faellt es von selbst auf eine Spalte zurueck. */
+.filter {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0 1rem;
+  align-items: end;
+  margin: 1.5rem 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--linie);
+}
+.filter p { margin: 0 0 .75rem; }
+.filter input,
+.filter select { max-width: none; }
+.filter button { justify-self: start; }
+
+/* Die Statusauswahl ist ein Kaestchensatz und braucht die ganze Zeilenbreite -
+   sechs Werte nebeneinander passen in keine Rasterspalte. */
+.filter p:has(ul) { grid-column: 1 / -1; }
+.filter ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.filter li label { display: inline-flex; align-items: center; color: var(--text); }
+
+/* Ohne diese Ausnahme erbte das Kaestchen `display: block` und volle Breite
+   von der Feldregel weiter oben und stuende als graues Band in der Zeile. */
+main input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  min-height: 0;
+  margin-right: .4rem;
+}
+
+.treffer,
+.sortierung,
+.blaettern { color: var(--gedaempft); font-size: .875rem; }
+
+.sortierung { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: 0 0 .75rem; }
+
+/* Die beiden Pfeile gehoeren zum Wort davor und duerfen nicht davon abreissen. */
+.sortierung span { white-space: nowrap; }
+.sortierung a { margin-left: .25rem; text-decoration: none; }
+
+/* Die eingestellte Richtung wird gehalten, nicht angeklickt - sie traegt die
+   Textfarbe statt der Verweisfarbe und hebt sich damit ab, ohne laut zu sein. */
+.sortierung a[aria-current] { color: var(--text); font-weight: bold; }
+
+.blaettern {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+/* --- Liste unter 48rem: Karten ------------------------------------------
+   Das Markup bleibt eine `<table>`; nur die Darstellung wird aufgebrochen.
+   Bewusst auf `.tabelle` eingegrenzt: die Preisverlaufstabelle der
+   Objektansicht traegt kein `data-spalte` und bekaeme sonst Karten ohne
+   Bezeichnungen. */
+.tabelle table { width: 100%; border-collapse: collapse; }
+
+/* NICHT `display: none` - das naehme Screenreadern die Spaltenkoepfe. */
+.tabelle thead { position: absolute; clip-path: inset(50%); }
+
+.tabelle tbody tr {
+  display: block;
+  background: var(--flaeche);
+  border: 1px solid var(--linie);
+  border-radius: 4px;
+  margin-bottom: .75rem;
+}
+.tabelle td {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .4rem .75rem;
+}
+.tabelle td::before { content: attr(data-spalte); color: var(--gedaempft); }
+
+/* Die Zelle "Objekt" ist die Ueberschrift der Karte, nicht eine Angabe unter
+   anderen - sie steht oben und ohne Bezeichnung. */
+.tabelle td:first-child::before { content: none; }
+
+/* Ohne Tabellenziffern stehen 750.000 und 89.500 nicht untereinander, und
+   genau das Untereinander ist der Zweck der Liste. Auf der ganzen Tabelle
+   statt auf einzelnen Spalten: Buchstaben aendern sich dadurch nicht, und
+   eine spaeter ergaenzte Zahlenspalte ist ohne Zutun mit erfasst. */
+.tabelle {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* --- Liste ab 48rem: Tabelle -------------------------------------------- */
+@media (min-width: 48rem) {
+  /* Damit bricht eine spaeter ergaenzte Spalte das Layout nicht. */
+  .tabelle { overflow-x: auto; }
+
+  .tabelle thead { position: static; clip-path: none; }
+
+  .tabelle tbody tr {
+    display: table-row;
+    border: 0;
+    border-bottom: 1px solid var(--linie);  /* kein Zebrastreifen */
+    border-radius: 0;
+    margin: 0;
+  }
+  .tabelle td { display: table-cell; padding: .5rem .75rem; }
+  .tabelle td::before { content: none; }
+
+  .tabelle th {
+    text-align: left;
+    font-weight: normal;
+    font-size: .875rem;
+    color: var(--gedaempft);
+    border-bottom: 1px solid var(--linie);
+    padding: .4rem .75rem;
+    white-space: nowrap;
+  }
+
+  /* Zahlenspalten rechtsbuendig, Textspalten links. Angesprochen ueber
+     `data-spalte` und NICHT ueber `nth-child`: eine zusaetzlich eingeschobene
+     Spalte verschiebt jede Positionszahl, den Namen aber nicht. Dass diese
+     vier Namen in der Liste wirklich vorkommen, bezeugt
+     `test_die_zahlenspalten_des_stylesheets_gibt_es_in_der_liste` - sonst
+     fiele die Ausrichtung bei einer Umbenennung still aus. */
+  .tabelle [data-spalte="Wohnfläche"],
+  .tabelle [data-spalte="Grundstück"],
+  .tabelle [data-spalte="Kaufpreis"],
+  .tabelle [data-spalte="€/m²"] { text-align: right; }
+
+  /* Ohne Titel steht in dieser Zelle `Portal · ID`, bei unbekanntem Portal die
+     volle URL - und die sprengt die Spalte. Gekappt wird erst ab 48rem: in der
+     Kartenansicht darunter steht die Zelle allein in ihrer Zeile, dort ist
+     Platz und der Umbruch bleibt erlaubt.
+
+     Ueber `data-spalte` angesprochen wie die Zahlenspalten und aus demselben
+     Grund - `nth-child` waere gegen eine eingeschobene Spalte blind. */
+  .tabelle [data-spalte="Objekt"] {
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Der Knopf sitzt neben dem Feld. `:has()` bleibt bewusst auf diese
+     Verbesserung beschraenkt: faellt es aus, steht der Knopf wie am Handy
+     darunter - unschoen, aber nicht kaputt. */
+  main form:has(> input[type="url"]) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+  }
+  main form:has(> input[type="url"]) label { flex: 0 0 100%; }
+  main form:has(> input[type="url"]) input[type="url"] { flex: 1 1 20rem; width: auto; }
+  main input[type="url"] + button { margin-top: 0; }
+}
+
+/* --- Vorschau des Lesezeichen-Zulaufs ------------------------------------
+   Drei Nebenzeilen unter dem Feld: der gelesene Wert, der abweicht; der
+   Hilfetext des Modells; der Feldfehler. Alle drei gehoeren unter das Feld und
+   nicht daneben - deshalb `display: block`. */
+.gelesen,
+.helptext,
+.hinweis,
+.quelle { font-size: .875rem; color: var(--gedaempft); }
+
+.gelesen,
+.helptext { display: block; }
+
+/* Der gelesene Wert ist eine Abweichung vom gespeicherten Stand, kein
+   Hilfetext - er darf sich davon abheben, ohne laut zu werden. */
+.gelesen { color: var(--text); }
+
+/* Ein Tippfehler im Formular traegt die Fehlerfarbe, nicht das Preissignal. */
+.errorlist {
+  list-style: none;
+  margin: .25rem 0 0;
+  padding: 0;
+  font-size: .875rem;
+  color: var(--fehler);
+}
+
+/* --- Lesezeichenseite ---------------------------------------------------
+   Der ziehbare Link sieht aus wie ein Bedienelement, ist aber ein Link - und
+   genau das muss er bleiben: ein `<button>` laesst sich nicht in die
+   Lesezeichenleiste ziehen. */
+.lesezeichen {
+  display: inline-block;
+  padding: .6rem 1rem;
+  border: 1px solid var(--akzent);
+  border-radius: 4px;
+  text-decoration: none;
+  cursor: grab;
+}
+
+/* Eine Zeile Skript umbricht sonst nicht und schiebt die Seite in die Breite. */
+#id_skript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8125rem; }
+
+/* --- Objektansicht ------------------------------------------------------ */
+dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; margin: 0; }
+dt { color: var(--gedaempft); }
+dd { margin: 0; }
+
+/* Der Fusstext ("eingestellt von … am …"). Ueber `hr +` angesprochen, damit
+   das Template dafuer keine Klasse braucht. */
+main hr + p { color: var(--gedaempft); font-size: .875rem; }
+
+.leer { color: var(--gedaempft); text-align: center; margin: 3rem 0; }
+
+/* --- Qualitaetsboden ---------------------------------------------------- */
+
+/* Der Standardumriss wird nicht ohne Ersatz entfernt. */
+:focus-visible { outline: 2px solid var(--akzent); outline-offset: 2px; }
+
+/* Es gibt ohnehin hoechstens Farbuebergaenge an Knoepfen. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

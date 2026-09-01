@@ -204,7 +204,21 @@ class Objekt(models.Model):
         ]
 
     def __str__(self):
-        return self.titel or self.ort or self.url
+        """Titel, ersatzweise Portal und Inserats-ID, ersatzweise die URL.
+
+        Ohne Titel stand hier die volle URL und sprengte die Objektspalte der
+        Liste. `Portal · ID` ist kurz, eindeutig und liegt bei jedem
+        eingeworfenen Inserat eines erkannten Portals schon vor - niemand muss
+        dafuer etwas nachtragen.
+
+        `ort` ist aus der Kette gefallen: die Liste fuehrt dafuer eine eigene
+        Spalte, und derselbe Wert zweimal nebeneinander sagt nichts Zweites.
+        """
+        if self.titel:
+            return self.titel
+        if self.portal and self.inserats_id:
+            return f"{self.get_portal_display()} · {self.inserats_id}"
+        return self.url
 
     def save(self, *args, **kwargs):
         """Legt beim Anlegen den ersten Verlaufseintrag an - und nur dann.
