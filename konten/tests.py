@@ -11,7 +11,7 @@ from unittest import mock
 from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponse
-from django.test import RequestFactory, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.utils import timezone
 
 from .middleware import BesuchMiddleware
@@ -581,3 +581,184 @@ class BesuchMiddlewareTests(TestCase):
         # nicht hier ein AttributeError den Aufruf zerlegen.
         antwort = BesuchMiddleware(lambda r: HttpResponse("ok"))(RequestFactory().get("/"))
         self.assertEqual(antwort.status_code, 200)
+
+
+class PasswortAendernTests(TestCase):
+    """Vier Personen haben ein von Hand gesetztes Startpasswort. Ohne diese
+    Seite koennen sie es nicht loswerden.
+
+    Djangos `PasswordChangeView` bleibt unveraendert; die Zeugen halten fest,
+    was sie zusagt - damit ein Umbau, der sie ersetzt oder umgeht, auffaellt.
+    """
+
+    ALT = "ein-langes-passwort"
+    NEU = "noch-ein-gutes-wort"
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password=self.ALT, first_name="Steffen", last_name="P."
+        )
+
+    def _aendern(self, alt=None, neu=None, wiederholung=None):
+        neu = self.NEU if neu is None else neu
+        return self.client.post(
+            "/passwort/",
+            {
+                "old_password": self.ALT if alt is None else alt,
+                "new_password1": neu,
+                "new_password2": neu if wiederholung is None else wiederholung,
+            },
+        )
+
+    # --- Zugang ----------------------------------------------------------
+
+    def test_die_seite_verlangt_eine_anmeldung(self):
+        self.assertEqual(self.client.get("/passwort/")["Location"], "/anmelden/?next=/passwort/")
+
+    def test_die_bestaetigungsseite_verlangt_ebenfalls_eine_anmeldung(self):
+        antwort = self.client.get("/passwort/geaendert/")
+        self.assertEqual(antwort["Location"], "/anmelden/?next=/passwort/geaendert/")
+
+    def test_angemeldet_ist_die_seite_erreichbar(self):
+        self.client.force_login(self.person)
+        self.assertEqual(self.client.get("/passwort/").status_code, 200)
+
+    def test_angemeldet_ist_die_bestaetigungsseite_erreichbar(self):
+        self.client.force_login(self.person)
+        self.assertEqual(self.client.get("/passwort/geaendert/").status_code, 200)
+
+    # --- aendern ---------------------------------------------------------
+
+    def test_das_neue_passwort_gilt_danach(self):
+        self.client.force_login(self.person)
+        self._aendern()
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.check_password(self.NEU))
+
+    def test_das_alte_passwort_gilt_danach_nicht_mehr(self):
+        # Der eigene Zeuge: ein Speichern, das das neue Passwort NEBEN dem
+        # alten gelten liesse, saehe am Zeugen darueber vollstaendig aus.
+        self.client.force_login(self.person)
+        self._aendern()
+        self.person.refresh_from_db()
+        self.assertFalse(self.person.check_password(self.ALT))
+
+    def test_wer_sein_passwort_aendert_bleibt_angemeldet(self):
+        """`update_session_auth_hash()` in `PasswordChangeView.form_valid`.
+
+        Ohne den Aufruf passte der Sitzungs-Hash nach dem Speichern nicht mehr
+        zum neuen Passwort, und die eigene Sitzung fiele mit heraus - wer sein
+        Passwort aendert, stuende sofort wieder vor der Anmeldung.
+
+        Gemessen wird am NAECHSTEN Aufruf, nicht am Sitzungsspeicher. Ein
+        blosses `assertIn("_auth_user_id", self.client.session)` ist an dieser
+        Stelle BLIND: der Eintrag steht auch ohne `update_session_auth_hash()`
+        unveraendert im Speicher. Django wirft eine Sitzung mit falschem Hash
+        nicht beim Speichern weg, sondern erst, wenn `get_user()` sie beim
+        naechsten Mal liest. Genau dazwischen sass der Zeuge und blieb gruen,
+        waehrend die Sabotage lief. Am 02.09.2026 hier gemessen.
+        """
+        self.client.force_login(self.person)
+        self._aendern()
+        self.assertEqual(self.client.get("/").status_code, 200)
+
+    def test_die_eigene_sitzung_ueberlebt_den_naechsten_aufruf(self):
+        self.client.force_login(self.person)
+        self._aendern()
+        self.client.get("/")
+        self.assertIn("_auth_user_id", self.client.session)
+
+    def test_der_weg_fuehrt_auf_die_bestaetigungsseite(self):
+        self.client.force_login(self.person)
+        self.assertEqual(self._aendern()["Location"], "/passwort/geaendert/")
+
+    # --- was nicht durchgehen darf ---------------------------------------
+
+    def test_ein_falsches_altes_passwort_aendert_nichts(self):
+        self.client.force_login(self.person)
+        self._aendern(alt="stimmt-nicht")
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.check_password(self.ALT))
+
+    def test_ein_falsches_altes_passwort_ist_ein_formularfehler(self):
+        # 200 mit Fehler am Formular, nicht 500 und nicht stillschweigend 302.
+        self.client.force_login(self.person)
+        antwort = self._aendern(alt="stimmt-nicht")
+        self.assertEqual(antwort.status_code, 200)
+
+    def test_das_falsche_alte_passwort_wird_am_feld_gemeldet(self):
+        self.client.force_login(self.person)
+        antwort = self._aendern(alt="stimmt-nicht")
+        self.assertIn("old_password", antwort.context["form"].errors)
+
+    def test_zwei_verschiedene_neue_passwoerter_aendern_nichts(self):
+        self.client.force_login(self.person)
+        self._aendern(wiederholung="etwas-ganz-anderes")
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.check_password(self.ALT))
+
+    def test_zwei_verschiedene_neue_passwoerter_sind_ein_formularfehler(self):
+        self.client.force_login(self.person)
+        antwort = self._aendern(wiederholung="etwas-ganz-anderes")
+        self.assertEqual(antwort.status_code, 200)
+        self.assertIn("new_password2", antwort.context["form"].errors)
+
+    def test_ein_passwort_gegen_die_pruefregeln_aendert_nichts(self):
+        # `12345678` ist lang genug und faellt trotzdem durch: rein numerisch
+        # und in Djangos Liste der haeufigen Passwoerter.
+        self.client.force_login(self.person)
+        self._aendern(neu="12345678")
+        self.person.refresh_from_db()
+        self.assertTrue(self.person.check_password(self.ALT))
+
+    def test_ein_passwort_gegen_die_pruefregeln_ist_ein_formularfehler(self):
+        self.client.force_login(self.person)
+        antwort = self._aendern(neu="12345678")
+        self.assertEqual(antwort.status_code, 200)
+        self.assertIn("new_password2", antwort.context["form"].errors)
+
+    # --- fremde Sitzung --------------------------------------------------
+
+    def test_eine_zweite_sitzung_ist_nach_der_aenderung_beendet(self):
+        """Die eigentliche Sicherheitszusage.
+
+        Wer sein von Hand ueberreichtes Startpasswort aendert, soll damit auch
+        alles beenden, was mit dem alten noch offen war. Das leistet der
+        Sitzungs-Hash: er haengt am Passwort-Hash, und `get_user()` wirft eine
+        Sitzung weg, deren Hash nicht mehr passt.
+        """
+        anderes_geraet = Client()
+        anderes_geraet.force_login(self.person)
+        self.assertEqual(anderes_geraet.get("/").status_code, 200)
+
+        self.client.force_login(self.person)
+        self._aendern()
+
+        self.assertEqual(anderes_geraet.get("/")["Location"], "/anmelden/?next=/")
+
+    def test_die_fremde_sitzung_verliert_dabei_ihre_anmeldung(self):
+        anderes_geraet = Client()
+        anderes_geraet.force_login(self.person)
+
+        self.client.force_login(self.person)
+        self._aendern()
+
+        anderes_geraet.get("/")
+        self.assertNotIn("_auth_user_id", anderes_geraet.session)
+
+    # --- der Weg dorthin -------------------------------------------------
+
+    def test_der_verweis_steht_auf_der_liste(self):
+        self.client.force_login(self.person)
+        self.assertContains(self.client.get("/"), 'href="/passwort/"')
+
+    def test_der_verweis_traegt_seine_beschriftung(self):
+        # Ein Verweis, den niemand findet, weil er unbeschriftet im Kopf haengt,
+        # ist derselbe Zustand wie kein Verweis.
+        self.client.force_login(self.person)
+        self.assertContains(self.client.get("/"), "Passwort ändern")
+
+    def test_auf_der_anmeldeseite_steht_der_verweis_nicht(self):
+        # Der Kopf zeigt ihn nur Angemeldeten. Sonst stuende auf der offenen
+        # Seite ein Verweis, der ohnehin nur auf die Anmeldung zurueckfuehrt.
+        self.assertNotContains(self.client.get("/anmelden/"), 'href="/passwort/"')

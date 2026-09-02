@@ -12,6 +12,7 @@
     {% if user.is_authenticated %}
       <a href="{% url 'lesezeichen' %}">Lesezeichen</a>
       <span>{{ user.anzeigename }}</span>
+      <a href="{% url 'passwort_aendern' %}">Passwort ändern</a>
       <form method="post" action="{% url 'logout' %}">
         {% csrf_token %}
         <button type="submit">abmelden</button>

@@ -1,7 +1,7 @@
 # Einziges Interface fuer Objektradar. Kein direkter Aufruf von manage.py.
 PY := .venv/bin/python
 
-.PHONY: help db-up db-down db-logs check makemigrations migrate showmigrations createcachetable run superuser shell test
+.PHONY: help db-up db-down db-logs check makemigrations migrate showmigrations createcachetable run superuser passwort shell test
 
 help:
 	@grep -E '^[a-z-]+:' Makefile | cut -d: -f1 | grep -v '^help$$' | sed 's/^/  make /'
@@ -35,6 +35,16 @@ run:
 
 superuser:        ## Konto von Hand anlegen - es gibt keinen Registrierungsweg
 	$(PY) manage.py createsuperuser
+
+passwort:         ## Passwort neu setzen - make passwort BENUTZER=Nico
+# Fuer den Fall, dass jemand sein Passwort vergisst. Es gibt keinen Versand per
+# Mail und keinen Zuruecksetzweg in der Oberflaeche; das neue Passwort
+# ueberreicht Steffen einzeln.
+#
+# `changepassword` bringt Django mit und fragt VERDECKT ab. Deshalb kein
+# eigener Befehl und kein Passwort als Argument: als Argument stuende es in der
+# Shell-Historie und in der Prozessliste.
+	$(PY) manage.py changepassword $(BENUTZER)
 
 shell:
 	$(PY) manage.py shell
