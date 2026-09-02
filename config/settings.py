@@ -104,16 +104,23 @@ SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
 SESSION_SAVE_EVERY_REQUEST = True
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 
-# Der Zaehler des Anmelde-Rate-Limits liegt im Cache, nicht in der Datenbank:
-# eine eigene Tabelle waere eine Migration, und `django-axes` waere eine
-# Abhaengigkeit. Bekannte Grenze: LocMemCache ist prozesslokal. Laeuft der
-# Server spaeter mit mehreren Arbeitsprozessen, gilt die Grenze je Prozess und
-# die tatsaechliche Zahl der Versuche vervielfacht sich entsprechend. Auf dem
-# VPS gehoert hier ein gemeinsamer Cache hin.
+# Der Zaehler des Anmelde-Rate-Limits liegt im Cache, nicht in einer eigenen
+# Tabelle des Datenmodells: die waere eine Migration, und `django-axes` waere
+# eine Abhaengigkeit.
+#
+# Der Cache liegt in der DATENBANK, nicht im Prozessspeicher. Gunicorn laeuft
+# mit zwei Arbeitsprozessen; `LocMemCache` ist prozesslokal, das Limit gaelte
+# je Prozess und die tatsaechliche Zahl der Fehlversuche verdoppelte sich.
+# Gegen Redis spricht ein zweiter Dienst, der laufen, ueberwacht und
+# abgesichert werden muesste - die Schreiblast sind wenige Zeilen je
+# Anmeldeversuch.
+#
+# Die Tabelle legt `make createcachetable` an. Im Testlauf uebernimmt das
+# Djangos Testrunner selbst.
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "objektradar",
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "django_cache",
     }
 }
 
@@ -121,6 +128,13 @@ CACHES = {
 # danach eine Viertelstunde zu.
 LOGIN_VERSUCHE = 5
 LOGIN_SPERRE_SEKUNDEN = 15 * 60
+
+# Steht ein Reverse Proxy davor? Standard ist NEIN. Eingeschaltet wird das auf
+# dem Server, wo Caddy die Anfrage annimmt und an Gunicorn weiterreicht - dort
+# ist `REMOTE_ADDR` fuer jede Anfrage 127.0.0.1, und das Rate-Limit zaehlte
+# sonst global statt je Absender. Lokal bleibt es aus: ohne Proxy ist
+# `X-Forwarded-For` frei waehlbar und hoebe das Limit auf.
+VERTRAUE_PROXY = env("DJANGO_VERTRAUE_PROXY", "False").lower() in {"1", "true", "yes"}
 
 LANGUAGE_CODE = "de-de"
 TIME_ZONE = "Europe/Berlin"
@@ -144,10 +158,19 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 if not DEBUG:
+    # Caddy leitet selbst schon auf https um. Die Zeile kostet im Betrieb
+    # trotzdem nichts und greift, falls Gunicorn je ohne Proxy erreichbar wird.
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
+    # Fuenf Minuten, nicht ein Jahr - fuer die ersten Betriebstage. Ein
+    # gesetzter HSTS-Kopf ist im Browser BINDEND: geht am Zertifikat etwas
+    # schief, kaeme mit einer Jahresfrist niemand mehr behelfsweise ueber HTTP
+    # drauf, auch nicht der Betreiber. Nach ein paar ruhigen Tagen von Hand
+    # hochziehen (Jahr = 60 * 60 * 24 * 365).
+    SECURE_HSTS_SECONDS = 300
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
+    # `SECURE_HSTS_PRELOAD` steht hier bewusst NICHT: Preloading gilt fuer die
+    # Hauptdomain, und diese Unterdomain kommt weder in die Browser-Liste noch
+    # soll sie das. Ein Eintrag dort ist praktisch nicht zurueckzunehmen.
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

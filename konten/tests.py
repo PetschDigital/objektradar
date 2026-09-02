@@ -3,9 +3,12 @@ die Besuchszeiten gehoeren aber zu `konten`, `make test` laeuft ohnehin ueber be
 """
 
 import re
-from datetime import timedelta
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from unittest import mock
 
+from django.conf import settings
 from django.core.cache import cache
 from django.http import HttpResponse
 from django.test import RequestFactory, TestCase, override_settings
@@ -371,6 +374,29 @@ class AnmeldeRateLimitTests(TestCase):
             self._fehlversuch()
         self.assertEqual(self._fehlversuch().status_code, 200)
 
+    @contextmanager
+    def _zeitpunkt(self, sekunden):
+        """Stellt die Uhr - und zwar BEIDE, die der Cache benutzt.
+
+        Der Datenbank-Cache SCHREIBT die Frist aus `time.time()` (ueber
+        `BaseCache.get_backend_timeout`), PRUEFT sie aber gegen `tz_now()`.
+        Wird nur `time.time` gestellt, laufen die beiden auseinander: die
+        Frist landete im Jahr 1970 und jeder Eintrag waere beim naechsten
+        Lesen sofort abgelaufen. Der Zaehler ueberlebte dann keinen einzigen
+        Aufruf, die Anmeldung am Ende kaeme IMMER durch - und dieser Zeuge
+        waere gruen, ohne noch irgendetwas zu messen.
+
+        Gestellt wird `tz_now` nur im Cache-Modul, nicht `timezone.now`
+        insgesamt: sonst bekaeme auch die Sitzung ein Ablaufdatum von 1971 und
+        waere nach dem Block leer.
+        """
+        moment = datetime.fromtimestamp(sekunden, tz=dt_timezone.utc)
+        with (
+            mock.patch("time.time", return_value=float(sekunden)),
+            mock.patch("django.core.cache.backends.db.tz_now", return_value=moment),
+        ):
+            yield
+
     def test_dauerbeschuss_verlaengert_die_sperre_nicht(self):
         """Die Frist laeuft ab dem ERSTEN Fehlversuch, nicht ab dem letzten.
 
@@ -378,22 +404,43 @@ class AnmeldeRateLimitTests(TestCase):
         Sperre unbegrenzt offen: aus dem Schutz gegen Durchprobieren wuerde ein
         Ausschaltknopf gegen die Berechtigten.
 
-        `time.time` wird gestellt, weil beide Cache-Module - `base` beim Setzen
-        der Frist, `locmem` beim Pruefen - darueber gehen. Ein echtes Warten
-        waere eine Sekunde Laufzeit je Lauf und trotzdem ungenauer.
+        Die Uhr wird gestellt statt echt gewartet - eine Sekunde Laufzeit je
+        Lauf waere teurer und trotzdem ungenauer. Gestellt werden muessen ZWEI
+        Uhren, siehe `_zeitpunkt`.
 
         Der Zwischenversuch muss UNTERHALB der Grenze liegen. Ein Versuch
         oberhalb wird schon in `post()` abgewiesen und erreicht das Setzen der
         Frist nie - dann liefen beide Bauarten gleich und der Test waere blind.
         """
-        with mock.patch("time.time", return_value=1000.0):
+        with self._zeitpunkt(1000):
             self._fehlversuch()
             self._fehlversuch()
-        with mock.patch("time.time", return_value=1500.0):
+        with self._zeitpunkt(1500):
             self._fehlversuch()
-        with mock.patch("time.time", return_value=1700.0):
+        with self._zeitpunkt(1700):
             self._richtig()
         self.assertIn("_auth_user_id", self.client.session)
+
+    def test_die_sperre_haelt_die_volle_frist(self):
+        """`LOGIN_SPERRE_SEKUNDEN` gilt - nicht die Vorgabe des Cache-Backends.
+
+        Der Datenbank-Cache hat kein eigenes `incr`. Wird der Zaehler ueber
+        `BaseCache.incr` fortgeschrieben, schreibt das ueber `set()` OHNE
+        Frist zurueck, also mit `TIMEOUT` - 300 Sekunden. Die Sperre stuende
+        dann nach fuenf Minuten wieder offen statt nach zehn, und zwar
+        lautlos: alle uebrigen Zeugen hier bleiben dabei gruen.
+
+        Die Frist der Testreihe ist deshalb bewusst laenger als die Vorgabe
+        des Backends (600 > 300) - bei gleicher Zahl waere dieser Zeuge blind.
+
+        Gegenstueck ist `test_dauerbeschuss_verlaengert_die_sperre_nicht`: der
+        haelt die Frist nach oben fest, dieser nach unten.
+        """
+        with self._zeitpunkt(1000):
+            for _ in range(3):
+                self._fehlversuch()
+        with self._zeitpunkt(1000 + settings.LOGIN_SPERRE_SEKUNDEN - 1):
+            self.assertEqual(self._fehlversuch().status_code, 429)
 
     def test_ein_anderer_benutzername_wird_nicht_mitgesperrt(self):
         Person.objects.create_user("anna", password="ein-langes-passwort")
@@ -419,6 +466,77 @@ class AnmeldeRateLimitTests(TestCase):
             HTTP_X_FORWARDED_FOR="203.0.113.7",
         )
         self.assertEqual(antwort.status_code, 429)
+
+
+
+# Derselbe Grund wie oben fuer die abweichenden Zahlen. `VERTRAUE_PROXY` ist
+# hier AN - der Zeuge fuer den ausgeschalteten Fall steht in
+# `AnmeldeRateLimitTests` und bleibt dort unveraendert stehen.
+@override_settings(LOGIN_VERSUCHE=3, LOGIN_SPERRE_SEKUNDEN=600, VERTRAUE_PROXY=True)
+class AnmeldeHinterProxyTests(TestCase):
+    """Der Zaehler hinter Caddy.
+
+    `REMOTE_ADDR` ist dort fuer jede Anfrage 127.0.0.1. Ohne diese Regeln
+    zaehlte das Limit global: fuenf Fehlversuche von irgendwem sperrten alle.
+
+    Der Testclient setzt `REMOTE_ADDR` von sich aus auf 127.0.0.1; wo eine
+    andere Adresse gemeint ist, steht sie ausdruecklich da.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="ein-langes-passwort")
+
+    def _fehlversuch(self, **kopf):
+        return self.client.post(
+            "/anmelden/", {"username": "steffen", "password": "falsch"}, **kopf
+        )
+
+    def _sperren(self, **kopf):
+        for _ in range(settings.LOGIN_VERSUCHE):
+            self._fehlversuch(**kopf)
+
+    def test_zwei_absender_sperren_sich_nicht_gegenseitig(self):
+        """Der eigentliche Zweck der Uebung.
+
+        Ohne die Auswertung des Kopfes traegt jede Anfrage dieselbe Adresse,
+        und der erste, der sich dreimal vertippt, sperrt die anderen vier mit.
+        """
+        self._sperren(HTTP_X_FORWARDED_FOR="203.0.113.7")
+        self.assertEqual(self._fehlversuch(HTTP_X_FORWARDED_FOR="203.0.113.7").status_code, 429)
+        self.assertEqual(self._fehlversuch(HTTP_X_FORWARDED_FOR="198.51.100.4").status_code, 200)
+
+    def test_ein_vorangestellter_erfundener_eintrag_hebt_die_sperre_nicht_auf(self):
+        """Gezaehlt wird der RECHTE Eintrag, nicht der linke.
+
+        Caddy haengt die echte Adresse rechts an. Wer den ersten Eintrag
+        naehme, liesse sich vom Aufrufer den Schluessel diktieren - und
+        `9.9.9.9` waere ein frisches Kontingent je Erfindung.
+        """
+        self._sperren(HTTP_X_FORWARDED_FOR="203.0.113.7")
+        antwort = self._fehlversuch(HTTP_X_FORWARDED_FOR="9.9.9.9, 203.0.113.7")
+        self.assertEqual(antwort.status_code, 429)
+
+    def test_von_ausserhalb_wird_der_kopf_ignoriert(self):
+        """Kommt die Anfrage nicht vom Proxy nebenan, gilt `REMOTE_ADDR`.
+
+        Sonst genuegte es, Gunicorn unter Umgehung von Caddy zu erreichen, um
+        sich den Schluessel frei zu waehlen.
+        """
+        self._sperren(REMOTE_ADDR="203.0.113.9", HTTP_X_FORWARDED_FOR="203.0.113.7")
+        antwort = self._fehlversuch(
+            REMOTE_ADDR="203.0.113.9", HTTP_X_FORWARDED_FOR="198.51.100.4"
+        )
+        self.assertEqual(antwort.status_code, 429)
+
+    def test_ohne_kopf_gilt_wieder_die_entfernte_adresse(self):
+        # Faellt der Kopf aus - Fehler in der Proxy-Konfiguration -, soll das
+        # Limit greifen und nicht die Anmeldung zerlegen.
+        self._sperren()
+        self.assertEqual(self._fehlversuch().status_code, 429)
+
+    def test_ein_leerer_kopf_zerlegt_nichts(self):
+        self._sperren(HTTP_X_FORWARDED_FOR="")
+        self.assertEqual(self._fehlversuch(HTTP_X_FORWARDED_FOR="").status_code, 429)
 
 
 class BesuchMiddlewareTests(TestCase):

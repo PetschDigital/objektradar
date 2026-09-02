@@ -1,7 +1,7 @@
 # Einziges Interface fuer Objektradar. Kein direkter Aufruf von manage.py.
 PY := .venv/bin/python
 
-.PHONY: help db-up db-down db-logs check makemigrations migrate showmigrations run superuser shell test
+.PHONY: help db-up db-down db-logs check makemigrations migrate showmigrations createcachetable run superuser shell test
 
 help:
 	@grep -E '^[a-z-]+:' Makefile | cut -d: -f1 | grep -v '^help$$' | sed 's/^/  make /'
@@ -27,6 +27,9 @@ migrate:
 showmigrations:
 	$(PY) manage.py showmigrations
 
+createcachetable:  ## Tabelle `django_cache` anlegen - einmal je Umgebung
+	$(PY) manage.py createcachetable
+
 run:
 	$(PY) manage.py runserver
 
@@ -37,4 +40,4 @@ shell:
 	$(PY) manage.py shell
 
 test:              ## make test [TESTS=objekte.tests.UebernahmeTests]
-	$(PY) manage.py test $(TESTS)
+	$(PY) manage.py test --settings=config.settings_test $(TESTS)

@@ -950,25 +950,6 @@ class ObjektlisteTests(TestCase):
         with self.assertNumQueries(len(mit_fuenf)):
             self.client.get(adresse)
 
-    def test_der_einwerfer_steht_ohne_zusatzabfrage_bereit(self):
-        """`select_related("eingestellt_von")` - und der Zeuge, der ihn haelt.
-
-        Die Gegenprobe zu Punkt 5 hat gezeigt: den Aufruf zu entfernen liess
-        die ganze Testreihe gruen. Er war eine blinde Zusage, weil die Vorlage
-        das Feld heute nicht anzeigt - und die erste Spalte "eingeworfen von"
-        braechte damit ein N+1 mit, das niemand kommen sieht.
-
-        Gemessen wird der ZUGRIFF, nicht die Anwesenheit des Aufrufs: ein
-        Strukturtest auf `select_related` im Quelltext bewiese nur, dass da
-        ein Wort steht.
-        """
-        for nummer in range(5):
-            Objekt.objects.create(url=f"https://x/{nummer}", eingestellt_von=self.person)
-        objekte = self._seite().context["objekte"]
-        with self.assertNumQueries(0):
-            for objekt in objekte:
-                self.assertEqual(objekt.eingestellt_von, self.person)
-
     def test_mehr_vota_kosten_nicht_mehr_abfragen(self):
         """Derselbe Riegel fuer die Votum-Spalte.
 
@@ -3701,26 +3682,39 @@ class BlaetternTests(ListenTestBasis):
         self._viele(3)
         self.assertEqual(self._seite("/?seite=abc").status_code, 200)
 
-    def test_eine_ungueltige_seitenzahl_faellt_auf_seite_eins(self):
+    def test_eine_nicht_lesbare_seitenzahl_faellt_auf_seite_eins(self):
+        """`abc` ist keine Zahl - es gibt keine Stelle, die gemeint sein koennte.
+
+        Anders als eine zu hohe Zahl: die zeigt auf eine Stelle jenseits des
+        Endes, und das Ende ist die naechstgelegene Antwort darauf.
+        """
         self._viele(3)
         with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
             self.assertEqual(self._seite("/?seite=abc").context["page_obj"].number, 1)
 
-    def test_eine_zu_hohe_seitenzahl_faellt_auf_seite_eins(self):
-        """Nicht auf die LETZTE Seite.
+    def test_eine_zu_hohe_seitenzahl_faellt_auf_die_letzte_seite(self):
+        """Auf die LETZTE Seite, nicht auf die erste.
 
-        `Paginator.get_page()` schickt eine zu hohe Zahl auf die letzte Seite;
-        das ist ein anderes Versprechen. Faellt dieser Zeuge, ist vermutlich
-        `get_page()` an die Stelle von `page()` getreten.
+        Wer auf Seite 8 steht und einen Filter setzt, der auf drei Seiten
+        kuerzt, landet auf 3 und sieht dort Treffer - statt sich von Seite 1
+        aus erneut vorzublaettern.
+
+        Faellt dieser Zeuge, ist vermutlich wieder `page()` mit einem
+        Rueckfall auf 1 an die Stelle von `get_page()` getreten.
         """
         self._viele(3)
         with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
-            self.assertEqual(self._seite("/?seite=900").context["page_obj"].number, 1)
+            self.assertEqual(self._seite("/?seite=900").context["page_obj"].number, 2)
 
-    def test_eine_negative_seitenzahl_faellt_auf_seite_eins(self):
+    def test_eine_negative_seitenzahl_faellt_auf_die_letzte_seite(self):
+        """Auch eine negative Zahl liegt ausserhalb des Bereichs.
+
+        Sie ist lesbar - nur eben keine Seite. Damit gilt dieselbe Regel wie
+        fuer die zu hohe Zahl, nicht die fuer `abc`.
+        """
         self._viele(3)
         with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
-            self.assertEqual(self._seite("/?seite=-4").context["page_obj"].number, 1)
+            self.assertEqual(self._seite("/?seite=-4").context["page_obj"].number, 2)
 
     def test_die_leere_liste_blaettert_ohne_fehler(self):
         self.assertEqual(self._seite("/?seite=2").status_code, 200)

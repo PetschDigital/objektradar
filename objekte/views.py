@@ -1,7 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.core.paginator import InvalidPage
 from django.core.validators import URLValidator
 from django.db import IntegrityError, transaction
 from django.db.models import CharField, Count, F, Func, Q, Value
@@ -341,17 +340,20 @@ class ObjektlisteView(ListView):
         return OBJEKTE_JE_SEITE
 
     def paginate_queryset(self, queryset, page_size):
-        """Eine ungueltige oder ausserhalb liegende Seitenzahl faellt still auf 1.
+        """Eine Seitenzahl ausserhalb des Bereichs faellt still auf die LETZTE Seite.
 
         Gleiche Haltung wie bei der Sortierung: ein veralteter Blaetterlink
         oder eine von Hand getippte Adresse ist kein Grund, die Liste zu
         verweigern. Die Basisklasse wirft hier einen 404er.
 
-        `Paginator.get_page()` leistet das NICHT: es faengt den ungueltigen
-        Wert ab, schickt eine zu hohe Seitenzahl aber auf die LETZTE Seite.
-        Das ist ein anderes Versprechen als das hier gegebene - wer "Seite
-        900" tippt, bekommt Seite 1 und sieht daran, dass seine Zahl nicht
-        gegolten hat.
+        Die letzte Seite, nicht die erste: wer auf Seite 8 steht und einen
+        Filter setzt, der die Liste auf drei Seiten kuerzt, landet auf 3 und
+        sieht dort Treffer. Auf Seite 1 geworfen zu werden ist der laengere
+        Weg zurueck zu dem, was er gerade angesehen hat.
+
+        Eine gar nicht als Zahl lesbare Angabe (`?seite=abc`) fuehrt weiterhin
+        auf Seite 1 - da gibt es keine Stelle im Bereich, die gemeint sein
+        koennte. Beides zusammen ist genau `Paginator.get_page()`.
         """
         paginator = self.get_paginator(
             queryset,
@@ -359,14 +361,7 @@ class ObjektlisteView(ListView):
             orphans=self.get_paginate_orphans(),
             allow_empty_first_page=self.get_allow_empty(),
         )
-        try:
-            nummer = int(self.request.GET.get(self.page_kwarg, 1))
-        except (TypeError, ValueError):
-            nummer = 1
-        try:
-            seite = paginator.page(nummer)
-        except InvalidPage:
-            seite = paginator.page(1)
+        seite = paginator.get_page(self.request.GET.get(self.page_kwarg))
         return paginator, seite, seite.object_list, seite.has_other_pages()
 
     @cached_property
@@ -394,9 +389,11 @@ class ObjektlisteView(ListView):
         `mit_qm_preis()` ist der einzige Weg zum €/m²; es gibt bewusst keine
         Property.
         """
-        objekte = mit_votumzaehlung(
-            Objekt.objects.select_related("eingestellt_von").mit_qm_preis()
-        )
+        # Kein `select_related("eingestellt_von")`: die Liste zeigt den
+        # Einwerfer nicht an. Ein Aufruf ohne Leser waere eine Optimierung
+        # ohne Nutzen - und saehe in einem halben Jahr wie eine Anforderung
+        # aus. Kommt die Spalte, kommt er mit ihr zurueck, samt Zeugen.
+        objekte = mit_votumzaehlung(Objekt.objects.mit_qm_preis())
         return self.filterform.filtern(objekte).order_by(*reihenfolge(self.sortierung))
 
     @cached_property
