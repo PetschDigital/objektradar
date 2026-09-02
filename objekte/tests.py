@@ -2366,6 +2366,42 @@ class StylesheetKorrekturenTests(TestCase):
         self.assertNotIn("var(--signal)", self._quelle())
 
 
+class KommentarTests(TestCase):
+    """Kein Template-Kommentar steht als Text auf der Seite.
+
+    Django wertet `{# ... #}` NUR EINZEILIG aus. Ein ueber mehrere Zeilen
+    umgebrochener Kommentar ist deshalb kein Kommentar, sondern Text - und
+    wird ausgegeben. In der Objektliste standen drei davon; ein vierter
+    stand im Blaetter-Zweig und trat erst ab der zweiten Seite hervor.
+
+    Gemessen wird am KOMMENTARTEXT und nicht an `{#`. Ein Zeuge auf `{#`
+    bliebe gruen, sobald derselbe Satz in anderer Form wieder auf der Seite
+    landet - und genau der Satz ist es, den niemand dort lesen soll.
+
+    Der EINZIGE Zeuge dieser Runde. Layout laesst sich nicht bewachen: ein
+    Test, der Klassennamen zaehlt oder das Vorhandensein eines `<fieldset>`
+    prueft, maesse das eigene Markup und bliebe gruen, waehrend die Seite
+    unbrauchbar ist. Was die Kopfleiste, der Filterblock und die
+    Sortierleiste zusagen, entscheidet der Blick auf den Bildschirm.
+
+    `assertNotContains` prueft nebenbei auf Status 200 - ein 302 auf die
+    Anmeldeseite enthielte den Kommentartext ebenfalls nicht und liesse den
+    Zeugen im Vakuum gruen werden.
+    """
+
+    #: Woertlich aus dem ersten der vier Kommentare in `objektliste.html`.
+    KOMMENTARTEXT = "Ein GET-Formular, damit ein gefilterter Stand teilbar ist"
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="ein-langes-passwort"
+        )
+        self.client.force_login(self.person)
+
+    def test_kein_kommentartext_steht_im_gerenderten_html(self):
+        self.assertNotContains(self.client.get("/"), self.KOMMENTARTEXT)
+
+
 # =========================================================================
 # Schritt 2, Abschnitt 3: Vorschau (GET) und Uebernahme (POST)
 # =========================================================================

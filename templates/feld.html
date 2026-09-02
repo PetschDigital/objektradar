@@ -1,0 +1,18 @@
+{% comment %}
+  Die Feldeinheit: Beschriftung UEBER dem Feld, darunter Fehler und Hilfetext.
+
+  Beschriftung und Feld stehen in EINEM Element und sitzen als Ganzes im
+  Raster. Damit koennen zwei unterschiedlich hohe Felder ihre Beschriftungen
+  nicht mehr gegeneinander versetzen - das war die Wurzel der versetzten
+  "Status:"- und "Land:"-Beschriftungen, nicht die Abstaende.
+
+  `label_tag` statt eines von Hand gebauten `<label>`: es traegt das `for`
+  auf die tatsaechliche Feld-ID. Von Hand geschrieben bricht die Verbindung
+  still, sobald ein Feld ein anderes Widget bekommt.
+{% endcomment %}
+<div class="feld{% if breit %} breit{% endif %}">
+  {{ feld.label_tag }}
+  {{ feld }}
+  {{ feld.errors }}
+  {% if feld.help_text %}<span class="helptext">{{ feld.help_text }}</span>{% endif %}
+</div>

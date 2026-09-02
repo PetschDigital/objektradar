@@ -7,16 +7,31 @@
   <link rel="stylesheet" href="{% static 'objektradar.css' %}">
 </head>
 <body>
+  {% comment %}
+    Zwei Bereiche statt einer Reihe gleichrangiger Verweise: links der
+    Werkzeugname, rechts Navigation und Konto als GETRENNTE Gruppen. Die
+    Trennung steht im Markup und nicht allein im Stylesheet - haenge sie an
+    der Reihenfolge der Elemente, faellt sie beim naechsten eingeschobenen
+    Verweis still auseinander.
+
+    Kein Aufklappmenue: es braeuchte JavaScript oder `<details>`, und fuer
+    drei Eintraege bei fuenf Personen steht der Aufwand nicht dafuer.
+  {% endcomment %}
   <header>
-    <a href="{% url 'objektliste' %}">Objektradar</a>
+    <a class="marke" href="{% url 'objektliste' %}">Objektradar</a>
     {% if user.is_authenticated %}
-      <a href="{% url 'lesezeichen' %}">Lesezeichen</a>
-      <span>{{ user.anzeigename }}</span>
-      <a href="{% url 'passwort_aendern' %}">Passwort ändern</a>
-      <form method="post" action="{% url 'logout' %}">
-        {% csrf_token %}
-        <button type="submit">abmelden</button>
-      </form>
+      <nav class="navigation">
+        <a href="{% url 'lesezeichen' %}">Lesezeichen</a>
+      </nav>
+      <div class="konto">
+        {# Der angemeldete Name ist kein Link - er fuehrt nirgendwohin. #}
+        <span class="person">{{ user.anzeigename }}</span>
+        <a href="{% url 'passwort_aendern' %}">Passwort ändern</a>
+        <form method="post" action="{% url 'logout' %}">
+          {% csrf_token %}
+          <button type="submit">abmelden</button>
+        </form>
+      </div>
     {% endif %}
   </header>
 

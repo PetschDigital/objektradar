@@ -24,6 +24,28 @@
      aussehen darf wie eine Preissenkung: sonst stumpft genau das Signal ab,
      auf das die Liste hinarbeitet. */
   --fehler:    #8C2F2F;
+
+  /* --- Abstandsskala ----------------------------------------------------
+     Vier Stufen, jede die Verdopplung der vorigen. Abstaende werden
+     AUSSCHLIESSLICH hieraus genommen. Die klaffenden Luecken im Filterblock
+     kamen von Margins ohne System - eine handverlesene Zahl je Stelle
+     ergibt keinen Rhythmus, sondern Zufall. Vier Stufen reichen fuer eine
+     Oberflaeche aus Leisten, Feldern und einer Tabelle; eine fuenfte waere
+     schon wieder eine Ausrede.
+
+     --eng    innerhalb einer Zeile: Beschriftung zu Feld, Pfeil zu Wort
+     --knapp  zwischen Geschwistern, die zusammengehoeren (von/bis)
+     --mittel zwischen Feldern eines Rasters, Innenabstand von Bloecken
+     --weit   zwischen Bloecken, die getrennt gelesen werden */
+  --eng:    .25rem;
+  --knapp:  .5rem;
+  --mittel: 1rem;
+  --weit:   2rem;
+
+  /* Kein Abstand, sondern eine Groesse: die Mindestflaeche, die am Daumen
+     sicher zu treffen ist. Steht hier, damit sie nicht an vier Stellen
+     einzeln gepflegt wird. */
+  --griff:  2.75rem;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -45,10 +67,10 @@ header,
 main {
   max-width: 78rem;
   margin-inline: auto;
-  padding-inline: 1rem;
+  padding-inline: var(--mittel);
 }
 
-main { padding-block: 1.5rem 3rem; }
+main { padding-block: var(--weit); }
 
 a { color: var(--akzent); }
 
@@ -56,40 +78,71 @@ a { color: var(--akzent); }
    Displayschrift, keine Versalien-Eyebrows, keine Nummerierungen: die Liste
    ist keine Erzaehlung mit Reihenfolge. */
 h1, h2 { font-weight: normal; line-height: 1.25; }
-h1 { font-size: 1.5rem; margin: 0 0 1rem; }
-h2 { font-size: 1.125rem; margin: 2rem 0 .5rem; }
+h1 { font-size: 1.5rem; margin: 0 0 var(--mittel); }
+h2 { font-size: 1.125rem; margin: var(--weit) 0 var(--knapp); }
 
-hr { border: 0; border-top: 1px solid var(--linie); margin: 2rem 0 1rem; }
+hr { border: 0; border-top: 1px solid var(--linie); margin: var(--weit) 0 var(--mittel); }
 
 /* --- Kopf ---------------------------------------------------------------
-   Eine Zeile: Werkzeugname links, dann Lesezeichen, Person und "abmelden"
-   rechts. Das `margin-right: auto` am Werkzeugnamen schiebt alles Uebrige
-   nach rechts, ohne dass im Markup ein Huellelement noetig waere. Bewusst
-   `:first-child` und nicht `header > a`: seit der Lesezeichen-Verweis
-   danebensteht, traegt sonst auch er den Schub und der Kopf faellt in zwei
-   Haelften auseinander. */
+   Zwei Bereiche, nicht eine Reihe gleichrangiger Verweise: links der
+   Werkzeugname, rechts Navigation und Konto. Ein Kontoeintrag ist kein
+   Navigationspunkt, und solange beide gleich aussehen, liest man ihn als
+   einen.
+
+   Mobil zuerst: der Werkzeugname nimmt die erste Zeile allein
+   (`flex: 0 0 100%`), Navigation und Konto stehen darunter. Ab 48rem stehen
+   alle drei nebeneinander - siehe den Media-Block am Ende. */
 header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: .75rem;
-  padding-block: .75rem;
+  gap: var(--knapp) var(--mittel);
+  padding-block: var(--knapp);
   border-bottom: 1px solid var(--linie);
 }
-header > a:first-child { margin-right: auto; }
-header span { color: var(--gedaempft); }
 
-/* Darf die Zeile nicht umbrechen. */
-header form { margin: 0; flex: 0 0 auto; white-space: nowrap; }
+header .marke { flex: 0 0 100%; }
+
+header .navigation { display: flex; flex-wrap: wrap; gap: var(--mittel); }
+
+/* Die Kontogruppe ist der Navigation UNTERGEORDNET: kleinere Schrift,
+   `--gedaempft`, und abgesetzt durch Abstand und eine senkrechte Linie.
+   Kein Mittelpunkt als Trenner - Gruppen trennt Raum, kein Satzzeichen.
+
+   `flex: 1 1 0` mit `min-width: 0`: die Gruppe nimmt den Rest der Zeile
+   neben der Navigation und bricht INNEN um. Mit `flex-basis: auto` waere
+   ihre Ausgangsbreite die ihres Inhalts - die passt neben "Lesezeichen"
+   nicht mehr in 375px, und die ganze Gruppe fiele in eine dritte Zeile.
+   Abgeschnitten wird dabei nichts, und die Leiste schiebt die Seite nicht
+   in die Breite. */
+header .konto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  gap: var(--eng) var(--knapp);
+  padding-left: var(--knapp);
+  border-left: 1px solid var(--linie);
+  font-size: .875rem;
+  color: var(--gedaempft);
+}
+header .konto a { color: var(--gedaempft); }
+
+/* Der angemeldete Name ist kein Link und sieht auch nicht aus wie einer. */
+header .person { color: var(--gedaempft); }
+
+header form { margin: 0; flex: 0 0 auto; }
 
 /* Im Kopf ist der Knopf Navigation, kein Bedienelement des Inhalts - deshalb
-   ruhig statt gefuellt. Die gefuellte Form gilt fuer `main` (siehe unten);
-   die Spezifikation fuehrt Kopf und Formularknoepfe in getrennten Abschnitten. */
+   ruhig statt gefuellt. Die gefuellte Form gilt fuer `main` (siehe unten).
+   Er steht in der Kontogruppe und traegt deren Farbe und Groesse. */
 header button {
-  min-height: 2.75rem;
-  padding: 0 .25rem;
+  min-height: var(--griff);
+  padding: 0;
   border: 0;
   background: none;
-  color: var(--akzent);
+  color: var(--gedaempft);
   font: inherit;
   text-decoration: underline;
   cursor: pointer;
@@ -98,12 +151,12 @@ header button {
 /* --- Meldungen ----------------------------------------------------------
    Kasten ueber dem Inhalt, linker Balken 3px. Keine Symbole, keine
    Hintergrundfarbe ausser einer sehr hellen Toenung. */
-.meldungen { list-style: none; margin: 1rem auto 0; padding-inline: 1rem; }
+.meldungen { list-style: none; margin: var(--mittel) auto 0; padding-inline: var(--mittel); }
 .meldungen li {
   border-left: 3px solid var(--gedaempft);
   background: color-mix(in srgb, var(--gedaempft) 6%, var(--flaeche));
-  padding: .6rem .75rem;
-  margin-bottom: .5rem;
+  padding: var(--knapp) var(--mittel);
+  margin-bottom: var(--knapp);
 }
 .meldungen li.success {
   border-left-color: var(--akzent);
@@ -114,11 +167,16 @@ header button {
   background: color-mix(in srgb, var(--fehler) 6%, var(--flaeche));
 }
 
-/* --- Formulare ----------------------------------------------------------
-   Zeilen untereinander, Beschriftung ueber dem Feld. `form.as_p` liefert
-   `<p><label></label> <input></p>`; die beiden `display: block` machen daraus
-   die gewuenschte Stapelung, ohne dass das Template etwas davon wissen muss. */
-main label { display: block; color: var(--gedaempft); }
+/* --- Die Feldeinheit ----------------------------------------------------
+   Beschriftung UEBER dem Feld, beide in einem gemeinsamen Element. Das ist
+   die Wurzelbehandlung fuer die versetzten Beschriftungen: standen sie
+   NEBEN dem Feld, liefen sie bei unterschiedlich hohen Feldern auseinander,
+   und keine Korrektur an den Abstaenden half dagegen.
+
+   Die Regel steht auf `main` und nicht auf `.feld`, damit die von Hand
+   gebauten Formulare der Objektansicht (Votum, Status, Notiz) dieselbe
+   Stapelung bekommen, ohne dass ihr Markup davon wissen muss. */
+main label { display: block; color: var(--gedaempft); margin-bottom: var(--eng); }
 
 main input,
 main select,
@@ -126,8 +184,8 @@ main textarea {
   display: block;
   width: 100%;
   max-width: 30rem;
-  min-height: 2.75rem;
-  padding: .5rem .6rem;
+  min-height: var(--griff);
+  padding: var(--knapp);
   border: 1px solid var(--linie);
   border-radius: 4px;
   background: var(--flaeche);
@@ -137,8 +195,8 @@ main textarea {
 main textarea { min-height: 4rem; resize: vertical; }
 
 main button {
-  min-height: 2.75rem;
-  padding: .6rem 1rem;
+  min-height: var(--griff);
+  padding: var(--knapp) var(--mittel);
   border: none;
   border-radius: 4px;
   background: var(--akzent);
@@ -148,49 +206,101 @@ main button {
 }
 /* Die Votum-Knoepfe stehen nebeneinander und duerfen umbrechen - das leistet
    die Zeilenbox von `inline-block` ohne weiteres Zutun. */
-main button + button { margin-left: .5rem; }
-main form p { margin: 0 0 1rem; }
+main button + button { margin-left: var(--knapp); }
+
+/* `min-width: 0` an jeder Feldeinheit: ohne das setzt ein Rasterfeld seine
+   Mindestbreite auf die seines Inhalts und schiebt die Spalte auf. */
+.feld { min-width: 0; }
+
+/* --- Formularseiten -----------------------------------------------------
+   Bearbeiten, Uebernahme-Vorschau, Anmelden, Passwortaenderung. Dieselbe
+   Feldeinheit und dieselbe Skala wie der Filterblock, dazu eine begrenzte
+   Zeilenlaenge: ein Formularfeld ueber 78rem waere nicht mehr zu ueberblicken.
+   Die Reihenfolge der Felder kommt aus der Formklasse und steht nicht hier. */
+.formular {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--mittel);
+  max-width: 30rem;
+  margin: 0;
+}
+
+/* Die Aktionen stehen als eigene Zeile am Ende, nicht zwischen den Feldern. */
+.aktionen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--mittel);
+}
 
 /* --- Das Einwurf-Feld ---------------------------------------------------
    Das wichtigste Bedienelement der Seite. Volle Breite, Knopf darunter
-   (mobil) beziehungsweise daneben (ab 48rem). Mindesthoehe 2.75rem, damit es
-   am Daumen bedienbar ist - die erbt es von den Regeln darueber. */
+   (mobil) beziehungsweise daneben (ab 48rem). Die Mindesthoehe am Daumen
+   erbt es von den Regeln darueber. */
+.einwurf { margin: 0 0 var(--weit); }
 main input[type="url"] { max-width: none; }
-main input[type="url"] + button { margin-top: .5rem; }
+main input[type="url"] + button { margin-top: var(--knapp); }
 
 /* --- Filter, Sortierung, Blaettern ---------------------------------------
    Drei Leisten ueber und unter der Liste. Sie sind Bedienung, nicht Inhalt -
    sie bleiben deshalb ruhig und treten hinter die Zahlen zurueck. */
 
-/* `form.as_p` liefert ein `<p>` je Feld. Das Raster greift direkt darauf zu,
-   damit das Template kein Huellelement je Feld braucht. Unter 26rem Restbreite
-   faellt es von selbst auf eine Spalte zurueck. */
+/* Ein Raster, keine gestapelten Zeilen. Mobil eine Spalte, ab 48rem mehrere
+   Spalten fester Mindestbreite - siehe Media-Block.
+
+   Der Block ist gegen die Ergebnisliste abgesetzt, und zwar ueber die
+   FLAECHE. Eine Linie zusaetzlich waere die zweite Ansage fuer dieselbe
+   Sache; eines von beidem reicht.
+
+   Der Abstand nach unten (`--weit`) ist groesser als der zwischen zwei
+   Feldern (`--mittel`). Genau daran liest man den Block als EIN Ding. */
 .filter {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0 1rem;
-  align-items: end;
-  margin: 1.5rem 0;
-  padding-top: 1rem;
-  border-top: 1px solid var(--linie);
+  grid-template-columns: 1fr;
+  gap: var(--mittel);
+  margin: 0 0 var(--weit);
+  padding: var(--mittel);
+  border-radius: 4px;
+  background: var(--flaeche);
 }
-.filter p { margin: 0 0 .75rem; }
 .filter input,
 .filter select { max-width: none; }
-.filter button { justify-self: start; }
 
-/* Die Statusauswahl ist ein Kaestchensatz und braucht die ganze Zeilenbreite -
-   sechs Werte nebeneinander passen in keine Rasterspalte. */
-.filter p:has(ul) { grid-column: 1 / -1; }
-.filter ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .25rem 1rem;
-  list-style: none;
+/* Von/bis gehoert zusammen und sitzt als EIN Rasterfeld. Der Abstand darin
+   ist enger als der des Rasters - so liest sich das Paar als Paar. */
+.feldpaar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--knapp);
+  min-width: 0;
+}
+
+/* Die Statusauswahl ist kein Feld wie die anderen: sechs Kaestchen passen in
+   keine Rasterspalte. Eigene Zeile ueber die volle Breite. Der `<fieldset>`
+   bringt Rahmen und Innenabstand mit, die hier beide stoeren - die Gruppe
+   traegt ihre Zusammengehoerigkeit schon durch Legende und Zeile. */
+.statusfilter {
+  grid-column: 1 / -1;
+  min-width: 0;
   margin: 0;
   padding: 0;
+  border: 0;
 }
-.filter li label { display: inline-flex; align-items: center; color: var(--text); }
+.statusfilter legend { padding: 0; margin-bottom: var(--eng); color: var(--gedaempft); }
+
+.kaestchen { display: flex; flex-wrap: wrap; gap: var(--eng) var(--mittel); }
+
+/* Jedes `<input>` steckt in seinem `<label>`. Ohne `inline-flex` erbte das
+   Label die Stapelung der Feldeinheit und jedes Kaestchen bekaeme eine
+   eigene Zeile. Die Wortfarbe ist `--text` und nicht `--gedaempft`: hier ist
+   das Wort der anklickbare Wert, keine Beschriftung ueber einem Feld. */
+.kaestchen label {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  color: var(--text);
+  cursor: pointer;
+}
 
 /* Ohne diese Ausnahme erbte das Kaestchen `display: block` und volle Breite
    von der Feldregel weiter oben und stuende als graues Band in der Zeile. */
@@ -198,29 +308,57 @@ main input[type="checkbox"] {
   display: inline-block;
   width: auto;
   min-height: 0;
-  margin-right: .4rem;
+  margin-right: var(--eng);
 }
+
+/* Die Aktionen stehen unten im Block: mobil ueber die volle Breite, ab 48rem
+   rechtsbuendig (siehe Media-Block). */
+.filter .aktionen { grid-column: 1 / -1; }
+.filter .aktionen button { flex: 1 1 100%; }
 
 .treffer,
 .sortierung,
 .blaettern { color: var(--gedaempft); font-size: .875rem; }
 
-.sortierung { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: 0 0 .75rem; }
+.treffer { margin: 0; }
+
+/* --- Sortierleiste ------------------------------------------------------
+   Sie bleibt eine eigene Leiste und wandert NICHT in die Tabellenkopfzeile:
+   unter 48rem gibt es keine Tabelle, sondern Karten, und die Sortierung
+   braeuchte dort einen zweiten Mechanismus.
+
+   Der Abstand nach unten ist deutlich kleiner als der nach oben. Naehe ist
+   die Zuordnung - daran liest man, dass die Leiste zur Liste gehoert und
+   nicht zum Filterblock darueber. */
+.sortierung {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--eng) var(--mittel);
+  margin: var(--weit) 0 var(--knapp);
+}
+
+.sortierung .titel { color: var(--gedaempft); }
 
 /* Die beiden Pfeile gehoeren zum Wort davor und duerfen nicht davon abreissen. */
-.sortierung span { white-space: nowrap; }
-.sortierung a { margin-left: .25rem; text-decoration: none; }
+.sortierung .schluessel { white-space: nowrap; color: var(--gedaempft); }
 
-/* Die eingestellte Richtung wird gehalten, nicht angeklickt - sie traegt die
-   Textfarbe statt der Verweisfarbe und hebt sich damit ab, ohne laut zu sein. */
+/* Welche Sortierung GILT, muss man sehen koennen. Der aktive Schluessel
+   traegt `--text` und Fettung, alles Uebrige bleibt gedaempft - auch die
+   Pfeile. Beide Richtungen bleiben je Schluessel erreichbar; erkennbar ist
+   nur eine. Stuenden alle acht Pfeile gleich laut da, saehe man nie, was
+   gerade gilt - genau der Zustand, den diese Runde behebt. */
+.sortierung .schluessel.aktiv { color: var(--text); font-weight: bold; }
+
+.sortierung a { margin-left: var(--eng); text-decoration: none; color: var(--gedaempft); }
 .sortierung a[aria-current] { color: var(--text); font-weight: bold; }
 
 .blaettern {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1.5rem;
-  margin-top: 1.5rem;
+  gap: var(--weit);
+  margin-top: var(--weit);
 }
 
 /* --- Liste unter 48rem: Karten ------------------------------------------
@@ -238,13 +376,13 @@ main input[type="checkbox"] {
   background: var(--flaeche);
   border: 1px solid var(--linie);
   border-radius: 4px;
-  margin-bottom: .75rem;
+  margin-bottom: var(--knapp);
 }
 .tabelle td {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
-  padding: .4rem .75rem;
+  gap: var(--mittel);
+  padding: var(--eng) var(--knapp);
 }
 .tabelle td::before { content: attr(data-spalte); color: var(--gedaempft); }
 
@@ -259,72 +397,6 @@ main input[type="checkbox"] {
 .tabelle {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
-}
-
-/* --- Liste ab 48rem: Tabelle -------------------------------------------- */
-@media (min-width: 48rem) {
-  /* Damit bricht eine spaeter ergaenzte Spalte das Layout nicht. */
-  .tabelle { overflow-x: auto; }
-
-  .tabelle thead { position: static; clip-path: none; }
-
-  .tabelle tbody tr {
-    display: table-row;
-    border: 0;
-    border-bottom: 1px solid var(--linie);  /* kein Zebrastreifen */
-    border-radius: 0;
-    margin: 0;
-  }
-  .tabelle td { display: table-cell; padding: .5rem .75rem; }
-  .tabelle td::before { content: none; }
-
-  .tabelle th {
-    text-align: left;
-    font-weight: normal;
-    font-size: .875rem;
-    color: var(--gedaempft);
-    border-bottom: 1px solid var(--linie);
-    padding: .4rem .75rem;
-    white-space: nowrap;
-  }
-
-  /* Zahlenspalten rechtsbuendig, Textspalten links. Angesprochen ueber
-     `data-spalte` und NICHT ueber `nth-child`: eine zusaetzlich eingeschobene
-     Spalte verschiebt jede Positionszahl, den Namen aber nicht. Dass diese
-     vier Namen in der Liste wirklich vorkommen, bezeugt
-     `test_die_zahlenspalten_des_stylesheets_gibt_es_in_der_liste` - sonst
-     fiele die Ausrichtung bei einer Umbenennung still aus. */
-  .tabelle [data-spalte="Wohnfläche"],
-  .tabelle [data-spalte="Grundstück"],
-  .tabelle [data-spalte="Kaufpreis"],
-  .tabelle [data-spalte="€/m²"] { text-align: right; }
-
-  /* Ohne Titel steht in dieser Zelle `Portal · ID`, bei unbekanntem Portal die
-     volle URL - und die sprengt die Spalte. Gekappt wird erst ab 48rem: in der
-     Kartenansicht darunter steht die Zelle allein in ihrer Zeile, dort ist
-     Platz und der Umbruch bleibt erlaubt.
-
-     Ueber `data-spalte` angesprochen wie die Zahlenspalten und aus demselben
-     Grund - `nth-child` waere gegen eine eingeschobene Spalte blind. */
-  .tabelle [data-spalte="Objekt"] {
-    max-width: 22rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Der Knopf sitzt neben dem Feld. `:has()` bleibt bewusst auf diese
-     Verbesserung beschraenkt: faellt es aus, steht der Knopf wie am Handy
-     darunter - unschoen, aber nicht kaputt. */
-  main form:has(> input[type="url"]) {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: .5rem;
-  }
-  main form:has(> input[type="url"]) label { flex: 0 0 100%; }
-  main form:has(> input[type="url"]) input[type="url"] { flex: 1 1 20rem; width: auto; }
-  main input[type="url"] + button { margin-top: 0; }
 }
 
 /* --- Vorschau des Lesezeichen-Zulaufs ------------------------------------
@@ -346,7 +418,7 @@ main input[type="checkbox"] {
 /* Ein Tippfehler im Formular traegt die Fehlerfarbe, nicht das Preissignal. */
 .errorlist {
   list-style: none;
-  margin: .25rem 0 0;
+  margin: var(--eng) 0 0;
   padding: 0;
   font-size: .875rem;
   color: var(--fehler);
@@ -358,7 +430,7 @@ main input[type="checkbox"] {
    Lesezeichenleiste ziehen. */
 .lesezeichen {
   display: inline-block;
-  padding: .6rem 1rem;
+  padding: var(--knapp) var(--mittel);
   border: 1px solid var(--akzent);
   border-radius: 4px;
   text-decoration: none;
@@ -369,7 +441,7 @@ main input[type="checkbox"] {
 #id_skript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8125rem; }
 
 /* --- Objektansicht ------------------------------------------------------ */
-dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; margin: 0; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: var(--eng) var(--mittel); margin: 0; }
 dt { color: var(--gedaempft); }
 dd { margin: 0; }
 
@@ -377,7 +449,123 @@ dd { margin: 0; }
    das Template dafuer keine Klasse braucht. */
 main hr + p { color: var(--gedaempft); font-size: .875rem; }
 
-.leer { color: var(--gedaempft); text-align: center; margin: 3rem 0; }
+.leer { color: var(--gedaempft); text-align: center; margin: var(--weit) 0; }
+
+/* --- Ab 48rem -----------------------------------------------------------
+   EIN Media-Block fuer die ganze Datei. Nicht aus Ordnungsliebe: der Zeuge
+   `StylesheetKorrekturenTests._block_ab_48rem` greift den ERSTEN Block
+   dieser Breite und sucht darin die Kappungsregel der Objektspalte. Ein
+   zweiter Block davor liesse ihn ins Leere greifen. */
+@media (min-width: 48rem) {
+
+  /* Kopf: alle drei Bereiche in einer Zeile. Das `margin-right: auto` am
+     Werkzeugnamen schiebt Navigation und Konto nach rechts, ohne dass im
+     Markup ein Huellelement noetig waere. */
+  header .marke { flex: 0 0 auto; margin-right: auto; }
+  header .konto {
+    flex: 0 0 auto;
+    gap: var(--mittel);
+    padding-left: var(--mittel);
+  }
+
+  /* Mehrere Spalten fester Mindestbreite, sodass die Feldeinheiten
+     nebeneinander liegen. `auto-fit` mit `minmax` statt einer festen
+     Spaltenzahl: die Zahl der Filterfelder ist nicht in Stein gemeisselt.
+
+     Das Paar von/bis nimmt zwei Spalten - bei einer Mindestbreite von 14rem
+     und mindestens 46rem Inhaltsbreite sind ab hier immer drei Spalten da,
+     das Paar passt also. */
+  .filter { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+  .feldpaar { grid-column: span 2; }
+
+  /* Die Freitextsuche nimmt zwei Spalten. Sie steht als erstes Feld vor der
+     vollbreiten Statuszeile und stuende in einer Spalte allein in ihrer
+     Reihe - also genau die klaffende Luecke, gegen die diese Runde gebaut
+     ist. Zwei Spalten fuellen die Reihe und geben dem einzigen Feld, in das
+     ganze Woerter getippt werden, auch die Breite dafuer. */
+  .filter .breit { grid-column: span 2; }
+
+  /* Die Aktionen rechtsbuendig, Knoepfe in ihrer natuerlichen Breite. */
+  .filter .aktionen { justify-content: flex-end; }
+  .filter .aktionen button { flex: 0 0 auto; }
+
+  /* Damit bricht eine spaeter ergaenzte Spalte das Layout nicht. */
+  .tabelle { overflow-x: auto; }
+
+  .tabelle thead { position: static; clip-path: none; }
+
+  .tabelle tbody tr {
+    display: table-row;
+    border: 0;
+    border-bottom: 1px solid var(--linie);  /* kein Zebrastreifen */
+    border-radius: 0;
+    margin: 0;
+  }
+  .tabelle td { display: table-cell; padding: var(--knapp); }
+  .tabelle td::before { content: none; }
+
+  .tabelle th {
+    text-align: left;
+    font-weight: normal;
+    font-size: .875rem;
+    color: var(--gedaempft);
+    border-bottom: 1px solid var(--linie);
+    padding: var(--eng) var(--knapp);
+    white-space: nowrap;
+  }
+
+  /* Zahlenspalten rechtsbuendig, Textspalten links. Preise und Flaechen sind
+     nur vergleichbar, wenn die Stellen untereinander stehen. Angesprochen
+     ueber `data-spalte` und NICHT ueber `nth-child`: eine zusaetzlich
+     eingeschobene Spalte verschiebt jede Positionszahl, den Namen aber
+     nicht. Dass diese vier Namen in der Liste wirklich vorkommen, bezeugt
+     `test_die_benannten_spalten_des_stylesheets_gibt_es_in_der_liste` -
+     sonst fiele die Ausrichtung bei einer Umbenennung still aus.
+
+     Greift auf `<th>` und `<td>` zugleich: beide tragen das Attribut, und
+     ein rechtsbuendiger Wert unter einem linksbuendigen Kopf saehe aus wie
+     ein Versehen. */
+  .tabelle [data-spalte="Wohnfläche"],
+  .tabelle [data-spalte="Grundstück"],
+  .tabelle [data-spalte="Kaufpreis"],
+  .tabelle [data-spalte="€/m²"] { text-align: right; }
+
+  /* Ohne Titel steht in dieser Zelle `Portal · ID`, bei unbekanntem Portal die
+     volle URL - und die sprengt die Spalte.
+
+     Gekappt wird am INNEREN Element, nicht an der Zelle selbst. Der
+     Unterschied ist nicht kosmetisch: bei `table-layout: auto` ist
+     `max-width` an einer Tabellenzelle nur ein Hinweis, den der
+     Tabellenalgorithmus ueberstimmt, sobald der Inhalt breiter ist - die
+     Kappung fiel damit still aus. Ein Blockelement IN der Zelle hat eine
+     echte Breite, und daran greifen `overflow` und `text-overflow`. Der
+     Verweis ist ohnehin da; ein zusaetzliches Huellelement braucht es nicht.
+
+     Gekappt wird erst ab 48rem: in der Kartenansicht darunter steht die
+     Zelle allein in ihrer Zeile, dort ist Platz und der Umbruch bleibt
+     erlaubt. Ueber `data-spalte` angesprochen wie die Zahlenspalten und aus
+     demselben Grund. */
+  .tabelle [data-spalte="Objekt"] > a {
+    display: block;
+    max-width: 22rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Der Knopf sitzt neben dem Feld. `:has()` bleibt bewusst auf diese
+     Verbesserung beschraenkt: faellt es aus, steht der Knopf wie am Handy
+     darunter - unschoen, aber nicht kaputt. */
+  main form:has(> input[type="url"]) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--knapp);
+  }
+  main form:has(> input[type="url"]) label { flex: 0 0 100%; }
+  main form:has(> input[type="url"]) input[type="url"] { flex: 1 1 20rem; width: auto; }
+  main input[type="url"] + button { margin-top: 0; }
+}
 
 /* --- Qualitaetsboden ---------------------------------------------------- */
 

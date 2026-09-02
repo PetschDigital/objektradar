@@ -11,10 +11,14 @@
     {% if form.errors %}
       <p>Benutzername oder Passwort stimmt nicht.</p>
     {% endif %}
-    <form method="post">
+    <form method="post" class="formular">
       {% csrf_token %}
-      {{ form.as_p }}
-      <button type="submit">Anmelden</button>
+      {{ form.non_field_errors }}
+      {% for feld in form.hidden_fields %}{{ feld }}{% endfor %}
+      {% for feld in form.visible_fields %}{% include "feld.html" %}{% endfor %}
+      <div class="aktionen">
+        <button type="submit">Anmelden</button>
+      </div>
     </form>
   {% endif %}
 

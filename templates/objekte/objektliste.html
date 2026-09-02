@@ -5,41 +5,95 @@
 {% block inhalt %}
   <h1>Objekte</h1>
 
-  <form method="post" action="{% url 'objekt_anlegen' %}">
+  <form method="post" action="{% url 'objekt_anlegen' %}" class="einwurf">
     {% csrf_token %}
     <label for="id_url">Link zum Inserat</label>
     <input type="url" name="url" id="id_url" placeholder="https://…" autofocus required>
     <button type="submit">Einwerfen</button>
   </form>
 
-  {# Ein GET-Formular, damit ein gefilterter Stand teilbar ist. `seite` steht
-     bewusst NICHT darin: ein neuer Filter faengt auf Seite 1 an. #}
+  {% comment %}
+    Ein GET-Formular, damit ein gefilterter Stand teilbar ist. `seite` steht
+    bewusst NICHT darin: ein neuer Filter faengt auf Seite 1 an.
+
+    Die Felder werden EINZELN gerendert und nicht ueber `as_p`: `as_p` stellt
+    Beschriftung und Feld nebeneinander, und dann laufen die Beschriftungen
+    bei unterschiedlich hohen Feldern auseinander. Die Feldnamen und die
+    Vorbelegung des Statusfilters kommen unveraendert aus der Formklasse -
+    hier steht nur, wie sie stehen.
+  {% endcomment %}
   <form method="get" class="filter">
-    {{ filterform.as_p }}
-    {# Nur wenn wirklich sortiert wurde, und mit dem GEPRUEFTEN Wert: ein
-       Filtern soll die Sortierung nicht abwerfen, aber auch keinen Unfug aus
-       der Adresse in die naechste Adresse tragen. #}
+    {% include "feld.html" with feld=filterform.suche breit=1 %}
+
+    {% comment %}
+      Der Statusfilter ist kein Feld wie die anderen: sechs Kontrollkaestchen
+      passen in keine Rasterspalte. Eigene Zeile ueber die volle Breite, als
+      `<fieldset>` mit `<legend>` - das ist die Bauform fuer eine Gruppe von
+      Kaestchen unter einer gemeinsamen Beschriftung.
+
+      Jedes `<input>` steckt in SEINEM `<label>` - so liefert Django die
+      Teilwidgets von `CheckboxSelectMultiple` von sich aus. Kaestchen und
+      Wort koennen damit nicht auseinanderfallen, und das Wort ist
+      anklickbar.
+    {% endcomment %}
+    <fieldset class="statusfilter">
+      <legend>{{ filterform.status.label }}</legend>
+      <div class="kaestchen">
+        {% for kaestchen in filterform.status %}{{ kaestchen }}{% endfor %}
+      </div>
+      {{ filterform.status.errors }}
+    </fieldset>
+
+    {% include "feld.html" with feld=filterform.land %}
+    {% include "feld.html" with feld=filterform.portal %}
+    {% include "feld.html" with feld=filterform.objekttyp %}
+    {% include "feld.html" with feld=filterform.zustand %}
+
+    {# Von/bis gehoert zusammen und wird nicht getrennt umbrochen. #}
+    <div class="feldpaar">
+      {% include "feld.html" with feld=filterform.preis_von %}
+      {% include "feld.html" with feld=filterform.preis_bis %}
+    </div>
+    <div class="feldpaar">
+      {% include "feld.html" with feld=filterform.flaeche_von %}
+      {% include "feld.html" with feld=filterform.flaeche_bis %}
+    </div>
+
+    {% include "feld.html" with feld=filterform.region %}
+
+    {% comment %}
+      Nur wenn wirklich sortiert wurde, und mit dem GEPRUEFTEN Wert: ein
+      Filtern soll die Sortierung nicht abwerfen, aber auch keinen Unfug aus
+      der Adresse in die naechste Adresse tragen.
+    {% endcomment %}
     {% if request.GET.sortierung %}
       <input type="hidden" name="sortierung" value="{{ sortierung }}">
     {% endif %}
-    <button type="submit">Filtern</button>
+
+    <div class="aktionen">
+      <button type="submit">Filtern</button>
+      {% if ist_gefiltert %}<a href="{% url 'objektliste' %}">Filter zurücksetzen</a>{% endif %}
+    </div>
   </form>
 
   {% if ist_gefiltert %}
-    <p class="treffer">
-      {{ trefferzahl }} von {{ gesamtzahl }} Objekten ·
-      <a href="{% url 'objektliste' %}">Filter zurücksetzen</a>
-    </p>
+    <p class="treffer">{{ trefferzahl }} von {{ gesamtzahl }} Objekten</p>
   {% endif %}
 
-  {# Eigene Leiste statt Verweise in den Spaltenkoepfen: unter 48rem ist die
-     Tabelle eine Kartenliste, `thead` steht dort nur noch fuer Screenreader
-     und waere mit der Maus nicht erreichbar. `seite=None` wirft die
-     Seitenzahl ab - eine neue Sortierung faengt vorn an. #}
+  {% comment %}
+    Eigene Leiste statt Verweise in den Spaltenkoepfen: unter 48rem ist die
+    Tabelle eine Kartenliste, `thead` steht dort nur noch fuer Screenreader
+    und waere mit der Maus nicht erreichbar. `seite=None` wirft die
+    Seitenzahl ab - eine neue Sortierung faengt vorn an.
+
+    Beide Richtungen bleiben je Schluessel erreichbar; erkennbar ist die
+    geltende: der aktive Schluessel und sein Pfeil tragen `--text` und
+    Fettung, alles Uebrige `--gedaempft`.
+  {% endcomment %}
   <p class="sortierung">
-    Sortierung:
+    <span class="titel">Sortieren nach</span>
     {% for spalte in sortierbar %}
-      <span>{{ spalte.beschriftung }}<a
+      <span class="schluessel{% if sortierung == spalte.aufsteigend or sortierung == spalte.absteigend %} aktiv{% endif %}">{{ spalte.beschriftung }}<a
         href="{% querystring sortierung=spalte.aufsteigend seite=None %}"
         title="{{ spalte.beschriftung }} aufsteigend"
         {% if sortierung == spalte.aufsteigend %}aria-current="true"{% endif %}>↑</a><a
@@ -85,9 +139,12 @@
       </table>
     </div>
     {% if page_obj.has_other_pages %}
-      {# `{% querystring %}` uebernimmt die uebrigen Parameter unveraendert und
-         tauscht nur `seite` aus - ein mehrfach gesetztes `status` vollstaendig
-         mitgefuehrt. Genau darum wird das nicht von Hand gebaut. #}
+      {% comment %}
+        Der Tag `querystring` uebernimmt die uebrigen Parameter unveraendert
+        und tauscht nur `seite` aus - ein mehrfach gesetztes `status` wird
+        dabei vollstaendig mitgefuehrt. Genau darum wird das nicht von Hand
+        gebaut.
+      {% endcomment %}
       <nav class="blaettern">
         {% if page_obj.has_previous %}
           <a href="{% querystring seite=page_obj.previous_page_number %}" rel="prev">zurück</a>
