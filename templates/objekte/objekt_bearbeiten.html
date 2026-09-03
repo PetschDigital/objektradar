@@ -3,18 +3,79 @@
 {% block titel %}{{ objekt }} bearbeiten · Objektradar{% endblock %}
 
 {% block inhalt %}
-  <h1>{{ objekt }} bearbeiten</h1>
+  <h1 class="bezeichnung" title="{{ objekt }}">{{ objekt }} bearbeiten</h1>
 
   {% comment %}
-    Dieselbe Feldeinheit wie im Filterblock. Keine neuen Felder, keine
-    geaenderte Reihenfolge: gelaufen wird ueber `visible_fields`, und die
-    liefert die Reihenfolge der Formklasse.
+    Dieselbe Feldeinheit und dieselbe begrenzte Zeilenlaenge wie im
+    Filterblock - nur nicht mehr als EINE lange Kette. Fuenfzehn Felder
+    hintereinander sind keine Ordnung, sondern eine Aufzaehlung; wer die
+    Wohnflaeche sucht, liest sie von oben durch.
+
+    Die Felder stehen deshalb NAMENTLICH da, in Gruppen. Der Preis dafuer:
+    ein spaeter ergaenztes Feld der Formklasse stuende in keiner Gruppe und
+    fiele stumm von der Seite. Genau davor haelt
+    `test_jedes_feld_der_formklasse_steht_auf_der_seite` den Riegel - er
+    laeuft ueber `visible_fields` und nicht ueber diese Liste hier.
+
+    Die Reihenfolge INNERHALB einer Gruppe ist die der Formklasse und wird
+    hier nicht umsortiert. Nur die Gruppen stehen in der Reihenfolge, in der
+    man sie ausfuellt.
+
+    `url`, `portal` und `inserats_id` sind der Dublettenschluessel und stehen
+    zuoberst: was sie tragen, entscheidet, ob ein zweiter Einwurf auf DIESES
+    Objekt trifft.
   {% endcomment %}
   <form method="post" class="formular">
     {% csrf_token %}
     {{ form.non_field_errors }}
     {% for feld in form.hidden_fields %}{{ feld }}{% endfor %}
-    {% for feld in form.visible_fields %}{% include "feld.html" %}{% endfor %}
+
+    <fieldset class="gruppe">
+      <legend>Inserat</legend>
+      {% include "feld.html" with feld=form.url %}
+      {% include "feld.html" with feld=form.portal %}
+      {% include "feld.html" with feld=form.inserats_id %}
+      {% include "feld.html" with feld=form.titel %}
+    </fieldset>
+
+    <fieldset class="gruppe">
+      <legend>Lage</legend>
+      {% include "feld.html" with feld=form.ort %}
+      {% include "feld.html" with feld=form.land %}
+      {% include "feld.html" with feld=form.region %}
+    </fieldset>
+
+    <fieldset class="gruppe">
+      <legend>Gebäude und Grundstück</legend>
+      {% include "feld.html" with feld=form.objekttyp %}
+      {% include "feld.html" with feld=form.wohnflaeche %}
+      {% include "feld.html" with feld=form.grundstuecksgroesse %}
+      {% include "feld.html" with feld=form.zimmer %}
+      {% include "feld.html" with feld=form.baujahr %}
+    </fieldset>
+
+    {% comment %}
+      Der Hinweis, dass ein leeres Preisfeld „nicht ändern" heisst, steht als
+      `help_text` an der Formklasse und wird von der Feldeinheit ausgegeben.
+      Er wird hier NICHT ein zweites Mal hingeschrieben: zwei Fassungen
+      derselben Regel driften auseinander, und die Regel ist sonst nirgends
+      auffindbar.
+    {% endcomment %}
+    <fieldset class="gruppe">
+      <legend>Preis und Bewertung</legend>
+      {% include "feld.html" with feld=form.zustand %}
+      {% include "feld.html" with feld=form.wert_nach_renovierung %}
+      {% include "feld.html" with feld=form.kaufpreis %}
+    </fieldset>
+
+    <fieldset class="gruppe">
+      {# Nicht schlicht "Beschreibung": das ist schon die Beschriftung des
+         Feldes darunter, und derselbe Name zweimal untereinander sagt nichts
+         Zweites. #}
+      <legend>Beschreibung aus dem Inserat</legend>
+      {% include "feld.html" with feld=form.beschreibung %}
+    </fieldset>
+
     <div class="aktionen">
       <button type="submit">Speichern</button>
       <a href="{% url 'objekt' objekt.pk %}">Abbrechen</a>

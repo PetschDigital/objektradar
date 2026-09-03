@@ -92,6 +92,37 @@ class ObjektQuerySet(models.QuerySet):
             preis_geaendert_am=Subquery(verlauf.values("datum")[:1]),
         )
 
+    def mit_erstem_bild(self):
+        """Adresse des ersten Bildes als Annotation `erstes_bild`.
+
+        Dieselbe Bauform wie `mit_preisaenderung()` und aus demselben Grund:
+        die Bild-URLs liegen in einer EIGENEN Tabelle, und die Liste zeigt je
+        Zeile genau eines. Ein Zugriff auf `objekt.bilder` im Template waere
+        bei fuenfzig Zeilen einundfuenfzig Abfragen - dasselbe N+1-Muster wie
+        beim Preisverlauf.
+
+        Eine Subquery im SELECT und KEIN `prefetch_related`: die Subquery
+        steht in derselben Anweisung wie die Liste selbst und kostet damit gar
+        keine Abfrage, waehrend ein Prefetch eine zweite braechte. Konstant
+        waere beides - aber die Liste zieht drei bedingte `Count`-Aggregate
+        ueber `vota`, und ein zusaetzlicher JOIN auf `bilder` daneben erzeugte
+        ein Kreuzprodukt: jedes Bild vervielfachte jedes Votum und die
+        Votumzahlen waeren still falsch. Eine Subquery joint nicht und kann
+        das nicht ausloesen. Siehe `test_mehr_bilder_kosten_nicht_mehr_abfragen`.
+
+        Die Sortierung `reihenfolge, id` ist dieselbe wie `Bild.Meta.ordering`
+        und steht hier trotzdem ausgeschrieben - aus demselben Grund wie beim
+        Preisverlauf: ein Ausschnitt auf einem Queryset ohne ausdrueckliches
+        `order_by()` haengt sonst daran, dass die Meta-Angabe stehen bleibt,
+        und "das erste Bild" waere Zufall, sobald sie sich bewegt.
+
+        Ohne Bild ist der Wert NULL. Genau daran erkennt das Template, dass
+        die ruhige Flaeche zu setzen ist - und nicht ein `<img>` mit leerer
+        Adresse.
+        """
+        bilder = Bild.objects.filter(objekt=OuterRef("pk")).order_by("reihenfolge", "id")
+        return self.annotate(erstes_bild=Subquery(bilder.values("url")[:1]))
+
     def sichtbar(self):
         """Ohne verworfene und vom Markt genommene Objekte. Geloescht wird nichts."""
         from .choices import STATUS_AUSGEBLENDET

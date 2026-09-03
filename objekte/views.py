@@ -431,7 +431,13 @@ class ObjektlisteView(ListView):
         # Einwerfer nicht an. Ein Aufruf ohne Leser waere eine Optimierung
         # ohne Nutzen - und saehe in einem halben Jahr wie eine Anforderung
         # aus. Kommt die Spalte, kommt er mit ihr zurueck, samt Zeugen.
-        objekte = mit_votumzaehlung(Objekt.objects.mit_qm_preis().mit_preisaenderung())
+        # `mit_erstem_bild()` ist die eine Abfrage-Optimierung dieser Runde:
+        # ohne sie schluege das Template je Zeile in `bilder` nach, und aus
+        # einer Abfrage wuerden einundfuenfzig. Siehe die Methode im Modell
+        # und `test_mehr_bilder_kosten_nicht_mehr_abfragen`.
+        objekte = mit_votumzaehlung(
+            Objekt.objects.mit_qm_preis().mit_preisaenderung().mit_erstem_bild()
+        )
         return self.filterform.filtern(objekte).order_by(*reihenfolge(self.sortierung))
 
     @cached_property
@@ -560,7 +566,13 @@ class ObjektView(DetailView):
     def get_queryset(self):
         # Nicht ueber `sichtbar()`: ein verworfenes Objekt muss aufrufbar
         # bleiben, sonst laesst es sich nie zurueckholen.
-        return Objekt.objects.mit_qm_preis()
+        #
+        # `mit_preisaenderung()` ist am 03.09. dazugekommen: der Zahlenblock
+        # dieser Seite zeigt die Preisaenderung EXAKT wie die Liste, und die
+        # Liste rechnet sie aus genau diesen beiden Annotationen. Ein zweiter
+        # Rechenweg allein fuer diese Ansicht waere die zweite Formel fuer
+        # dieselbe Regel - und die driftet.
+        return Objekt.objects.mit_qm_preis().mit_preisaenderung()
 
     def get_context_data(self, **kwargs):
         # Einmal holen, dann in Python teilen. Zwei Abfragen "meins" und
@@ -574,6 +586,11 @@ class ObjektView(DetailView):
         kwargs.setdefault(
             "andere_vota", [v for v in vota if v.person_id != self.request.user.pk]
         )
+        # Dieselbe Funktion wie in der Liste, nicht eine zweite Fassung
+        # daneben: die Richtung (`senkung`) und der Prozentwert entstehen an
+        # genau einer Stelle. Kostet hier keine Abfrage - beide Werte liegen
+        # als Annotation schon am Objekt.
+        kwargs.setdefault("preisaenderung", preisaenderung(self.object))
         kwargs.setdefault("wertungen", Wertung.choices)
         kwargs.setdefault("statusauswahl", Status.choices)
         kwargs.setdefault("notizen", self.object.notizen.select_related("person"))

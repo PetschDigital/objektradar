@@ -228,6 +228,41 @@ main button + button { margin-left: var(--knapp); }
   margin: 0;
 }
 
+/* Sinnvolle Gruppen statt einer langen Kette. Der `<fieldset>` bringt Rahmen
+   und Innenabstand mit, die hier beide stoeren - die Gruppe traegt ihre
+   Zusammengehoerigkeit ueber die Legende und den groesseren Abstand nach
+   aussen. Dieselbe Behandlung wie beim Statusfilter der Liste und aus
+   demselben Grund.
+
+   Der Abstand INNEN (`--mittel`) ist die Stufe fuer "zwischen Feldern eines
+   Rasters", der nach aussen (`--weit`) die fuer "zwischen Bloecken, die
+   getrennt gelesen werden". Genau daran liest man die Gruppe als eine. */
+.gruppe {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--mittel);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Die Legende ist die UEBERSCHRIFT der Gruppe und keine Feldbeschriftung.
+   Truege sie Farbe und Groesse von `main label`, saehe sie aus wie ein
+   sechzehntes Feld - und die Gruppierung waere wieder die lange Kette, gegen
+   die sie gebaut ist. Deshalb `--text` und eine Linie darunter. */
+.gruppe legend {
+  width: 100%;
+  padding: 0 0 var(--eng);
+  margin-bottom: var(--eng);
+  border-bottom: 1px solid var(--linie);
+  color: var(--text);
+}
+
+/* Der Abstand zwischen zwei Gruppen ist groesser als der zwischen zwei
+   Feldern - `.formular` setzt `--mittel`, hier kommt die Differenz dazu. */
+.formular .gruppe + .gruppe { margin-top: var(--mittel); }
+
 /* Die Aktionen stehen als eigene Zeile am Ende, nicht zwischen den Feldern. */
 .aktionen {
   display: flex;
@@ -243,6 +278,11 @@ main button + button { margin-left: var(--knapp); }
 .einwurf { margin: 0 0 var(--weit); }
 main input[type="url"] { max-width: none; }
 main input[type="url"] + button { margin-top: var(--knapp); }
+
+/* Das Feld ist die Hauptsache der Seite und sieht auch so aus: groessere
+   Schrift als jedes andere Eingabefeld. Nicht ueber eine Farbe - Farbe traegt
+   in diesem Werkzeug Bedeutung, und "hier tippt man zuerst" ist keine. */
+.einwurf input[type="url"] { font-size: 1.125rem; }
 
 /* --- Filter, Sortierung, Blaettern ---------------------------------------
    Drei Leisten ueber und unter der Liste. Sie sind Bedienung, nicht Inhalt -
@@ -380,6 +420,9 @@ main input[type="checkbox"] {
   border: 1px solid var(--linie);
   border-radius: 4px;
   margin-bottom: var(--knapp);
+  /* Das Bild sitzt als Kopf der Karte in der Ecke und wuerde die Rundung sonst
+     ueberdecken. */
+  overflow: hidden;
 }
 .tabelle td {
   display: flex;
@@ -389,9 +432,79 @@ main input[type="checkbox"] {
 }
 .tabelle td::before { content: attr(data-spalte); color: var(--gedaempft); }
 
-/* Die Zelle "Objekt" ist die Ueberschrift der Karte, nicht eine Angabe unter
-   anderen - sie steht oben und ohne Bezeichnung. */
-.tabelle td:first-child::before { content: none; }
+/* Zwei Zellen tragen in der Karte keine Bezeichnung: das Bild (erste Zelle,
+   der Kopf der Karte) und die Bezeichnung darunter, die deren Ueberschrift ist.
+   Beides sind keine Angaben unter anderen.
+
+   Die zweite wird ueber ihre KLASSE angesprochen und nicht ueber
+   `data-spalte="Objekt"`: diese Schreibweise gehoert ausschliesslich in den
+   Block ab 48rem, wo die Zelle gekappt wird. Stuende sie hier oben ein zweites
+   Mal, liesse sich nicht mehr auseinanderhalten, ob die Kappung wirklich nur
+   in der Tabellenfassung greift - und in der Karte gekappt verloere jede Karte
+   am Handy ihren Namen. */
+.tabelle td:first-child::before,
+.tabelle .bezeichnung::before { content: none; }
+
+/* Die Karten-Ueberschrift darf INNERHALB eines Wortes umbrechen.
+
+   Ohne Titel steht in dieser Zelle die volle URL, und eine URL hat keine
+   Leerstelle: ihre Mindestbreite ist ihre volle Breite, und weil eine
+   `<table>` nie schmaler wird als ihr Inhalt, zog EIN solches Objekt die
+   ganze Tabelle mit sich. Gemessen bei 375px: 725px statt 343px - die Werte
+   jeder Karte standen rechts ausserhalb des Bildschirms, auf dem Geraet, an
+   dem die Liste unterwegs gelesen wird. Objekte ohne Titel sind derzeit der
+   Normalfall.
+
+   `anywhere` und nicht `break-word`: nur `anywhere` geht in die
+   MINDESTBREITE ein, und genau die ist hier das Problem. `break-word` liesse
+   die Tabelle unveraendert breit.
+
+   Ueber die Klasse angesprochen und nicht ueber `data-spalte="Objekt"`:
+   diese Schreibweise gehoert ausschliesslich in den Block ab 48rem.
+
+   Ab 48rem wirkt die Regel nicht mehr - dort traegt der Verweis in der Zelle
+   `white-space: nowrap` und wird gekappt. Die Zusage aus 4.1 der
+   Layout-Runde bleibt damit unangetastet. */
+.tabelle .bezeichnung { overflow-wrap: anywhere; }
+
+/* --- Das Bild in der Liste ----------------------------------------------
+   Mobil zuerst: die Zelle ist der Kopf der Karte, volle Breite, festes
+   Seitenverhaeltnis. Ab 48rem wird sie eine schmale erste Spalte - siehe den
+   Media-Block am Ende.
+
+   Bild und Platzhalter tragen DIESELBEN Masse, und das ist der ganze Punkt:
+   Bilder kommen nur ueber das Lesezeichen, die meisten Zeilen haben also
+   keines. Spraenge die Zeilenhoehe je nachdem, stuenden die Zahlen nicht mehr
+   untereinander - und untereinander stehende Zahlen sind der Zweck der Liste.
+
+   `object-fit: cover` statt `contain`: ein Inseratsfoto im Hochformat liesse
+   sonst zwei graue Balken stehen, und die Zeile bekaeme wieder zwei
+   verschiedene Erscheinungsbilder. */
+.tabelle [data-spalte="Bild"] { display: block; padding: 0; }
+
+.tabelle [data-spalte="Bild"] img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  background: var(--flaeche);
+}
+
+/* In der KARTENFASSUNG bleibt die Flaeche ohne Bild weg. Sie ist dafuer da,
+   dass die Zeilenhoehe der Tabelle nicht springt - in der Kartenliste gibt es
+   keine Zeile, die springen koennte: die Karten stehen untereinander und sind
+   ohnehin verschieden hoch.
+
+   Was sie dort anrichtete, ist dagegen echt: die Flaeche misst bei voller
+   Kartenbreite ueber 250px, sie traegt `--flaeche` auf einer Karte, die selbst
+   `--flaeche` ist, und Bilder kommen nur ueber das Lesezeichen - fast jede
+   Karte begaenne also mit einem viertel Bildschirm Nichts. Auf dem Geraet, auf
+   dem die Liste unterwegs gelesen wird, waere das kein ruhiger Grund, sondern
+   ein Loch.
+
+   Das Markup traegt den Platzhalter unveraendert; hier steht nur, wo er
+   sichtbar wird. Ab 48rem ist er wieder da - siehe den Media-Block am Ende. */
+.tabelle [data-spalte="Bild"] .platzhalter { display: none; }
 
 /* Ohne Tabellenziffern stehen 750.000 und 89.500 nicht untereinander, und
    genau das Untereinander ist der Zweck der Liste. Auf der ganzen Tabelle
@@ -477,10 +590,204 @@ main input[type="checkbox"] {
 /* Eine Zeile Skript umbricht sonst nicht und schiebt die Seite in die Breite. */
 #id_skript { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8125rem; }
 
-/* --- Objektansicht ------------------------------------------------------ */
+/* --- Objektansicht ------------------------------------------------------
+   Die Seite beantwortet zwei Fragen, in dieser Reihenfolge: Lohnt dieses
+   Objekt? Und was tue ich damit? Die Reihenfolge der Bloecke ist die Antwort,
+   die Groessenverhaeltnisse sind es auch. */
 dl { display: grid; grid-template-columns: auto 1fr; gap: var(--eng) var(--mittel); margin: 0; }
 dt { color: var(--gedaempft); }
 dd { margin: 0; }
+
+/* Ein fehlender Wert bekommt einen gedaempften Strich - man muss SEHEN, dass
+   die Angabe fehlt, sonst haelt man sie fuer Null. */
+.fehlt { color: var(--gedaempft); }
+
+.zurueck { margin: 0 0 var(--mittel); font-size: .875rem; }
+
+/* Die Bezeichnung faellt ohne Titel auf `Portal · ID` und ohne Schluessel auf
+   die volle URL zurueck. Eine URL hat keine Leerstelle zum Umbrechen: ohne
+   Kappung schoebe sie die Seite in die Breite, und zwar in JEDER Breite.
+   Deshalb hier und nicht erst ab einer Mindestbreite. */
+.bezeichnung {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Ort, Status und Link in einer ruhigen Zeile. Der Status ist eine MARKE und
+   kein Fliesstext - er wird gesucht, nicht gelesen. Ein Kasten mit Linie
+   findet das Auge in einer Zeile wieder, ein Wort zwischen zwei Woertern
+   nicht. */
+.objektzeile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--eng) var(--mittel);
+  margin: 0 0 var(--weit);
+  color: var(--gedaempft);
+}
+
+.statusmarke {
+  padding: 0 var(--knapp);
+  border: 1px solid var(--linie);
+  border-radius: 4px;
+  background: var(--flaeche);
+  color: var(--text);
+  font-size: .875rem;
+}
+
+/* --- Zahlen zuerst -------------------------------------------------------
+   Der Block, der die Kaufentscheidung traegt. Er steht direkt unter dem Kopf
+   und ist gegen den Rest der Seite ueber die FLAECHE abgesetzt - dieselbe
+   Ansage wie beim Filterblock der Liste, und wie dort reicht sie allein. */
+.zahlen {
+  margin: 0 0 var(--weit);
+  padding: var(--mittel);
+  border-radius: 4px;
+  background: var(--flaeche);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Deutlich groesser als alles andere auf der Seite - groesser als `h1`. Das
+   ist die Zahl, wegen der die Seite aufgemacht wird. */
+.kaufpreis { margin: 0; font-size: 2rem; line-height: 1.2; }
+
+/* Die Preisaenderung erbt Groesse und Farbe von `.preisaenderung` weiter
+   oben - dieselbe Regel wie in der Liste, damit eine Senkung an beiden
+   Stellen gleich aussieht. Hier steht nur der Abstand zum Preis darueber. */
+.zahlen .preisaenderung { margin: var(--eng) 0 0; }
+
+/* Vier Kennzahlen nebeneinander, solange sie nebeneinander passen. Nicht das
+   `auto 1fr`-Raster der Datenliste: hier ist die Beschriftung eine Ueberschrift
+   ueber ihrer Zahl und steht nicht daneben. */
+.kennzahlen {
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--mittel);
+  margin-top: var(--mittel);
+}
+.kennzahlen dt { font-size: .875rem; }
+.kennzahlen dd { font-size: 1.125rem; }
+
+/* --- Bilder in der Objektansicht ----------------------------------------
+   Ein einfaches Raster, mehr nicht. Keine Galerie, kein Vergroessern - beides
+   braeuchte JavaScript, und wer gross sehen will, klickt aufs Inserat.
+
+   `--flaeche` als Grund unter dem Bild: laedt es nicht, weil das Inserat weg
+   ist oder das Portal die Adresse sperrt, bleibt eine ruhige Flaeche stehen
+   und kein kaputtes Symbol. */
+.bilder {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: var(--knapp);
+}
+.bilder img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--flaeche);
+}
+
+/* --- Handlungen ----------------------------------------------------------
+   Bearbeiten ist die haeufigste Handlung dieser Seite und sieht deshalb aus
+   wie ein Knopf. Es BLEIBT ein Link - es fuehrt woandershin und veraendert
+   nichts -, und die Klasse traegt nur das Aussehen. Die Masse kommen aus
+   derselben Skala wie bei `main button`; `--griff` ist die Flaeche, die am
+   Daumen sicher zu treffen ist. */
+.handlung { margin: var(--mittel) 0 0; }
+
+.knopf {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--griff);
+  padding: 0 var(--mittel);
+  border-radius: 4px;
+  background: var(--akzent);
+  color: #fff;
+  text-decoration: none;
+}
+
+/* Status und Notiz sind ruhiger als das Votum: umrandet statt gefuellt.
+   Saehen alle drei gleich laut aus, sagte die Seite nicht mehr, was auf ihr
+   wichtig ist - und genau das war der Fehlstand, gegen den diese Runde
+   gebaut ist. */
+main button.ruhig {
+  background: none;
+  border: 1px solid var(--akzent);
+  color: var(--akzent);
+}
+
+/* Die drei Wertungen als klar unterscheidbare Wahl. Die eigene ist gefuellt,
+   die beiden anderen sind es nicht - man muss auf einen Blick sehen, wo man
+   selbst steht. `margin-left` faellt weg, den Abstand traegt das Flexraster. */
+.wertungen { display: flex; flex-wrap: wrap; gap: var(--knapp); margin-top: var(--knapp); }
+.wertungen button + button { margin-left: 0; }
+.wertungen .wertung {
+  background: none;
+  border: 1px solid var(--akzent);
+  color: var(--akzent);
+}
+.wertungen .wertung.gewaehlt { background: var(--akzent); color: #fff; }
+
+/* Vota, Statusverlauf und Notizen sind Listen von Eintraegen, keine
+   Aufzaehlung: der Punkt davor traegt nichts bei. Person und Zeitpunkt stehen
+   gedaempft ueber dem, was sie sagen. */
+.vota,
+.verlauf,
+.notizen {
+  list-style: none;
+  margin: var(--knapp) 0 0;
+  padding: 0;
+}
+.vota li,
+.notizen li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--eng);
+  padding: var(--knapp) 0;
+  border-bottom: 1px solid var(--linie);
+}
+.vota .person,
+.notizen .wann { color: var(--gedaempft); font-size: .875rem; }
+.vota .wertung { color: var(--text); }
+.vota .begruendung { color: var(--gedaempft); }
+
+.verlauf { color: var(--gedaempft); font-size: .875rem; }
+
+.notizform { margin-top: var(--mittel); }
+
+/* "Noch keine Notiz." steht in der Zeile, in der spaeter die Eintraege
+   stehen - nicht mittig wie der leere Bildschirm der Liste. Dort ist die
+   ganze Seite leer, hier fehlt nur ein Block von mehreren. */
+.nichts { color: var(--gedaempft); margin: var(--knapp) 0 0; }
+
+/* Eine dritte Ueberschriftenstufe fuer "Vota der anderen": es ist ein Teil
+   des Votum-Blocks und keine eigene Sache daneben. */
+h3 { font-weight: normal; font-size: 1rem; margin: var(--mittel) 0 0; color: var(--gedaempft); }
+
+/* Der Preisverlauf ist Beleg, keine Vergleichsliste - deshalb NICHT die
+   Behandlung von `.tabelle`: sie bricht unter 48rem in Karten auf, und dafuer
+   traegt diese Tabelle keine `data-spalte`. Sie bekommt dieselben Linien und
+   dieselben Tabellenziffern und bleibt sonst ruhig. */
+.verlaufstabelle {
+  width: 100%;
+  max-width: 30rem;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.verlaufstabelle th {
+  text-align: left;
+  font-weight: normal;
+  font-size: .875rem;
+  color: var(--gedaempft);
+  border-bottom: 1px solid var(--linie);
+}
+.verlaufstabelle th,
+.verlaufstabelle td { padding: var(--eng) var(--knapp) var(--eng) 0; }
+.verlaufstabelle td { border-bottom: 1px solid var(--linie); }
 
 /* Der Fusstext ("eingestellt von … am …"). Ueber `hr +` angesprochen, damit
    das Template dafuer keine Klasse braucht. */
@@ -545,6 +852,32 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
   }
   .tabelle td { display: table-cell; padding: var(--knapp); }
   .tabelle td::before { content: none; }
+
+  /* Aus dem Kopf der Karte wird eine schmale erste Spalte. Etwa 4rem breit
+     und mit fester Hoehe: groesser zerriss es die Zeilenhoehe, und dann
+     stuenden die Zahlen nicht mehr nebeneinander - genau das, wofuer die
+     Tabellenfassung da ist.
+
+     Die Regel steht hier ein zweites Mal, weil `[data-spalte="Bild"]` staerker
+     wiegt als `.tabelle td` daneben und die Zelle sonst auch hier ein Block
+     ueber die volle Breite bliebe. */
+  .tabelle [data-spalte="Bild"] { display: table-cell; width: 4rem; padding: var(--knapp); }
+
+  /* Hier greift die Zusage aus 4.4 wirklich: elf Spalten nebeneinander, und
+     eine Zeile, die mal 3rem und mal gar nichts hoch ist, macht den
+     Zahlenvergleich kaputt, um den es in der Tabelle geht. Die Flaeche traegt
+     `--flaeche` wie die Zeile, in der sie steht - sie ist Platz, kein Bild
+     und erst recht kein Hinweis. Kein Text darin, kein Symbol. */
+  .tabelle [data-spalte="Bild"] img,
+  .tabelle [data-spalte="Bild"] .platzhalter {
+    display: block;
+    width: 4rem;
+    height: 3rem;
+    aspect-ratio: auto;
+    object-fit: cover;
+    background: var(--flaeche);
+    border-radius: 4px;
+  }
 
   .tabelle th {
     text-align: left;

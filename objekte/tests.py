@@ -48,8 +48,8 @@ from .choices import (
     Wertung,
     Zustand,
 )
-from .forms import STATUS_VORBELEGUNG
-from .models import Notiz, Objekt, Preisverlauf, Votum
+from .forms import STATUS_VORBELEGUNG, ObjektForm
+from .models import Bild, Notiz, Objekt, Preisverlauf, Votum
 from .portale import portal_und_id
 
 #: Der Modulname faengt mit einer Ziffer an - ein `import` schreibt sich dafuer
@@ -1030,6 +1030,53 @@ class ObjektlisteTests(TestCase):
         )
 
 
+class DatenblockParser(HTMLParser):
+    """Liest den Datenblock der Objektansicht als Paare Beschriftung -> Wert.
+
+    Gemessen wird damit, was neben einem Feldnamen WIRKLICH steht. Ein Zeuge
+    auf die blosse Anwesenheit einer Zeichenkette faende einen Strich auch
+    dann, wenn er zu einem ganz anderen Feld gehoert.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.paare = {}
+        self._im_block = False
+        self._marke = None
+        self._text = ""
+        self._name = None
+
+    def handle_starttag(self, tag, attrs):
+        werte = dict(attrs)
+        if tag == "dl" and "daten" in werte.get("class", "").split():
+            self._im_block = True
+        elif self._im_block and tag in ("dt", "dd"):
+            self._marke = tag
+            self._text = ""
+
+    def handle_endtag(self, tag):
+        if tag == "dl":
+            self._im_block = False
+        elif self._im_block and tag == self._marke:
+            text = " ".join(self._text.split())
+            if tag == "dt":
+                self._name = text
+            elif self._name is not None:
+                self.paare[self._name] = text
+                self._name = None
+            self._marke = None
+
+    def handle_data(self, daten):
+        if self._marke:
+            self._text += daten
+
+
+def daten_paare(antwort):
+    parser = DatenblockParser()
+    parser.feed(antwort.content.decode())
+    return parser.paare
+
+
 class ObjektansichtTests(TestCase):
     """Ein Template, vier getrennte Aktionen. Kein Inline-Edit."""
 
@@ -1063,10 +1110,39 @@ class ObjektansichtTests(TestCase):
     def test_gefuellte_felder_werden_gezeigt(self):
         self.assertContains(self._seite(), "Wohnfläche")
 
-    def test_leere_felder_werden_ausgelassen(self):
-        # Nicht als "—" gezeigt. Eine Liste aus zwanzig Gedankenstrichen
-        # verdeckt die drei Zeilen, die tatsaechlich etwas sagen.
-        self.assertNotContains(self._seite(), "Baujahr")
+    def test_leere_felder_werden_ANGEZEIGT(self):
+        """UMGEDREHT am 03.09. Die Zusage dahinter ist die andere geworden.
+
+        Bis dahin galt: ein leeres Feld wird ausgelassen, weil eine Liste aus
+        zwanzig Gedankenstrichen die drei Zeilen verdeckt, die etwas sagen.
+        Das ist die Haltung der LISTE - dort stehen fuenfzig Zeilen
+        nebeneinander und jede Spalte kostet Platz.
+
+        Auf der Objektansicht ist es umgekehrt: ein leeres Feld ist die
+        AUFFORDERUNG, es zu fuellen, und genau dafuer gibt es diese Seite. Was
+        gar nicht dasteht, faellt niemandem auf und wird nie nachgetragen.
+
+        Der Zeuge misst weiter dieselbe Stelle, nur mit umgekehrtem Vorzeichen:
+        `baujahr` ist am Objekt dieser Klasse nicht gesetzt.
+        """
+        self.assertIsNone(self.objekt.baujahr)
+        self.assertContains(self._seite(), "Baujahr")
+
+    def test_ein_leeres_feld_zeigt_einen_strich_und_nicht_nichts(self):
+        """Man muss SEHEN, dass die Angabe fehlt - sonst haelt man sie fuer Null.
+
+        Getrennt vom Zeugen darueber: dass die Beschriftung dasteht, sagt noch
+        nicht, dass daneben etwas steht. Ein leeres `<dd>` truege den Namen des
+        Feldes und liesse offen, ob der Wert fehlt oder 0 ist.
+
+        Gemessen wird am PAAR und nicht an der blossen Anwesenheit eines
+        Strichs irgendwo auf der Seite: die Sabotage-Gegenprobe hat genau das
+        aufgedeckt - ein Zeuge auf `assertContains("—")` blieb gruen, waehrend
+        das Baujahr seinen Strich schon verloren hatte, weil neun andere
+        Felder ihre noch trugen.
+        """
+        self.assertIsNone(self.objekt.baujahr)
+        self.assertEqual(daten_paare(self._seite()).get("Baujahr"), "—")
 
     def test_der_link_zum_inserat_traegt_noopener(self):
         self.assertContains(self._seite(), 'rel="noopener noreferrer"')
@@ -2986,7 +3062,8 @@ class KommentarTests(TestCase):
     #: So viele Kommentarbloecke stehen in der Vorlage. Ausgeschrieben und
     #: nicht mitgezaehlt: faellt ein Block heraus oder kommt einer dazu, soll
     #: das AUFFALLEN und nicht stillschweigend in die Ableitung wandern.
-    BLOECKE = 6
+    #: Am 03.09. von sechs auf sieben: die Bildzelle hat ihren eigenen Block.
+    BLOECKE = 7
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -4891,3 +4968,455 @@ class PreisaenderungTests(ListenTestBasis):
         regel = regel[: regel.index("}")]
         self.assertIn("var(--gedaempft)", regel)
 
+
+
+# =========================================================================
+# Objektansicht, restliche Seiten, Bilder - Abschnitt 5 der Bauspezifikation
+# vom 03.09.
+# =========================================================================
+
+
+class BildParser(HTMLParser):
+    """Sammelt jedes `<img>` einer Seite mit allen seinen Attributen.
+
+    Von Hand statt mit einer Bibliothek, aus demselben Grund wie beim
+    `SpaltenParser` daueber: das Projekt haengt an Django, psycopg und dotenv,
+    und eine vierte Abhaengigkeit fuer einen Zeugen waere ein schlechter Tausch.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.bilder = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "img":
+            self.bilder.append(dict(attrs))
+
+
+def bilder_auf(antwort):
+    parser = BildParser()
+    parser.feed(antwort.content.decode())
+    return parser.bilder
+
+
+class ObjektansichtBezeichnungTests(TestCase):
+    """Die Bezeichnung der Objektansicht folgt der Rueckfall-Regel.
+
+    Drei getrennte Zeugen, weil es drei getrennte Zweige sind - in einer
+    Methode zusammengefasst maesse die zweite nichts mehr, sobald die erste
+    faellt. Dieselbe Aufteilung wie bei `ObjektbezeichnungTests`, nur eine
+    Ebene hoeher: dort wird `__str__` gemessen, hier die gerenderte Seite.
+
+    Gemessen wird am INHALT der Ueberschrift und nicht an der ganzen Antwort:
+    die URL steht auf der Seite ohnehin ein zweites Mal, naemlich im Verweis
+    zum Inserat. Ein `assertContains` auf die URL waere damit auch dann gruen,
+    wenn in der Ueberschrift etwas voellig anderes stuende.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _ueberschrift(self, objekt):
+        antwort = self.client.get(f"/objekt/{objekt.pk}/")
+        treffer = re.search(
+            r"<h1[^>]*>(.*?)</h1>", antwort.content.decode(), re.S
+        )
+        self.assertIsNotNone(treffer, "Die Seite hat keine Ueberschrift.")
+        return htmlwerkzeug.unescape(treffer.group(1)).strip()
+
+    def test_mit_titel_steht_der_titel(self):
+        objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/12345/",
+            portal=Portal.IDEALISTA,
+            inserats_id="12345",
+            titel="Finca bei Ronda",
+        )
+        self.assertEqual(self._ueberschrift(objekt), "Finca bei Ronda")
+
+    def test_ohne_titel_stehen_portal_und_inserats_id(self):
+        objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/12345/",
+            portal=Portal.IDEALISTA,
+            inserats_id="12345",
+        )
+        self.assertEqual(self._ueberschrift(objekt), "idealista · 12345")
+
+    def test_ohne_titel_und_ohne_schluessel_steht_die_url(self):
+        url = "https://beispiel.de/ein/sehr/langes/inserat/ohne/erkanntes/muster"
+        objekt = Objekt.objects.create(url=url)
+        self.assertEqual(self._ueberschrift(objekt), url)
+
+
+#: Die Felder aus Abschnitt 2.4: was am Objekt hinterlegt ist und in der
+#: Liste nicht vorkommt. Die Beschriftung, nicht der Feldname - gemessen wird,
+#: was auf der Seite steht.
+FELDER_DES_DATENBLOCKS = (
+    "Objekttyp",
+    "Zimmer",
+    "Baujahr",
+    "Zustand",
+    "Region",
+    "Portal",
+    "Inserats-ID",
+    "Quelle",
+    "Beschreibung",
+)
+
+
+class ObjektansichtDatenblockTests(TestCase):
+    """Der Datenblock zeigt ALLE Felder - auch die leeren.
+
+    Das Objekt dieser Klasse traegt ausser der URL nichts. Damit ist jedes
+    Feld des Blocks leer, und der Zeuge misst genau den Fall, um den es geht:
+    ein leeres Feld ist die Aufforderung, es zu fuellen. Was gar nicht
+    dasteht, faellt niemandem auf und wird nie nachgetragen.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1")
+
+    def _seite(self):
+        return self.client.get(f"/objekt/{self.objekt.pk}/")
+
+    def test_das_objekt_dieser_klasse_ist_wirklich_leer(self):
+        """Riegel gegen einen Zeugen im Vakuum.
+
+        Truege das Objekt Werte, maesse der Zeuge unten nicht mehr, dass LEERE
+        Felder angezeigt werden - sondern nur, dass gefuellte es tun.
+        """
+        for name in ("objekttyp", "region", "portal", "inserats_id", "beschreibung"):
+            with self.subTest(feld=name):
+                self.assertEqual(getattr(self.objekt, name), "")
+        self.assertIsNone(self.objekt.zimmer)
+        self.assertIsNone(self.objekt.baujahr)
+
+    def test_jedes_feld_des_datenblocks_steht_auf_der_seite(self):
+        antwort = self._seite()
+        for beschriftung in FELDER_DES_DATENBLOCKS:
+            with self.subTest(feld=beschriftung):
+                self.assertContains(antwort, beschriftung)
+
+    def test_die_zahlen_des_kopfblocks_stehen_ebenfalls_da(self):
+        """Abschnitt 2.2: die Vergleichsgrundlage steht oben, nicht in einer
+        Tabellenzeile weiter unten - und auch dann, wenn sie fehlt."""
+        antwort = self._seite()
+        for beschriftung in ("Preis je m²", "Wohnfläche", "Grundstücksgröße",
+                             "Wert nach Renovierung"):
+            with self.subTest(feld=beschriftung):
+                self.assertContains(antwort, beschriftung)
+
+
+class ObjektansichtVotaTests(TestCase):
+    """Alle sehen alle Vota. Eine Ansicht, die nur das eigene zeigt, waere ein
+    Fehlstand - `02_Datenmodell.md` sagt ausdruecklich: kein verdecktes
+    Abstimmen.
+
+    Gemessen wird mit DREI Personen und nicht mit zweien: bei zwei Vota liesse
+    sich "alle ausser meinem" nicht von "eines der anderen" unterscheiden.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="lang-genug-123", first_name="Steffen", last_name="P."
+        )
+        self.anna = Person.objects.create_user("anna", first_name="Anna", last_name="B.")
+        self.nico = Person.objects.create_user("nico", first_name="Nico", last_name="C.")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1", titel="Finca")
+        Votum.objects.create(
+            objekt=self.objekt, person=self.person, wertung=Wertung.DAFUER
+        )
+        Votum.objects.create(
+            objekt=self.objekt, person=self.anna, wertung=Wertung.ANSCHAUEN,
+            begruendung="Dach ansehen",
+        )
+        Votum.objects.create(
+            objekt=self.objekt, person=self.nico, wertung=Wertung.RAUS
+        )
+
+    def _seite(self):
+        return self.client.get(f"/objekt/{self.objekt.pk}/")
+
+    def test_das_votum_der_zweiten_person_steht_da(self):
+        self.assertContains(self._seite(), "Anna B.")
+
+    def test_das_votum_der_dritten_person_steht_ebenfalls_da(self):
+        self.assertContains(self._seite(), "Nico C.")
+
+    def test_die_wertung_der_anderen_steht_dabei(self):
+        # Ohne sie waere der Name eine Zeile ohne Aussage.
+        self.assertContains(self._seite(), "anschauen")
+
+    def test_die_begruendung_der_anderen_steht_dabei(self):
+        self.assertContains(self._seite(), "Dach ansehen")
+
+    def test_das_eigene_votum_bleibt_erkennbar(self):
+        # Der Riegel dagegen, dass "alle Vota" die eigene Markierung frisst.
+        self.assertContains(self._seite(), 'value="dafuer" aria-pressed="true"')
+
+
+class BilderInDerObjektansichtTests(TestCase):
+    """Alle Bilder als einfaches Raster - und ohne Bilder kein `<img>`."""
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1", titel="Finca")
+
+    def _seite(self):
+        return self.client.get(f"/objekt/{self.objekt.pk}/")
+
+    def _bilder_anlegen(self, anzahl):
+        for nummer in range(anzahl):
+            Bild.objects.create(
+                objekt=self.objekt,
+                url=f"https://bilder.example/{nummer}.jpg",
+                reihenfolge=nummer,
+            )
+
+    # --- ohne Bilder -------------------------------------------------------
+
+    def test_ohne_bilder_antwortet_die_seite(self):
+        self.assertEqual(self._seite().status_code, 200)
+
+    def test_ohne_bilder_steht_kein_einziges_img_auf_der_seite(self):
+        """Kein `<img>` mit leerer Adresse - der Browser holte sonst die Seite
+        selbst ein zweites Mal ab, und im Layout stuende ein kaputtes Symbol."""
+        self.assertEqual(bilder_auf(self._seite()), [])
+
+    # --- mit Bildern -------------------------------------------------------
+
+    def test_die_ansicht_zeigt_ALLE_bilder(self):
+        self._bilder_anlegen(4)
+        self.assertEqual(len(bilder_auf(self._seite())), 4)
+
+    def test_jedes_bild_traegt_seine_eigene_adresse(self):
+        self._bilder_anlegen(3)
+        adressen = [bild.get("src") for bild in bilder_auf(self._seite())]
+        self.assertEqual(
+            adressen,
+            [f"https://bilder.example/{n}.jpg" for n in range(3)],
+        )
+
+    def test_jedes_bild_wird_verzoegert_geladen(self):
+        """`loading="lazy"`: geladen wird, was sichtbar ist. Die Bilder liegen
+        beim Portal, und ein Aufruf holt sonst zwanzig fremde Adressen auf
+        einmal ab."""
+        self._bilder_anlegen(3)
+        for bild in bilder_auf(self._seite()):
+            with self.subTest(src=bild.get("src")):
+                self.assertEqual(bild.get("loading"), "lazy")
+
+    def test_jedes_bild_traegt_die_referrer_einstellung(self):
+        """Portale binden Bildadressen an den Verweis. Ohne
+        `referrerpolicy="no-referrer"` bleibt die Flaeche leer, und niemand
+        koennte sagen warum."""
+        self._bilder_anlegen(3)
+        for bild in bilder_auf(self._seite()):
+            with self.subTest(src=bild.get("src")):
+                self.assertEqual(bild.get("referrerpolicy"), "no-referrer")
+
+    def test_keine_galerie_und_kein_vergroessern(self):
+        """Kein JavaScript auf dieser Seite - die Ausnahme ist allein das
+        Lesezeichen, und das steht auf einer anderen Adresse."""
+        self._bilder_anlegen(3)
+        inhalt = self._seite().content.decode()
+        for verboten in ("<script", "onclick", "onerror"):
+            with self.subTest(verboten=verboten):
+                self.assertNotIn(verboten, inhalt)
+
+
+class BilderInDerListeTests(ListenTestBasis):
+    """Die Liste zeigt GENAU EIN Bild je Zeile - und ohne Bild eine Flaeche."""
+
+    def _objekt_mit_bildern(self, anzahl, **felder):
+        objekt = Objekt.objects.create(url="https://beispiel.de/1", **felder)
+        for nummer in range(anzahl):
+            Bild.objects.create(
+                objekt=objekt,
+                url=f"https://bilder.example/{nummer}.jpg",
+                reihenfolge=nummer,
+            )
+        return objekt
+
+    def test_die_liste_zeigt_genau_ein_bild_je_objekt(self):
+        self._objekt_mit_bildern(5)
+        self.assertEqual(len(bilder_auf(self.client.get("/"))), 1)
+
+    def test_die_liste_zeigt_das_ERSTE_bild(self):
+        """Nach `reihenfolge`, nicht nach Zufall. Das erste Bild eines Inserats
+        ist die Aussenansicht - das dritte ist das Bad."""
+        self._objekt_mit_bildern(5)
+        self.assertEqual(
+            bilder_auf(self.client.get("/"))[0].get("src"),
+            "https://bilder.example/0.jpg",
+        )
+
+    def test_das_bild_der_liste_wird_verzoegert_geladen(self):
+        self._objekt_mit_bildern(2)
+        self.assertEqual(bilder_auf(self.client.get("/"))[0].get("loading"), "lazy")
+
+    def test_das_bild_der_liste_traegt_die_referrer_einstellung(self):
+        self._objekt_mit_bildern(2)
+        self.assertEqual(
+            bilder_auf(self.client.get("/"))[0].get("referrerpolicy"), "no-referrer"
+        )
+
+    def test_ohne_bild_steht_kein_img_in_der_zeile(self):
+        Objekt.objects.create(url="https://beispiel.de/ohne")
+        self.assertEqual(bilder_auf(self.client.get("/")), [])
+
+    def test_ohne_bild_steht_stattdessen_die_ruhige_flaeche(self):
+        """Sie haelt die Zeilenhoehe gleich. Eine Liste, in der jede zweite
+        Zeile eine andere Hoehe hat, ist unlesbar - und der Zahlenvergleich,
+        um den es in der Tabelle geht, ist dahin."""
+        Objekt.objects.create(url="https://beispiel.de/ohne")
+        self.assertContains(self.client.get("/"), 'class="platzhalter"')
+
+    def test_die_bildspalte_traegt_einen_spaltenkopf(self):
+        """Unter 48rem ist die Tabelle eine Kartenliste; `thead` steht dort nur
+        noch fuer Screenreader. Ohne Kopf haette die Zelle dort keinen Namen -
+        und `test_jede_zelle_traegt_die_bezeichnung_ihres_spaltenkopfs` faenge
+        es nicht ab, weil er beide Seiten gegeneinander vergleicht."""
+        Objekt.objects.create(url="https://beispiel.de/ohne")
+        self.assertContains(self.client.get("/"), '<th data-spalte="Bild">Bild</th>')
+
+
+class AbfragezahlMitBildernTests(TestCase):
+    """Abschnitt 4.3 - der kritische Punkt dieser Runde.
+
+    Die Bild-URLs liegen in einer eigenen Tabelle. Ein Zugriff auf
+    `objekt.bilder` im Template waere bei fuenfzig Zeilen einundfuenfzig
+    Abfragen - dasselbe N+1-Muster wie beim Preisverlauf, und in genau der
+    Ansicht, die den ganzen Bestand zeigt.
+
+    Aufbau wie bei `test_mehr_preisverlauf_kostet_nicht_mehr_abfragen`: mit
+    gesetztem Filter und gesetzter Sortierung (beides veraendert den
+    Abfragepfad), die erwartete Zahl beim ersten Durchgang ERMITTELT statt
+    hingeschrieben, und beide Messungen auf einer Seite.
+
+    Gemessen wird an Objekten mit Bildern UND Preisverlauf - so, wie sie nach
+    einer Uebernahme ueber das Lesezeichen wirklich aussehen. Ein Zeuge, der
+    nur eines von beiden aufbaut, laesst offen, ob die beiden Subqueries
+    nebeneinander noch halten.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    ADRESSE = "/?status=neu&sortierung=-qm_preis"
+
+    def _anlegen(self, von, bis, bilder=3):
+        for nummer in range(von, bis):
+            objekt = Objekt.objects.create(
+                url=f"https://x/{nummer}", aktueller_preis=Decimal("200000")
+            )
+            objekt.preis_setzen(self.person, Decimal("180000"))
+            for lauf in range(bilder):
+                Bild.objects.create(
+                    objekt=objekt,
+                    url=f"https://bilder.example/{nummer}-{lauf}.jpg",
+                    reihenfolge=lauf,
+                )
+
+    def test_mehr_bilder_kosten_nicht_mehr_abfragen(self):
+        self.client.get(self.ADRESSE)  # Aufwaermen, damit der Verbindungsaufbau
+        self._anlegen(0, 5)            # nicht mitzaehlt.
+        with CaptureQueriesContext(connection) as mit_fuenf:
+            self.client.get(self.ADRESSE)
+        self._anlegen(5, views.OBJEKTE_JE_SEITE)
+        with self.assertNumQueries(len(mit_fuenf)):
+            self.client.get(self.ADRESSE)
+
+    def test_das_bild_ist_bei_dieser_messung_ueberhaupt_da(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Zeigte die Liste gar kein Bild an - weil die Annotation fehlt, das
+        Template den Zweig nicht betritt oder der Filter die Objekte
+        ausblendet -, waere die Abfragezahl selbstverstaendlich konstant und
+        der Zeuge darueber gruen, ohne irgendetwas zu messen.
+        """
+        self._anlegen(0, 1)
+        self.assertEqual(len(bilder_auf(self.client.get(self.ADRESSE))), 1)
+
+    def test_die_messung_laeuft_ueber_alle_fuenfzig_zeilen(self):
+        """Zweiter Riegel: blaetterte die Liste nach fuenf Zeilen um, maesse
+        der Zeuge oben zweimal dieselbe Seitengroesse."""
+        self._anlegen(0, views.OBJEKTE_JE_SEITE)
+        self.assertEqual(
+            len(self.client.get(self.ADRESSE).context["objekte"]),
+            views.OBJEKTE_JE_SEITE,
+        )
+
+    def test_die_annotation_kostet_ueberhaupt_keine_eigene_abfrage(self):
+        """Die Adresse des ersten Bildes steht in DERSELBEN Anweisung wie die
+        Liste. Ein `prefetch_related` waere konstant, aber eine Abfrage mehr -
+        und ein zweites Aggregat neben den drei Votumzaehlungen erzeugte ein
+        Kreuzprodukt und machte die Votumzahlen still falsch.
+        """
+        with CaptureQueriesContext(connection) as abfragen:
+            list(Objekt.objects.mit_erstem_bild())
+        self.assertEqual(len(abfragen.captured_queries), 1)
+        # Und die eine Anweisung traegt die Bildtabelle wirklich in sich -
+        # sonst waere die Zaehlung oben auch dann gruen, wenn die Annotation
+        # gar nicht mehr gezogen wuerde.
+        self.assertIn(
+            Bild._meta.db_table, abfragen.captured_queries[0]["sql"].lower()
+        )
+
+    def test_die_votumzaehlung_bleibt_neben_den_bildern_richtig(self):
+        """Der eigentliche Grund fuer die Subquery statt eines JOINs.
+
+        Drei Bilder an einem Objekt mit EINEM Votum: haenge die Bildspalte als
+        JOIN an dieselbe Abfrage, vervielfachte jedes Bild jedes Votum, und in
+        der Spalte stuende "3 dafür" - still falsch und von aussen nicht als
+        Fehler erkennbar.
+        """
+        objekt = Objekt.objects.create(url="https://x/1")
+        Votum.objects.create(objekt=objekt, person=self.person, wertung=Wertung.DAFUER)
+        for lauf in range(3):
+            Bild.objects.create(
+                objekt=objekt, url=f"https://bilder.example/{lauf}.jpg", reihenfolge=lauf
+            )
+        gelesen = self.client.get("/").context["objekte"][0]
+        self.assertEqual(gelesen.votum_dafuer, 1)
+
+
+class BearbeitenFormularTests(TestCase):
+    """Die Felder stehen im Template namentlich in Gruppen. Der Preis dafuer
+    ist, dass ein spaeter ergaenztes Feld der Formklasse stumm von der Seite
+    fiele - dieser Zeuge ist der Riegel dagegen.
+
+    Gelaufen wird ueber `visible_fields` der Formklasse und NICHT ueber eine
+    hier abgeschriebene Liste: eine zweite Liste driftet von der ersten weg,
+    und genau das soll der Zeuge ja bemerken.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1", titel="Finca")
+
+    def _seite(self):
+        return self.client.get(f"/objekt/{self.objekt.pk}/bearbeiten/")
+
+    def test_das_formular_hat_ueberhaupt_sichtbare_felder(self):
+        """Riegel gegen einen Zeugen im Vakuum: ueber eine leere Liste laeuft
+        auch der gruendlichste Vergleich gruen durch."""
+        self.assertNotEqual(list(ObjektForm().visible_fields()), [])
+
+    def test_jedes_feld_der_formklasse_steht_auf_der_seite(self):
+        antwort = self._seite()
+        for feld in ObjektForm(instance=self.objekt).visible_fields():
+            with self.subTest(feld=feld.name):
+                self.assertContains(antwort, f'id="{feld.auto_id}"')
+
+    def test_der_hinweis_am_preisfeld_steht_sichtbar_auf_der_seite(self):
+        """Ein leeres Preisfeld heisst "nicht ändern". Diese Regel ist sonst
+        nirgends auffindbar - sie steht als `help_text` an der Formklasse und
+        muss auch gerendert werden."""
+        self.assertContains(self._seite(), "Leer heißt: nicht ändern.")

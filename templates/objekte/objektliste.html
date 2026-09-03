@@ -108,6 +108,7 @@
       <table>
         <thead>
           <tr>
+            <th data-spalte="Bild">Bild</th>
             <th data-spalte="Objekt">Objekt</th>
             <th data-spalte="Ort">Ort</th>
             <th data-spalte="Region / Land">Region / Land</th>
@@ -123,7 +124,30 @@
         <tbody>
           {% for o in objekte %}
             <tr>
-              <td data-spalte="Objekt"><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
+              {% comment %}
+                Genau EIN Bild je Zeile, und es kommt als Annotation `erstes_bild`
+                aus der Abfrage - nicht ueber `o.bilder`, das waere je Zeile eine
+                eigene Abfrage. Ab 48rem ist die Zelle eine schmale erste Spalte,
+                darunter der Kopf der Karte.
+
+                Ohne Bild steht hier eine leere Flaeche in DERSELBEN Groesse und
+                kein `<img>` mit leerer Adresse: eine Zeile, die mal hoch und mal
+                niedrig ist, macht genau den Zahlenvergleich kaputt, um den es in
+                der Tabelle geht. Kein Text darin, kein Symbol - die Flaeche sagt
+                schon alles, was zu sagen ist.
+
+                `referrerpolicy="no-referrer"`, weil Portale Bildadressen an den
+                Verweis binden. Kein `onerror`: die Oberflaeche kommt ohne Skript
+                aus. Verschwindet ein Inserat, bleibt die ruhige Flaeche.
+              {% endcomment %}
+              <td data-spalte="Bild">
+                {% if o.erstes_bild %}
+                  <img src="{{ o.erstes_bild }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+                {% else %}
+                  <span class="platzhalter"></span>
+                {% endif %}
+              </td>
+              <td data-spalte="Objekt" class="bezeichnung"><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
               <td data-spalte="Ort">{{ o.ort|default:"—" }}</td>
               <td data-spalte="Region / Land">{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
               <td data-spalte="Wohnfläche">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>

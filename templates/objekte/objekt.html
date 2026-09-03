@@ -1,64 +1,191 @@
 {% extends "basis.html" %}
+{% load l10n %}
 
 {% block titel %}{{ objekt }} · Objektradar{% endblock %}
 
 {% block inhalt %}
-  <p><a href="{% url 'objektliste' %}">zurück zur Liste</a></p>
+  <p class="zurueck"><a href="{% url 'objektliste' %}">zurück zur Liste</a></p>
 
-  <h1>{{ objekt }}</h1>
-  <p>
-    {% if objekt.aktueller_preis %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}kein Preis erfasst{% endif %}
-    {% if objekt.qm_preis %}· {{ objekt.qm_preis|floatformat:0 }} €/m²{% endif %}
-    · {{ objekt.get_status_display }}
-    · <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
+  {% comment %}
+    Die Bezeichnung kommt als `{{ objekt }}` aus dem Modell - Titel,
+    ersatzweise Portal und Inserats-ID, ersatzweise die URL - und wird hier
+    nicht nachgebaut. Zwei Formeln fuer eine Regel driften auseinander.
+
+    Gekappt wird sie in JEDEM Fall auf eine Zeile. Faellt sie auf die URL
+    zurueck, hat sie keine Leerstelle zum Umbrechen: sie schoebe die Seite in
+    die Breite, und eine waagerecht scrollende Seite ist am Handy nicht mehr
+    zu lesen. Das `title` haelt den vollen Text fuer den Fall bereit, dass die
+    Kappung wirklich greift.
+  {% endcomment %}
+  <h1 class="bezeichnung" title="{{ objekt }}">{{ objekt }}</h1>
+
+  {% comment %}
+    Die ruhige Zeile unter der Bezeichnung. Der Status ist eine MARKE und kein
+    Fliesstext: er wird gesucht, nicht gelesen, und in einem Satz mit Ort und
+    Link findet ihn das Auge nicht wieder.
+  {% endcomment %}
+  <p class="objektzeile">
+    <span class="ort">{{ objekt.ort|default:"—" }}{% if objekt.land %} · {{ objekt.get_land_display }}{% endif %}</span>
+    <span class="statusmarke">{{ objekt.get_status_display }}</span>
+    <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
   </p>
 
-  <h2>Daten</h2>
-  <dl>
-    {% if objekt.titel %}<dt>Titel</dt><dd>{{ objekt.titel }}</dd>{% endif %}
-    {% if objekt.ort %}<dt>Ort</dt><dd>{{ objekt.ort }}</dd>{% endif %}
-    {% if objekt.region %}<dt>Region</dt><dd>{{ objekt.region }}</dd>{% endif %}
-    {% if objekt.land %}<dt>Land</dt><dd>{{ objekt.get_land_display }}</dd>{% endif %}
-    {% if objekt.objekttyp %}<dt>Objekttyp</dt><dd>{{ objekt.get_objekttyp_display }}</dd>{% endif %}
-    {% if objekt.wohnflaeche %}<dt>Wohnfläche</dt><dd>{{ objekt.wohnflaeche|floatformat:0 }} m²</dd>{% endif %}
-    {% if objekt.grundstuecksgroesse %}<dt>Grundstück</dt><dd>{{ objekt.grundstuecksgroesse|floatformat:0 }} m²</dd>{% endif %}
-    {% if objekt.zimmer %}<dt>Zimmer</dt><dd>{{ objekt.zimmer|floatformat:"-1" }}</dd>{% endif %}
-    {% if objekt.baujahr %}<dt>Baujahr</dt><dd>{{ objekt.baujahr }}</dd>{% endif %}
-    {% if objekt.zustand %}<dt>Zustand</dt><dd>{{ objekt.get_zustand_display }}</dd>{% endif %}
-    {% if objekt.wert_nach_renovierung %}<dt>Wert nach Renovierung</dt><dd>{{ objekt.wert_nach_renovierung|floatformat:0 }} €</dd>{% endif %}
-    {% if objekt.portal %}<dt>Portal</dt><dd>{{ objekt.get_portal_display }}</dd>{% endif %}
-    {% if objekt.inserats_id %}<dt>Inserats-ID</dt><dd>{{ objekt.inserats_id }}</dd>{% endif %}
-    {% if objekt.beschreibung %}<dt>Beschreibung</dt><dd>{{ objekt.beschreibung|linebreaksbr }}</dd>{% endif %}
-  </dl>
-  <p><a href="{% url 'objekt_bearbeiten' objekt.pk %}">Bearbeiten</a></p>
+  {% comment %}
+    Zahlen zuerst: der Block, der die Kaufentscheidung traegt. Der Kaufpreis
+    steht groesser als alles andere auf der Seite, die Preisaenderung
+    darunter und kleiner - dieselbe Bauform und dieselben Klassen wie in der
+    Liste, damit eine Senkung an beiden Stellen gleich aussieht.
 
+    Geprueft wird auf `is not None` und NICHT auf den Wahrheitswert: ein
+    Kaufpreis von 0 faellt sonst als "kein Preis erfasst" durch, und die
+    Angabe verschwaende wortlos.
+
+    Fehlt ein Wert, steht ein gedaempfter Strich da und nicht nichts. Eine
+    leere Stelle liest sich wie eine Null, und eine Null ist etwas anderes als
+    "nicht bekannt".
+  {% endcomment %}
+  <div class="zahlen">
+    <p class="kaufpreis">
+      {% if objekt.aktueller_preis is not None %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}<span class="fehlt">—</span>{% endif %}
+    </p>
+    {% if preisaenderung %}
+      <p class="preisaenderung{% if preisaenderung.senkung %} senkung{% endif %}">
+        <s>{{ preisaenderung.vorher|floatformat:0 }} €</s>
+        · {% if preisaenderung.prozent > 0 %}+{% endif %}{{ preisaenderung.prozent|floatformat:"-1" }} %
+        · {{ preisaenderung.datum|date:"d.m.Y" }}
+      </p>
+    {% endif %}
+
+    <dl class="kennzahlen">
+      <div>
+        <dt>Preis je m²</dt>
+        <dd>{% if objekt.qm_preis %}{{ objekt.qm_preis|floatformat:0 }} €/m²{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Wohnfläche</dt>
+        <dd>{% if objekt.wohnflaeche %}{{ objekt.wohnflaeche|floatformat:0 }} m²{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Grundstücksgröße</dt>
+        <dd>{% if objekt.grundstuecksgroesse %}{{ objekt.grundstuecksgroesse|floatformat:0 }} m²{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Wert nach Renovierung</dt>
+        <dd>{% if objekt.wert_nach_renovierung is not None %}{{ objekt.wert_nach_renovierung|floatformat:0 }} €{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+      </div>
+    </dl>
+  </div>
+
+  {% comment %}
+    Bilder sind nur verlinkt, nie gespeichert. Daraus folgt beides hier:
+    `loading="lazy"`, damit der Browser beim Portal nur holt, was sichtbar
+    ist, und `referrerpolicy="no-referrer"`, weil Portale Bildadressen an den
+    Verweis binden.
+
+    Ein einfaches Raster, keine Galerie und kein Vergroessern: das braeuchte
+    JavaScript, und wer gross sehen will, klickt aufs Inserat. Verschwindet
+    ein Inserat, bleibt eine ruhige Flaeche - kein `onerror`, kein kaputtes
+    Symbol.
+
+    Ohne Bilder steht der Block gar nicht da. Die Platzhalterflaeche aus 4.4
+    haelt die Zeilenhoehe der LISTE gleich; hier gibt es keine Zeile, die
+    springen koennte, und ein leerer Kasten unter einer Ueberschrift "Bilder"
+    waere eine Angabe ueber nichts.
+  {% endcomment %}
   {% if objekt.bilder.all %}
     <h2>Bilder</h2>
-    {% for bild in objekt.bilder.all %}
-      <img src="{{ bild.url }}" alt="" loading="lazy" width="320">
-    {% endfor %}
+    <div class="bilder">
+      {% for bild in objekt.bilder.all %}
+        <img src="{{ bild.url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      {% endfor %}
+    </div>
   {% endif %}
 
+  {% comment %}
+    ALLE am Objekt hinterlegten Felder, auch die leeren. Ein leeres Feld ist
+    die Aufforderung, es zu fuellen - genau dafuer gibt es diese Ansicht, und
+    ein ausgeblendetes Feld faellt niemandem auf.
+
+    Ort, Land und die Zahlen stehen nicht noch einmal hier: die einen tragen
+    die Zeile unter der Bezeichnung, die anderen den Block darueber. Derselbe
+    Wert zweimal sagt nichts Zweites.
+  {% endcomment %}
+  <h2>Daten</h2>
+  <dl class="daten">
+    <dt>Objekttyp</dt>
+    <dd>{% if objekt.objekttyp %}{{ objekt.get_objekttyp_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Zimmer</dt>
+    <dd>{% if objekt.zimmer is not None %}{{ objekt.zimmer|floatformat:"-1" }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Baujahr</dt>
+    <dd>{% if objekt.baujahr %}{{ objekt.baujahr|unlocalize }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Zustand</dt>
+    <dd>{{ objekt.get_zustand_display }}</dd>
+    <dt>Region</dt>
+    <dd>{% if objekt.region %}{{ objekt.region }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Portal</dt>
+    <dd>{% if objekt.portal %}{{ objekt.get_portal_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Inserats-ID</dt>
+    <dd>{% if objekt.inserats_id %}{{ objekt.inserats_id }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+    <dt>Quelle</dt>
+    <dd>{{ objekt.get_quelle_display }}</dd>
+    <dt>Beschreibung</dt>
+    <dd>{% if objekt.beschreibung %}{{ objekt.beschreibung|linebreaksbr }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+  </dl>
+
+  {% comment %}
+    Bearbeiten ist die haeufigste Handlung dieser Seite und steht deshalb als
+    Knopf am Datenblock. Als kleiner Textlink neben "Notiz speichern" wurde er
+    uebersehen - und damit sah die seltenere Handlung wichtiger aus als die
+    haeufigere.
+
+    Ein `<a>` und kein `<button>`: es fuehrt auf eine andere Seite und
+    veraendert nichts. Wie es aussieht, entscheidet die Klasse.
+  {% endcomment %}
+  <p class="handlung"><a class="knopf" href="{% url 'objekt_bearbeiten' objekt.pk %}">Bearbeiten</a></p>
+
+  {% comment %}
+    Das Votum ist die Kernfunktion der Gruppe und bekommt deshalb einen
+    eigenen Block. Die drei Wertungen stehen als drei getrennte Knoepfe da,
+    nicht in einer Auswahlliste: eine Wahl aus dreien liest man auf einen
+    Blick, eine zugeklappte Liste nicht.
+
+    Reihenfolge und Schreibweise von `value` und `aria-pressed` sind
+    unveraendert - `test_das_eigene_votum_ist_erkennbar` misst genau daran,
+    dass die eigene Wertung markiert ist.
+  {% endcomment %}
   <h2>Votum</h2>
-  <form method="post" action="{% url 'votum_setzen' objekt.pk %}">
+  <form method="post" action="{% url 'votum_setzen' objekt.pk %}" class="votum">
     {% csrf_token %}
     <label for="id_begruendung">Begründung</label>
     <textarea name="begruendung" id="id_begruendung" rows="2">{{ eigenes_votum.begruendung|default:"" }}</textarea>
-    {% for wert, beschriftung in wertungen %}
-      <button type="submit" name="wertung" value="{{ wert }}"{% if eigenes_votum.wertung == wert %} aria-pressed="true"{% endif %}>{{ beschriftung }}{% if eigenes_votum.wertung == wert %} ✓{% endif %}</button>
-    {% endfor %}
+    <div class="wertungen">
+      {% for wert, beschriftung in wertungen %}
+        <button type="submit" name="wertung" value="{{ wert }}"{% if eigenes_votum.wertung == wert %} aria-pressed="true"{% endif %} class="wertung{% if eigenes_votum.wertung == wert %} gewaehlt{% endif %}">{{ beschriftung }}{% if eigenes_votum.wertung == wert %} ✓{% endif %}</button>
+      {% endfor %}
+    </div>
   </form>
 
+  {% comment %}
+    Alle sehen alle Vota - kein verdecktes Abstimmen. Die eigene Wertung steht
+    oben im Formular und ist dort markiert, die der anderen hier.
+  {% endcomment %}
+  <h3>Vota der anderen</h3>
   {% if andere_vota %}
-    <ul>
+    <ul class="vota">
       {% for votum in andere_vota %}
-        <li>{{ votum.person.anzeigename }}: {{ votum.get_wertung_display }}{% if votum.begruendung %} — {{ votum.begruendung }}{% endif %}</li>
+        <li>
+          <span class="person">{{ votum.person.anzeigename }}</span>
+          <span class="wertung">{{ votum.get_wertung_display }}</span>
+          {% if votum.begruendung %}<span class="begruendung">{{ votum.begruendung }}</span>{% endif %}
+        </li>
       {% endfor %}
     </ul>
+  {% else %}
+    <p class="nichts">Von den anderen hat noch niemand abgestimmt.</p>
   {% endif %}
 
   <h2>Status</h2>
-  <form method="post" action="{% url 'status_setzen' objekt.pk %}">
+  <form method="post" action="{% url 'status_setzen' objekt.pk %}" class="statuswechsel">
     {% csrf_token %}
     <label for="id_status">Status</label>
     <select name="status" id="id_status">
@@ -66,20 +193,46 @@
         <option value="{{ wert }}"{% if objekt.status == wert %} selected{% endif %}>{{ beschriftung }}</option>
       {% endfor %}
     </select>
-    <button type="submit">Status setzen</button>
+    <button type="submit" class="ruhig">Status setzen</button>
   </form>
 
   {% if statusaenderungen %}
-    <ul>
+    <ul class="verlauf">
       {% for aenderung in statusaenderungen %}
         <li>{{ aenderung.datum|date:"d.m.Y H:i" }} — {{ aenderung.person.anzeigename|default:"—" }}: {{ aenderung.get_alter_status_display }} → {{ aenderung.get_neuer_status_display }}</li>
       {% endfor %}
     </ul>
   {% endif %}
 
+  {% comment %}
+    Erst die bestehenden Notizen, dann das Eingabefeld. Andersherum stand das
+    Feld ueber dem, worauf es antwortet - und "Notiz speichern" war der
+    fetteste Knopf der Seite, waehrend "Bearbeiten" als Textlink danebenstand.
+  {% endcomment %}
+  <h2>Notizen</h2>
+  {% if notizen %}
+    <ul class="notizen">
+      {% for notiz in notizen %}
+        <li>
+          <span class="wann">{{ notiz.erstellt_am|date:"d.m.Y H:i" }} — {{ notiz.person.anzeigename }}</span>
+          <span class="text">{{ notiz.text|linebreaksbr }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="nichts">Noch keine Notiz.</p>
+  {% endif %}
+
+  <form method="post" action="{% url 'notiz_anlegen' objekt.pk %}" class="notizform">
+    {% csrf_token %}
+    <label for="id_text">Neue Notiz</label>
+    <textarea name="text" id="id_text" rows="3" required></textarea>
+    <button type="submit" class="ruhig">Notiz speichern</button>
+  </form>
+
   {% if objekt.preise.all %}
     <h2>Preisverlauf</h2>
-    <table>
+    <table class="verlaufstabelle">
       <thead><tr><th>Datum</th><th>Preis</th><th>Quelle</th></tr></thead>
       <tbody>
         {% for eintrag in objekt.preise.all %}
@@ -93,26 +246,15 @@
     </table>
   {% endif %}
 
-  <h2>Notizen</h2>
-  <form method="post" action="{% url 'notiz_anlegen' objekt.pk %}">
-    {% csrf_token %}
-    <label for="id_text">Neue Notiz</label>
-    <textarea name="text" id="id_text" rows="3" required></textarea>
-    <button type="submit">Notiz speichern</button>
-  </form>
-
-  {% if notizen %}
-    <ul>
-      {% for notiz in notizen %}
-        <li>{{ notiz.erstellt_am|date:"d.m.Y H:i" }} — {{ notiz.person.anzeigename }}: {{ notiz.text|linebreaksbr }}</li>
-      {% endfor %}
-    </ul>
-  {% endif %}
-
+  {% comment %}
+    Beleg, nicht Inhalt: klein und gedaempft am Seitenende. "Zuletzt gesehen"
+    beantwortet die Frage, ob das Inserat noch am Markt ist, und bleibt bis
+    Schritt 2 leer - dann steht dort ein Strich und nicht nichts.
+  {% endcomment %}
   <hr>
-  <p>
-    {{ objekt.get_quelle_display }}
-    · eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
+  <p class="beleg">
+    eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
     · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
+    · zuletzt gesehen {{ objekt.zuletzt_gesehen|date:"d.m.Y H:i"|default:"—" }}
   </p>
 {% endblock %}
