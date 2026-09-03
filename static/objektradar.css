@@ -28,6 +28,59 @@
      auf das die Liste hinarbeitet. */
   --fehler:    #8C2F2F;
 
+  /* Warnungen - die Stufe ZWISCHEN Hinweis und Fehler, am 03.09. dazugekommen.
+     Bis dahin kannte die Meldungsdarstellung genau drei Stufen: neutral
+     (`--gedaempft`), Erfolg (`--akzent`) und Fehler (`--fehler`). Dazwischen
+     lag nichts, und der Hinweis auf eine unbekannte Portaldomain fiel deshalb
+     auf die neutrale Stufe: er ist kein Fehler, aber dort ist er zu leise.
+
+     GEDECKT, und die Aufmerksamkeit kommt aus der Buntheit statt aus der
+     Lautstaerke: dieselbe Helligkeitsklasse wie der neutrale Balken (L* 48
+     gegen 47), aber die zehnfache Buntheit (C* 49 gegen 5). Der Balken wiegt
+     damit genau so viel wie der neutrale - er ist nur farbig, nicht dicker
+     und nicht dunkler.
+
+     Ein gedecktes Senfgelb und ausdruecklich KEIN Orange. Von `--signal`
+     liegt es 35 dE entfernt, von `--fehler` 49; beide behalten ihre Bedeutung
+     fuer sich. Waere die Warnung orange, konkurrierte sie mit dem wichtigsten
+     Kaufsignal der Liste - genau der Fehler, den `--fehler` schon einmal
+     vermeiden musste. */
+  --warnung:   #8B7016;
+
+  /* --- Die sechs Statusfarben -------------------------------------------
+     Sechs Status standen bis zum 03.09. alle in derselben Schrift. Sie werden
+     GESUCHT, nicht gelesen - dafuer braucht es Farbe.
+
+     Gedeckte Hintergrundflaechen, keine grellen Toene: die Liste ist ein
+     Arbeitswerkzeug, kein Warnsystem. Die Schrift darauf bleibt `--text`;
+     jede der sechs Flaechen traegt sie mit mindestens 9,4:1 und damit weit
+     ueber der Schwelle. Ein blasser Text auf blasser Flaeche waere schlechter
+     als gar keine Farbe - deshalb liegt die Unterscheidung im GRUND und nicht
+     in der Schriftfarbe.
+
+     KEIN ROT fuer "raus". Rot ist hier zweifach belegt - `--signal` fuer die
+     Preissenkung, `--fehler` fuer Fehler. Ein rotes "raus" konkurrierte mit
+     dem wichtigsten Kaufsignal der Liste. "raus" und "vom Markt" sind
+     stattdessen ENTSAETTIGT: zurueckgenommen, nicht alarmierend.
+
+     Die Reihe folgt dem Sinn und nicht der Helligkeit: neutral (neu) - leicht
+     aktiv (in Pruefung) - deutlicher aktiv (Besichtigung) - am waermsten
+     (heisse Spur) - ausgegraut (raus) - fast neutral (vom Markt). Die
+     Aktivitaet waechst durch die Akzentfamilie, "heisse Spur" bricht als
+     einzige ins Warme aus. Sie ist ein Ocker und liegt von `--signal` mehr
+     als 55 dE entfernt - sie kann nicht mit ihm verwechselt werden.
+
+     Die Namen tragen den GESPEICHERTEN Schluessel, samt Unterstrich
+     (`in_pruefung`, nicht `in-pruefung`). Das ist Absicht: die Vorlagen bauen
+     ihre Klasse als `status-{{ objekt.status }}` und es gibt damit keine
+     zweite Zuordnungstabelle zwischen Status und Farbe, die driften koennte. */
+  --status-neu:          #E4E8EE;  /* neutral, noch keine Aussage */
+  --status-in_pruefung:  #D5E6E3;  /* leicht aktiv */
+  --status-besichtigung: #B2D3CE;  /* deutlicher aktiv */
+  --status-heisse_spur:  #F0DBAF;  /* die waermste der sechs - NICHT --signal */
+  --status-raus:         #DAD9D2;  /* zurueckgenommen, ausgegraut */
+  --status-vom_markt:    #F3F2EC;  /* noch schwaecher als raus, fast neutral */
+
   /* --- Abstandsskala ----------------------------------------------------
      Vier Stufen, jede die Verdopplung der vorigen. Abstaende werden
      AUSSCHLIESSLICH hieraus genommen. Die klaffenden Luecken im Filterblock
@@ -168,6 +221,16 @@ header button {
 .meldungen li.error {
   border-left-color: var(--fehler);
   background: color-mix(in srgb, var(--fehler) 6%, var(--flaeche));
+}
+
+/* Die Warnstufe. Dieselbe Bauform und derselbe Anteil wie Erfolg und Fehler -
+   sechs Prozent Toenung und ein Balken -, damit die vier Stufen EINE Familie
+   bleiben und sich nur in der Farbe unterscheiden. Ein dickerer Balken oder
+   eine kraeftigere Toenung waere eine zweite Ansage fuer dieselbe Sache; die
+   Farbe traegt sie schon. */
+.meldungen li.warning {
+  border-left-color: var(--warnung);
+  background: color-mix(in srgb, var(--warnung) 6%, var(--flaeche));
 }
 
 /* --- Die Feldeinheit ----------------------------------------------------
@@ -326,8 +389,22 @@ main input[type="url"] + button { margin-top: var(--knapp); }
   grid-column: 1 / -1;
   min-width: 0;
   margin: 0;
-  padding: 0;
   border: 0;
+
+  /* Sichtbar abgesetzt seit dem 03.09. Der Block stand als volle Zeile
+     zwischen Suche und Land und sah aus wie alles andere - eine Kette
+     gleicher Dinge, in der die Statuszeile untergeht, obwohl sie der Filter
+     ist, den man am haeufigsten anfasst.
+
+     Zwei Linien und NICHT ein eigener Flaechenton: der Filterblock traegt
+     schon `--flaeche`, und der einzige Ton, der sich davon absetzte, waere
+     `--papier` - ein Unterschied von anderthalb Prozent Helligkeit, also
+     keiner. Eine Linie ist hier die staerkere der beiden angebotenen
+     Moeglichkeiten. Zwei statt einer, weil der Block oben UND unten Nachbarn
+     hat; eine einzelne Linie ordnete ihn dem zu, auf dessen Seite sie steht. */
+  padding: var(--mittel) 0;
+  border-top: 1px solid var(--linie);
+  border-bottom: 1px solid var(--linie);
 }
 .statusfilter legend { padding: 0; margin-bottom: var(--eng); color: var(--gedaempft); }
 
@@ -627,7 +704,17 @@ dd { margin: 0; }
   color: var(--gedaempft);
 }
 
+/* Die Statusmarke ist seit dem 03.09. an DREI Stellen dasselbe Bauteil: in
+   der Objektzeile hier, in der Statusspalte der Liste (beide Fassungen) und -
+   ueber dieselben Farbklassen - an der Auswahl des Statusformulars. Eine
+   zweite Marke daneben waere ein zweites Aussehen fuer dieselbe Sache.
+
+   Der Rahmen bleibt: "vom Markt" liegt bewusst dicht am Seitengrund, und ohne
+   Linie waere die Marke dort keine Marke mehr, sondern ein Wort im Nichts.
+   `background` ist der Vorgabewert fuer den Fall ohne Statusklasse - die
+   sechs Klassen unten ueberschreiben ihn. */
 .statusmarke {
+  display: inline-block;
   padding: 0 var(--knapp);
   border: 1px solid var(--linie);
   border-radius: 4px;
@@ -635,6 +722,31 @@ dd { margin: 0; }
   color: var(--text);
   font-size: .875rem;
 }
+
+/* Die sechs Statusfarben, je Schluessel genau eine Regel. Der Klassenname ist
+   der GESPEICHERTE Wert - die Vorlagen bauen ihn als `status-{{ o.status }}`,
+   und deshalb gibt es keine Zuordnungstabelle, die von den Auswahllisten
+   wegdriften koennte.
+
+   Nur der Grund wird gesetzt. Die Schrift bleibt `--text`, den beide Traeger
+   - `.statusmarke` und `main select` - schon fuehren; sie hier zu wiederholen
+   waere dieselbe Angabe ein zweites Mal.
+
+   Sie gelten auch fuer die Auswahl am Statusformular: dort ist die Marke kein
+   eigenes Element, sondern das Feld selbst zeigt den gespeicherten Status. */
+.status-neu          { background: var(--status-neu); }
+.status-in_pruefung  { background: var(--status-in_pruefung); }
+.status-besichtigung { background: var(--status-besichtigung); }
+.status-heisse_spur  { background: var(--status-heisse_spur); }
+.status-raus         { background: var(--status-raus); }
+.status-vom_markt    { background: var(--status-vom_markt); }
+
+/* Die Auswahl am Statusformular traegt dieselbe Farbe wie die Marke, aber
+   nicht deren Masse: sie bleibt ein Bedienelement in Feldgroesse. Die Regel
+   steht nur da, damit die Farbklasse den Grund aus `main select` sicher
+   schlaegt - eine Klasse gewinnt gegen zwei Elemente, das ist der ganze
+   Zweck. */
+.statuswahl { border-color: var(--linie); }
 
 /* --- Zahlen zuerst -------------------------------------------------------
    Der Block, der die Kaufentscheidung traegt. Er steht direkt unter dem Kopf
@@ -795,6 +907,39 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
 
 .leer { color: var(--gedaempft); text-align: center; margin: var(--weit) 0; }
 
+/* --- Loeschen ------------------------------------------------------------
+   Der Einstieg steht am Seitenende beim Beleg und ist deutlich schwaecher
+   gewichtet als "Bearbeiten": kein Knopf, sondern ein gedaempfter Textlink in
+   Belegschrift. Loeschen ist die seltenste Handlung der Objektansicht.
+
+   KEINE Warnfarbe. `--fehler` gehoert den Fehlern, `--signal` der
+   Preissenkung; ein drittes Ding in einer der beiden stumpfte genau die
+   Bedeutung ab, die sie tragen. Die Bestaetigungsseite traegt die Warnung in
+   Worten, und dort gehoert sie hin - eine rote Schrift beantwortet die Frage
+   "Loeschen oder raus setzen?" nicht. */
+.loeschen { margin: var(--knapp) 0 0; font-size: .875rem; }
+.loeschen a { color: var(--gedaempft); }
+
+/* Die Abgrenzung "Loeschen ist nicht raus" auf der Bestaetigungsseite. Ueber
+   die FLAECHE abgesetzt wie der Zahlenblock der Objektansicht und der
+   Filterblock der Liste - dieselbe Ansage, dieselbe Bauform. Sie steht vor
+   den Zahlen und vor dem Knopf, weil sie vor beidem gelesen werden muss. */
+.abgrenzung {
+  margin: 0 0 var(--weit);
+  padding: var(--mittel);
+  border-radius: 4px;
+  background: var(--flaeche);
+}
+.abgrenzung p { margin: 0 0 var(--knapp); }
+.abgrenzung p:last-child { margin-bottom: 0; }
+
+/* Die Zahlen zu dem, was mit verschwindet. Tabellenziffern, damit vier
+   Zahlen untereinander vergleichbar stehen - dieselbe Behandlung wie im
+   Zahlenblock der Objektansicht. */
+.anhang { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+.loeschform { margin: var(--weit) 0 0; }
+
 /* --- Ab 48rem -----------------------------------------------------------
    Ein Media-Block fuer die ganze Datei - aus Ordnungsliebe, und seit dem
    02.09. NUR daraus.
@@ -827,12 +972,13 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
   .filter { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
   .feldpaar { grid-column: span 2; }
 
-  /* Die Freitextsuche nimmt zwei Spalten. Sie steht als erstes Feld vor der
-     vollbreiten Statuszeile und stuende in einer Spalte allein in ihrer
-     Reihe - also genau die klaffende Luecke, gegen die diese Runde gebaut
-     ist. Zwei Spalten fuellen die Reihe und geben dem einzigen Feld, in das
-     ganze Woerter getippt werden, auch die Breite dafuer. */
-  .filter .breit { grid-column: span 2; }
+  /* Die Freitextsuche hatte hier bis zum 03.09. eine eigene Regel ueber zwei
+     Spalten. Sie ist gefallen: das Feld war damit doppelt so breit wie jedes
+     andere im Block, bei drei Spalten nahm es zwei Drittel der Zeile. Die
+     Luecke hinter ihm, gegen die die Regel gebaut war, schliesst sie ohnehin
+     nicht - die vollbreite Statuszeile dahinter kann nicht neben das Feld
+     ruecken, gleich wie breit es ist. Bleibt nur die Ungleichheit, und die
+     war der Fehlstand. */
 
   /* Die Aktionen rechtsbuendig, Knoepfe in ihrer natuerlichen Breite. */
   .filter .aktionen { justify-content: flex-end; }

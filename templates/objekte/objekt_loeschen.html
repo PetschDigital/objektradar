@@ -1,0 +1,80 @@
+{% extends "basis.html" %}
+
+{% block titel %}{{ objekt }} löschen · Objektradar{% endblock %}
+
+{% block inhalt %}
+  {% comment %}
+    Die Bestätigungsseite. Sie legt nichts an und löscht nichts — erst der
+    POST aus dem Formular unten löscht.
+
+    Zwei Dinge muss sie leisten, und beide stehen im Markup weit oben, weil
+    sie vor dem Knopf gelesen werden müssen: die Abgrenzung gegen den Status
+    „raus" und die Zahlen zu dem, was mit verschwindet.
+  {% endcomment %}
+  <p class="zurueck"><a href="{% url 'objekt' objekt.pk %}">zurück zum Objekt</a></p>
+
+  <h1>Objekt löschen?</h1>
+
+  {% comment %}
+    Die Bezeichnung kommt als `{{ objekt }}` aus dem Modell — Titel,
+    ersatzweise Portal und Inserats-ID, ersatzweise die URL. Sie wird hier
+    nicht nachgebaut; zwei Formeln für eine Regel driften auseinander. Gekappt
+    wird sie wie in der Objektansicht: fällt sie auf die URL zurück, hat sie
+    keine Leerstelle zum Umbrechen und schöbe die Seite in die Breite.
+  {% endcomment %}
+  <p class="bezeichnung" title="{{ objekt }}">{{ objekt }}</p>
+
+  {% comment %}
+    Die Abgrenzung gehört auf DIESE Seite und nicht in eine Anleitung: ohne
+    sie wird gelöscht, was ausgeblendet gehört. Der Status „raus" ist eine
+    getroffene Entscheidung und bleibt — geprüft und verworfen, aber sichtbar,
+    damit niemand in drei Monaten dasselbe Objekt erneut prüft.
+  {% endcomment %}
+  <div class="abgrenzung">
+    <p><strong>Löschen ist nicht „raus“.</strong></p>
+    <p>
+      „raus“ heißt: geprüft und verworfen. Das Objekt bleibt in der Datenbank
+      und ist über den Statusfilter wieder auffindbar — damit niemand in drei
+      Monaten dasselbe Inserat noch einmal prüft.
+    </p>
+    <p>
+      Gelöscht wird nur, was <strong>nie ein Objekt war</strong>: ein
+      Fehleinwurf oder Testmüll. Willst du das Inserat bloß aus der Liste
+      nehmen, brich hier ab und setze den Status auf „raus“.
+    </p>
+  </div>
+
+  {% comment %}
+    Was verloren geht, mit Zahlen aus dem Bestand. Fünf Leute arbeiten an
+    derselben Liste: wer löscht, löscht möglicherweise die Arbeit anderer,
+    ohne es zu wissen. Eine Seite, die nur „wirklich löschen?" fragt,
+    verschweigt das.
+
+    Die Zeilen kommen als Paare aus der Ansicht, damit die vier Beschriftungen
+    an EINER Stelle stehen und nicht hier noch einmal neben den Zählungen.
+  {% endcomment %}
+  <h2>Was mit gelöscht wird</h2>
+  <dl class="anhang">
+    {% for beschriftung, zahl in anhang %}
+      <dt>{{ beschriftung }}</dt>
+      <dd>{{ zahl }}</dd>
+    {% endfor %}
+  </dl>
+  <p class="nichts">
+    Auch die verlinkten Bilder des Objekts verschwinden. Das Inserat beim
+    Portal bleibt davon unberührt — gelöscht wird nur der Eintrag hier.
+  </p>
+
+  {% comment %}
+    Der Weg zurück steht neben dem Knopf und tut nichts: er führt auf die
+    Objektansicht und ändert nichts. Kein `formaction`, kein zweiter
+    Absendeknopf — ein Abbrechen darf nicht senden können.
+  {% endcomment %}
+  <form method="post" action="{% url 'objekt_loeschen' objekt.pk %}" class="loeschform">
+    {% csrf_token %}
+    <div class="aktionen">
+      <button type="submit">Endgültig löschen</button>
+      <a href="{% url 'objekt' objekt.pk %}">Abbrechen</a>
+    </div>
+  </form>
+{% endblock %}

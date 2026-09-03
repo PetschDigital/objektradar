@@ -23,7 +23,14 @@
     hier steht nur, wie sie stehen.
   {% endcomment %}
   <form method="get" class="filter">
-    {% include "feld.html" with feld=filterform.suche breit=1 %}
+    {% comment %}
+      Die Freitextsuche nimmt dieselbe Rasterbreite wie jedes andere Feld.
+      Sie stand bis zum 03.09. auf zwei Spalten und war damit doppelt so breit
+      wie die Felder daneben - bei drei Spalten zog sie sich über zwei Drittel
+      der Zeile. Die Reihe hinter ihr bleibt so oder so leer: die Statuszeile
+      dahinter läuft über die volle Breite und kann nicht neben sie rücken.
+    {% endcomment %}
+    {% include "feld.html" with feld=filterform.suche %}
 
     {% comment %}
       Der Statusfilter ist kein Feld wie die anderen: sechs Kontrollkaestchen
@@ -179,7 +186,17 @@
               </td>
               <td data-spalte="€/m²">{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
               <td data-spalte="Zustand">{{ o.get_zustand_display }}</td>
-              <td data-spalte="Status">{{ o.get_status_display }}</td>
+              {% comment %}
+                Der Status ist auch hier eine MARKE und kein Fliesstext - die
+                Spalte wird gesucht, nicht gelesen. Dieselbe Klasse wie in der
+                Objektansicht, damit ein Status an beiden Stellen gleich
+                aussieht; die Farbklasse kommt aus dem gespeicherten Wert.
+
+                Gilt für BEIDE Fassungen: ab 48rem ist die Zelle eine
+                Tabellenzelle, darunter eine Zeile der Karte. Das Markup ist
+                dasselbe, also auch die Marke.
+              {% endcomment %}
+              <td data-spalte="Status"><span class="statusmarke status-{{ o.status }}">{{ o.get_status_display }}</span></td>
               <td data-spalte="Votum">{{ o.votum_uebersicht }}</td>
             </tr>
           {% endfor %}

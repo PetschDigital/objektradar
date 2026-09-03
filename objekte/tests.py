@@ -10,6 +10,7 @@ zweite nicht mehr, sobald die erste faellt.
 
 import ast
 import html as htmlwerkzeug
+import math
 import inspect
 import re
 import textwrap
@@ -26,7 +27,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.staticfiles import finders
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.core.exceptions import FieldError
-from django.db import IntegrityError, connection, migrations, transaction
+from django.db import IntegrityError, connection, migrations, models, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.forms import modelform_factory
 from django.templatetags.static import static
@@ -3063,7 +3064,11 @@ class KommentarTests(TestCase):
     #: nicht mitgezaehlt: faellt ein Block heraus oder kommt einer dazu, soll
     #: das AUFFALLEN und nicht stillschweigend in die Ableitung wandern.
     #: Am 03.09. von sechs auf sieben: die Bildzelle hat ihren eigenen Block.
-    BLOECKE = 7
+    #: Am 03.09. weiter auf neun - die Loesch-/Statusfarben-Runde hat der
+    #: Freitextsuche und der Statuszelle je einen Block gegeben. Beide sind
+    #: damit von den Zeugen unten mitbewacht, ohne dass hier ein Text
+    #: abgeschrieben werden musste.
+    BLOECKE = 9
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -5420,3 +5425,1134 @@ class BearbeitenFormularTests(TestCase):
         nirgends auffindbar - sie steht als `help_text` an der Formklasse und
         muss auch gerendert werden."""
         self.assertContains(self._seite(), "Leer heißt: nicht ändern.")
+
+
+# =========================================================================
+# 03.09.: Loeschen, Statusfarben, Filterblock, Lesezeichen-Hinweis
+# =========================================================================
+
+
+class LoeschbeziehungenTests(SimpleTestCase):
+    """Was beim Loeschen eines Objekts mitgeht - und was das Loeschen sperrt.
+
+    Ein STRUKTURZEUGE, kein Verhaltenszeuge: er liest `_meta` und faellt
+    deshalb schon beim Schreiben einer Migration, nicht erst, wenn jemand auf
+    der Bestaetigungsseite in einen 500er laeuft.
+
+    Die Trennung, um die es geht, ist leicht zu verwechseln: Am Objekt haengen
+    PROTECT-Fremdschluessel - `eingestellt_von` und `zuletzt_geaendert_von`.
+    Sie zeigen aber VOM Objekt WEG, auf die Person, und schuetzen damit die
+    Person vor dem Loeschen, nicht das Objekt. Was das Loeschen eines Objekts
+    sperren koennte, sind allein die Beziehungen, die AUF das Objekt zeigen -
+    und die stehen alle auf CASCADE.
+    """
+
+    def test_keine_beziehung_auf_das_objekt_traegt_PROTECT(self):
+        """Die Zusage aus Abschnitt 1: nichts sperrt das Loeschen.
+
+        Faellt dieser Zeuge, ist das Loeschen gebaut, aber nicht mehr
+        moeglich - und der Grund ist zu melden, nicht die Beziehung
+        umzustellen.
+        """
+        geschuetzt = [
+            f"{b.related_model.__name__}.{b.field.name}"
+            for b in Objekt._meta.related_objects
+            if b.on_delete is models.PROTECT
+        ]
+        self.assertEqual(geschuetzt, [])
+
+    def test_jede_beziehung_auf_das_objekt_traegt_CASCADE(self):
+        """Umgekehrt gemessen, damit `SET_NULL` nicht durchrutscht.
+
+        Der Zeuge darueber allein bliebe gruen, wenn jemand `PROTECT` durch
+        `SET_NULL` ersaetze - und dann bliebe ein verwaistes Votum stehen,
+        das zu keinem Objekt mehr gehoert.
+        """
+        abweichend = [
+            f"{b.related_model.__name__}.{b.field.name}={b.on_delete.__name__}"
+            for b in Objekt._meta.related_objects
+            if b.on_delete is not models.CASCADE
+        ]
+        self.assertEqual(abweichend, [])
+
+    def test_der_zeuge_sieht_ueberhaupt_beziehungen(self):
+        """Riegel gegen einen Zeugen im Vakuum.
+
+        Ohne ihn waeren die beiden darueber auch dann gruen, wenn
+        `related_objects` leer zurueckkaeme - etwa nach einer Umbenennung des
+        Modells. Fuenf Beziehungen sind es: Bild, Preisverlauf,
+        Statusaenderung, Votum, Notiz.
+        """
+        self.assertEqual(len(Objekt._meta.related_objects), 5)
+
+
+class LoeschenTests(TestCase):
+    """Abschnitt 1: Objekt loeschen, mit Bestaetigungsseite.
+
+    Zwei Stationen auf einer Adresse - GET zeigt, POST loescht. Die Zeugen
+    hier halten diesen Schnitt und die Zahlen auf der Bestaetigungsseite.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.andere = Person.objects.create_user("nico", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+        self.objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/12345/",
+            portal=Portal.IDEALISTA,
+            inserats_id="12345",
+            titel="Villa am Hang",
+            aktueller_preis=Decimal("250000"),
+            eingestellt_von=self.person,
+        )
+        # Ein Objekt mit Anhang an JEDER der fuenf Beziehungen. Ohne das
+        # maessen die Zeugen unten das Verschwinden von nichts.
+        Votum.objects.create(
+            objekt=self.objekt, person=self.person, wertung=Wertung.DAFUER
+        )
+        Votum.objects.create(
+            objekt=self.objekt, person=self.andere, wertung=Wertung.ANSCHAUEN
+        )
+        Notiz.objects.create(objekt=self.objekt, person=self.andere, text="Dach prüfen.")
+        Bild.objects.create(objekt=self.objekt, url="https://bild.example/1.jpg")
+        self.objekt.preis_setzen(self.person, Decimal("239000"))
+        self.objekt.status_setzen(self.person, Status.IN_PRUEFUNG)
+
+        # Ein zweites Objekt mit eigenem Anhang. Es darf nichts abbekommen.
+        self.fremd = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/99999/",
+            portal=Portal.IDEALISTA,
+            inserats_id="99999",
+            titel="Finca",
+            aktueller_preis=Decimal("180000"),
+        )
+        Votum.objects.create(
+            objekt=self.fremd, person=self.person, wertung=Wertung.DAFUER
+        )
+        Notiz.objects.create(objekt=self.fremd, person=self.person, text="Bleibt.")
+        Bild.objects.create(objekt=self.fremd, url="https://bild.example/9.jpg")
+
+    def _adresse(self, objekt=None):
+        return reverse("objekt_loeschen", args=[(objekt or self.objekt).pk])
+
+    def _hauptteil(self, antwort):
+        """Nur der Inhalt aus `<main>`, ohne Kopf, Meldungen und `<title>`.
+
+        NACHGETRAGEN am 03.09. nach der Sabotage-Gegenprobe. Zwei Zeugen
+        dieser Klasse massen die GANZE Seite und blieben deshalb gruen,
+        obwohl ihre Zusage gebrochen war:
+
+        - `test_die_bestaetigungsseite_nennt_das_objekt` fand die Bezeichnung
+          im `<title>`, den `basis.html` aus demselben `{{ objekt }}` baut.
+          Die Bezeichnung konnte aus dem Seiteninhalt verschwinden, ohne dass
+          sich etwas meldete.
+        - `test_die_bestaetigungsseite_traegt_ein_absendendes_formular` fand
+          `method="post"` am Abmeldeformular im Kopf. Das Loeschformular
+          konnte ganz wegfallen, und der Zeuge blieb gruen.
+
+        Das ist dieselbe Falle in zwei Fassungen: eine Zusage ueber DIESE
+        Seite, gemessen an einer Seite, die zur Haelfte aus der
+        Basisvorlage besteht. Wer hier einen Zeugen ergaenzt, misst gegen
+        diesen Ausschnitt und nicht gegen `antwort`.
+        """
+        inhalt = antwort.content.decode()
+        return inhalt[inhalt.index("<main>") : inhalt.index("</main>")]
+
+    # --- Zeuge: GET loescht nichts und zeigt die Bestaetigung -------------
+
+    def test_die_bestaetigungsseite_antwortet(self):
+        self.assertEqual(self.client.get(self._adresse()).status_code, 200)
+
+    def test_der_aufruf_der_loeschadresse_loescht_nichts(self):
+        self.client.get(self._adresse())
+        self.assertTrue(Objekt.objects.filter(pk=self.objekt.pk).exists())
+
+    def test_auch_der_zweite_aufruf_loescht_nichts(self):
+        """Ein Vorauslader ruft dieselbe Adresse mehrfach ab."""
+        self.client.get(self._adresse())
+        self.client.get(self._adresse())
+        self.assertTrue(Objekt.objects.filter(pk=self.objekt.pk).exists())
+
+    def test_der_aufruf_ruehrt_auch_den_anhang_nicht_an(self):
+        self.client.get(self._adresse())
+        self.assertEqual(self.objekt.vota.count(), 2)
+
+    def test_die_bestaetigungsseite_nennt_das_objekt(self):
+        """Im SEITENINHALT, nicht irgendwo in der Antwort.
+
+        Gegen `antwort` gemessen fand dieser Zeuge den Titel im `<title>` und
+        blieb gruen, waehrend die Bezeichnung aus der Seite verschwand.
+        """
+        self.assertIn("Villa am Hang", self._hauptteil(self.client.get(self._adresse())))
+
+    def test_die_bestaetigungsseite_traegt_ein_absendendes_formular(self):
+        """Ein POST-Formular AUF DIE LOESCHADRESSE.
+
+        Gegen `antwort` auf `method="post"` gemessen fand dieser Zeuge das
+        Abmeldeformular im Seitenkopf - das Loeschformular durfte ganz
+        fehlen. Gemessen wird deshalb im Seiteninhalt und am Ziel: ein
+        Formular, das woandershin sendet, loescht nichts.
+        """
+        inhalt = self._hauptteil(self.client.get(self._adresse()))
+        self.assertIn('method="post"', inhalt)
+        self.assertIn(f'action="{self._adresse()}"', inhalt)
+
+    def test_die_bestaetigungsseite_bietet_einen_weg_zurueck(self):
+        """Ein Weg zurueck, der nichts tut - auf die Objektansicht."""
+        self.assertContains(
+            self.client.get(self._adresse()),
+            f'href="{reverse("objekt", args=[self.objekt.pk])}"',
+        )
+
+    # --- Zeuge: die Abgrenzung gegen "raus" steht auf der Seite -----------
+
+    def test_die_seite_grenzt_das_loeschen_gegen_raus_ab(self):
+        """Ohne diesen Satz wird geloescht, was ausgeblendet gehoert.
+
+        Gemessen am Kernsatz und nicht am ganzen Absatz: die Formulierung darf
+        sich aendern, die Ansage nicht.
+        """
+        self.assertContains(self.client.get(self._adresse()), "nicht „raus“")
+
+    def test_die_seite_nennt_den_zweck_des_loeschens(self):
+        self.assertContains(self.client.get(self._adresse()), "nie ein Objekt war")
+
+    # --- Zeuge: die Bestaetigungsseite nennt die tatsaechlichen Zahlen ----
+
+    def _anhangzahlen(self):
+        """Die vier Zahlen, wie die Ansicht sie an die Vorlage gibt."""
+        antwort = self.client.get(self._adresse())
+        return dict(antwort.context["anhang"])
+
+    def test_die_seite_nennt_die_zahl_der_vota(self):
+        self.assertEqual(self._anhangzahlen()["Vota"], 2)
+
+    def test_die_seite_nennt_die_zahl_der_notizen(self):
+        self.assertEqual(self._anhangzahlen()["Notizen"], 1)
+
+    def test_die_seite_nennt_die_zahl_der_preiseintraege(self):
+        """Zwei: der beim Anlegen und der aus `preis_setzen()`."""
+        self.assertEqual(self._anhangzahlen()["Einträge im Preisverlauf"], 2)
+
+    def test_die_seite_nennt_die_zahl_der_statusaenderungen(self):
+        self.assertEqual(self._anhangzahlen()["Statusänderungen"], 1)
+
+    def test_keine_der_vier_zahlen_ist_null(self):
+        """Die Zusage aus Abschnitt 1.5: die TATSAECHLICHEN Zahlen, nicht null.
+
+        Der Riegel gegen eine Seite, die vier Nullen ausweist, weil die
+        Zaehlung am falschen Objekt oder gar nicht laeuft. Er misst das
+        Gegenteil der Zeugen darueber und faellt auch dann, wenn jemand die
+        vier Zeilen durch feste Werte ersetzt.
+        """
+        self.assertNotIn(0, dict(self._anhangzahlen()).values())
+
+    def test_die_zahlen_stehen_auch_wirklich_auf_der_seite(self):
+        """Der Kontext allein sagt nichts - die Vorlage muss ihn ausgeben."""
+        antwort = self.client.get(self._adresse())
+        self.assertContains(antwort, "Vota")
+        self.assertContains(antwort, "Statusänderungen")
+
+    def test_die_zahlen_zaehlen_nur_das_eigene_objekt(self):
+        """Ein Kreuzprodukt ueber vier Beziehungen zaehlte zu hoch.
+
+        Genau der Fehler, den vier `Count`-Aggregate in einer Abfrage
+        erzeugten: jede Notiz vervielfachte jedes Votum. Bei zwei Vota und
+        einer Notiz waeren es dann immer noch 2 - deshalb bekommt das Objekt
+        hier eine zweite Notiz, und erst damit trennen 2 und 4 die beiden
+        Bauarten.
+        """
+        Notiz.objects.create(objekt=self.objekt, person=self.person, text="Zweite.")
+        self.assertEqual(self._anhangzahlen()["Vota"], 2)
+        self.assertEqual(self._anhangzahlen()["Notizen"], 2)
+
+    # --- Zeuge: POST loescht das Objekt -----------------------------------
+
+    def test_der_post_loescht_das_objekt(self):
+        self.client.post(self._adresse())
+        self.assertFalse(Objekt.objects.filter(pk=self.objekt.pk).exists())
+
+    def test_nach_dem_loeschen_wird_umgeleitet(self):
+        self.assertEqual(self.client.post(self._adresse()).status_code, 302)
+
+    def test_die_umleitung_fuehrt_auf_die_liste(self):
+        antwort = self.client.post(self._adresse())
+        self.assertEqual(antwort["Location"], reverse("objektliste"))
+
+    def test_das_loeschen_meldet_sich(self):
+        antwort = self.client.post(self._adresse(), follow=True)
+        self.assertContains(antwort, "gelöscht")
+
+    def test_die_meldung_nennt_das_geloeschte_objekt(self):
+        """Die Bezeichnung wird VOR dem Loeschen gelesen."""
+        antwort = self.client.post(self._adresse(), follow=True)
+        self.assertContains(antwort, "Villa am Hang")
+
+    def test_das_objekt_ist_danach_in_der_liste_nicht_mehr_auffindbar(self):
+        """Gemessen an der ADRESSE, nicht an der Bezeichnung.
+
+        Die Erfolgsmeldung nennt das geloeschte Objekt beim Namen und steht
+        auf genau dieser Seite - ein Zeuge auf den Titel waere deshalb rot,
+        obwohl alles stimmt. Die Adresse der Objektansicht steht nur dort, wo
+        die Liste eine Zeile dafuer hat.
+        """
+        adresse = reverse("objekt", args=[self.objekt.pk])
+        self.client.post(self._adresse())
+        antwort = self.client.get(reverse("objektliste"))
+        self.assertNotContains(antwort, f'href="{adresse}"')
+
+    def test_die_objektansicht_des_geloeschten_ist_weg(self):
+        pk = self.objekt.pk
+        self.client.post(self._adresse())
+        self.assertEqual(self.client.get(reverse("objekt", args=[pk])).status_code, 404)
+
+    # --- Zeuge: der Anhang verschwindet mit -------------------------------
+
+    def test_die_vota_verschwinden_mit(self):
+        self.client.post(self._adresse())
+        self.assertEqual(Votum.objects.filter(objekt_id=self.objekt.pk).count(), 0)
+
+    def test_die_notizen_verschwinden_mit(self):
+        self.client.post(self._adresse())
+        self.assertEqual(Notiz.objects.filter(objekt_id=self.objekt.pk).count(), 0)
+
+    def test_der_preisverlauf_verschwindet_mit(self):
+        self.client.post(self._adresse())
+        self.assertEqual(Preisverlauf.objects.filter(objekt_id=self.objekt.pk).count(), 0)
+
+    def test_die_statusaenderungen_verschwinden_mit(self):
+        self.client.post(self._adresse())
+        self.assertEqual(
+            self.objekt.statusaenderungen.model.objects.filter(
+                objekt_id=self.objekt.pk
+            ).count(),
+            0,
+        )
+
+    def test_die_bilder_verschwinden_mit(self):
+        self.client.post(self._adresse())
+        self.assertEqual(Bild.objects.filter(objekt_id=self.objekt.pk).count(), 0)
+
+    def test_die_personen_bleiben_erhalten(self):
+        """Kein CASCADE in die falsche Richtung.
+
+        Am Votum haengt die Person ueber PROTECT. Loeschte das Objekt die
+        Person mit, waere genau die Zusage gebrochen, die `LoeschschutzTests`
+        an der anderen Seite haelt.
+        """
+        self.client.post(self._adresse())
+        self.assertEqual(Person.objects.filter(pk=self.andere.pk).count(), 1)
+
+    # --- Zeuge: andere Objekte bleiben unberuehrt -------------------------
+
+    def test_das_andere_objekt_bleibt(self):
+        self.client.post(self._adresse())
+        self.assertTrue(Objekt.objects.filter(pk=self.fremd.pk).exists())
+
+    def test_das_votum_am_anderen_objekt_bleibt(self):
+        self.client.post(self._adresse())
+        self.assertEqual(self.fremd.vota.count(), 1)
+
+    def test_die_notiz_am_anderen_objekt_bleibt(self):
+        self.client.post(self._adresse())
+        self.assertEqual(self.fremd.notizen.count(), 1)
+
+    def test_das_bild_am_anderen_objekt_bleibt(self):
+        self.client.post(self._adresse())
+        self.assertEqual(self.fremd.bilder.count(), 1)
+
+    def test_der_preisverlauf_des_anderen_objekts_bleibt(self):
+        self.client.post(self._adresse())
+        self.assertEqual(self.fremd.preise.count(), 1)
+
+    def test_das_andere_objekt_steht_danach_in_der_liste(self):
+        self.client.post(self._adresse())
+        self.assertContains(self.client.get(reverse("objektliste")), "Finca")
+
+    # --- Zeuge: Zugang ----------------------------------------------------
+
+    def test_ein_unbekanntes_objekt_ergibt_404_statt_serverfehler(self):
+        self.assertEqual(self.client.get(reverse("objekt_loeschen", args=[9999])).status_code, 404)
+
+    def test_die_loeschadresse_verlangt_eine_anmeldung(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(self._adresse()).status_code, 302)
+
+    def test_ohne_anmeldung_loescht_auch_der_post_nichts(self):
+        self.client.logout()
+        self.client.post(self._adresse())
+        self.assertTrue(Objekt.objects.filter(pk=self.objekt.pk).exists())
+
+    def test_jeder_angemeldete_darf_loeschen(self):
+        """Kein Rollenkonzept: auch wer das Objekt nicht eingeworfen hat."""
+        self.client.force_login(self.andere)
+        self.client.post(self._adresse())
+        self.assertFalse(Objekt.objects.filter(pk=self.objekt.pk).exists())
+
+    # --- Zeuge: der Einstieg liegt in der Objektansicht, nicht in der Liste
+
+    def test_die_objektansicht_verweist_auf_das_loeschen(self):
+        antwort = self.client.get(reverse("objekt", args=[self.objekt.pk]))
+        self.assertContains(antwort, f'href="{self._adresse()}"')
+
+    def test_die_liste_verweist_NICHT_auf_das_loeschen(self):
+        """In der Liste waere der Einstieg ein Fehlklick neben dem Oeffnen."""
+        antwort = self.client.get(reverse("objektliste"))
+        self.assertNotContains(antwort, "/loeschen/")
+
+    def test_der_einstieg_ist_kein_knopf(self):
+        """Deutlich schwaecher gewichtet als "Bearbeiten".
+
+        `.knopf` traegt die gefuellte Flaeche. Traegt der Loeschverweis sie
+        ebenfalls, stehen die haeufigste und die seltenste Handlung der Seite
+        gleich laut da - genau der Fehlstand, gegen den diese Runde baut.
+        """
+        quelle = (settings.BASE_DIR / "templates" / "objekte" / "objekt.html").read_text(
+            encoding="utf-8"
+        )
+        zeile = next(z for z in quelle.splitlines() if "objekt_loeschen" in z)
+        self.assertNotIn("knopf", zeile)
+
+    def test_bearbeiten_ist_weiterhin_der_knopf(self):
+        """Riegel gegen den Zeugen darueber im Vakuum: er misst nur dann
+        einen Unterschied, wenn "Bearbeiten" die gefuellte Form behaelt."""
+        antwort = self.client.get(reverse("objekt", args=[self.objekt.pk]))
+        self.assertContains(antwort, 'class="knopf"')
+
+
+class StatusfarbenTests(TestCase):
+    """Abschnitt 2: jeder der sechs Status traegt eine eigene Auszeichnung.
+
+    Gemessen wird an zwei Seiten: am Stylesheet, dass es je Status eine eigene
+    Farbe gibt und dass keine davon `--signal` oder `--fehler` ist, und an den
+    gerenderten Seiten, dass die Klasse dort ueberhaupt ankommt. Eine Farbe im
+    Stylesheet, die keine Vorlage traegt, faerbte nichts.
+
+    Wie die Toene AUSSEHEN, entscheidet weiterhin der Blick auf den Bildschirm.
+    Diese Zeugen halten nur fest, was sich still zuruecknehmen liesse.
+    """
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _variablen(self):
+        """Die definierten `--status-…`-Eigenschaften als {Name: Wert}."""
+        return dict(
+            re.findall(r"(--status-[a-z_]+):\s*([^;]+);", self._quelle())
+        )
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_es_gibt_ueberhaupt_statusfarben(self):
+        """Ohne ihn liefen die Zeugen unten ueber ein leeres Verzeichnis."""
+        self.assertNotEqual(self._variablen(), {})
+
+    # --- Zeuge: eine eigene Auszeichnung je Status ------------------------
+
+    def test_jeder_status_hat_eine_eigene_variable(self):
+        """ABGELEITET aus `Status`, nicht abgeschrieben.
+
+        Eine zweite Liste hier driftete von den Auswahllisten weg, und ein
+        siebter Status bekaeme still keine Farbe.
+        """
+        variablen = self._variablen()
+        for status in Status:
+            with self.subTest(status=status.value):
+                self.assertIn(f"--status-{status.value}", variablen)
+
+    def test_jeder_status_hat_eine_eigene_regel(self):
+        """Die Variable allein faerbt nichts - es braucht die Regel dazu."""
+        quelle = self._quelle()
+        for status in Status:
+            with self.subTest(status=status.value):
+                self.assertIn(
+                    f".status-{status.value} ",
+                    re.sub(r"\s+", " ", quelle),
+                )
+
+    def test_jede_regel_greift_auf_ihre_eigene_variable_zu(self):
+        """Sechs Regeln auf dieselbe Variable waeren sechs gleiche Flaechen."""
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        for status in Status:
+            with self.subTest(status=status.value):
+                regel = quelle[quelle.index(f".status-{status.value} {{") :]
+                regel = regel[: regel.index("}")]
+                self.assertIn(f"var(--status-{status.value})", regel)
+
+    def test_die_sechs_farbwerte_sind_paarweise_verschieden(self):
+        """Sechs Namen auf denselben Wert waeren keine Unterscheidung.
+
+        Der Zeuge darueber bliebe gruen, wenn alle sechs Variablen auf
+        dasselbe Grau stuenden.
+        """
+        werte = [w.split("/*")[0].strip().lower() for w in self._variablen().values()]
+        self.assertEqual(len(set(werte)), len(werte))
+
+    def test_es_sind_genau_sechs(self):
+        """Keine siebte Statusfarbe ohne Status dazu."""
+        self.assertEqual(len(self._variablen()), len(Status.choices))
+
+    # --- Zeuge: keine davon ist --signal oder --fehler --------------------
+
+    def test_keine_statusregel_traegt_die_signalfarbe(self):
+        """`--signal` bleibt der Preissenkung vorbehalten.
+
+        Ein rotes "raus" konkurrierte mit dem wichtigsten Kaufsignal der
+        Liste. Gemessen wird an den Regeln UND an den Variablenwerten - eine
+        Variable, die den Hexwert von `--signal` wiederholt, umginge eine
+        Pruefung, die nur auf `var(--signal)` sieht.
+        """
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        signal = re.search(r"--signal:\s*([^;]+);", quelle).group(1).strip().lower()
+        for status in Status:
+            with self.subTest(status=status.value):
+                regel = quelle[quelle.index(f".status-{status.value} {{") :]
+                regel = regel[: regel.index("}")]
+                self.assertNotIn("var(--signal)", regel)
+                self.assertNotIn(signal, regel.lower())
+
+    def test_keine_statusregel_traegt_die_fehlerfarbe(self):
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        fehler = re.search(r"--fehler:\s*([^;]+);", quelle).group(1).strip().lower()
+        for status in Status:
+            with self.subTest(status=status.value):
+                regel = quelle[quelle.index(f".status-{status.value} {{") :]
+                regel = regel[: regel.index("}")]
+                self.assertNotIn("var(--fehler)", regel)
+                self.assertNotIn(fehler, regel.lower())
+
+    def test_kein_statuswert_wiederholt_signal_oder_fehler(self):
+        """Auch die Variablenwerte selbst nicht."""
+        quelle = self._quelle()
+        verboten = {
+            re.search(r"--signal:\s*([^;]+);", quelle).group(1).strip().lower(),
+            re.search(r"--fehler:\s*([^;]+);", quelle).group(1).strip().lower(),
+        }
+        werte = {w.split("/*")[0].strip().lower() for w in self._variablen().values()}
+        self.assertEqual(werte & verboten, set())
+
+
+class StatusfarbenInDenSeitenTests(TestCase):
+    """Die Statusklasse kommt an den drei Stellen an, an denen ein Status steht.
+
+    Liste (beide Fassungen tragen dasselbe Markup), Objektansicht und die
+    Anzeige des aktuellen Status am Statusformular.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _objekt(self, status):
+        return Objekt.objects.create(
+            url=f"https://x.example/{status}", titel=f"Objekt {status}", status=status
+        )
+
+    def test_die_liste_traegt_je_zeile_die_statusklasse(self):
+        for status in Status:
+            with self.subTest(status=status.value):
+                self._objekt(status)
+        # Alle sechs sichtbar machen, auch die ausgeblendeten.
+        antwort = self.client.get(
+            reverse("objektliste"), {"status": [s.value for s in Status]}
+        )
+        for status in Status:
+            with self.subTest(status=status.value):
+                self.assertContains(antwort, f"status-{status.value}")
+
+    def test_die_liste_zeigt_den_status_weiterhin_ausgeschrieben(self):
+        """Die Marke ersetzt die Beschriftung nicht, sie umgibt sie."""
+        self._objekt(Status.BESICHTIGUNG)
+        antwort = self.client.get(reverse("objektliste"))
+        self.assertContains(antwort, ">Besichtigung<")
+
+    def test_die_objektansicht_traegt_die_statusklasse_an_der_marke(self):
+        objekt = self._objekt(Status.HEISSE_SPUR)
+        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
+        self.assertContains(antwort, 'class="statusmarke status-heisse_spur"')
+
+    def test_das_statusformular_zeigt_den_aktuellen_status_farbig(self):
+        """Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular."""
+        objekt = self._objekt(Status.RAUS)
+        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
+        self.assertContains(antwort, 'class="statuswahl status-raus"')
+
+    def test_die_klasse_am_formular_folgt_dem_gespeicherten_status(self):
+        """Riegel gegen eine fest hineingeschriebene Klasse."""
+        objekt = self._objekt(Status.NEU)
+        objekt.status_setzen(self.person, Status.BESICHTIGUNG)
+        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
+        self.assertContains(antwort, 'class="statuswahl status-besichtigung"')
+        self.assertNotContains(antwort, 'class="statuswahl status-neu"')
+
+    def test_die_marke_folgt_ebenfalls_dem_gespeicherten_status(self):
+        objekt = self._objekt(Status.NEU)
+        objekt.status_setzen(self.person, Status.VOM_MARKT)
+        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
+        self.assertContains(antwort, 'class="statusmarke status-vom_markt"')
+
+
+class FilterblockNachbesserungTests(TestCase):
+    """Abschnitt 3: drei Punkte aus der Sichtpruefung.
+
+    Feldnamen, Reihenfolge und die Klasse des Formulars bleiben unveraendert -
+    die letzten drei Zeugen halten genau das fest.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _seite(self):
+        return self.client.get(reverse("objektliste"))
+
+    def _stylesheet(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    # --- Punkt 1: die Doppelpunkte fallen weg -----------------------------
+
+    def test_keine_beschriftung_des_filterblocks_traegt_einen_doppelpunkt(self):
+        """ABGELEITET aus dem Formular, nicht abgeschrieben.
+
+        Ueber dem Feld ist der Doppelpunkt falsch - er stammt aus der Zeit,
+        als die Beschriftung daneben stand. Gemessen an `label_tag`, weil
+        genau der ihn setzt.
+        """
+        formular = self._seite().context["filterform"]
+        for name in formular.fields:
+            with self.subTest(feld=name):
+                # `label_tag` ist eine METHODE. Ohne Klammern misst der Zeuge
+                # die Repraesentation des gebundenen Methodenobjekts - darin
+                # steht nie ein Doppelpunkt, und er waere immer gruen.
+                self.assertNotIn(":", formular[name].label_tag())
+
+    def test_die_beschriftungen_stehen_trotzdem_noch_da(self):
+        """Riegel: der Doppelpunkt faellt, die Beschriftung nicht."""
+        antwort = self._seite()
+        self.assertContains(antwort, ">Suche<")
+        self.assertContains(antwort, ">Preis ab (€)<")
+
+    def test_die_formklasse_selbst_bleibt_unangetastet(self):
+        """`label_suffix` wird beim BAUEN gesetzt, nicht in der Klasse.
+
+        Ein frisch gebautes Formular ohne Argument traegt den Doppelpunkt
+        weiter - genau daran haengt, dass die Klasse unveraendert ist.
+        """
+        self.assertIn(":", forms.ObjektFilterForm()["suche"].label_tag())
+
+    # --- Punkt 2: das Suchfeld wird begrenzt ------------------------------
+
+    def test_das_suchfeld_hat_dieselbe_rasterbreite_wie_die_anderen(self):
+        """Keine zweite Klasse mehr an der Feldeinheit der Suche.
+
+        Sie war doppelt so breit wie jedes andere Feld des Blocks; bei drei
+        Spalten nahm sie zwei Drittel der Zeile.
+        """
+        quelle = (settings.BASE_DIR / "templates" / "objekte" / "objektliste.html").read_text(
+            encoding="utf-8"
+        )
+        zeile = next(z for z in quelle.splitlines() if "filterform.suche" in z)
+        self.assertNotIn("breit", zeile)
+
+    def test_die_gerenderte_feldeinheit_der_suche_traegt_nur_die_grundklasse(self):
+        """Am gerenderten HTML gemessen, nicht nur an der Vorlage."""
+        self.assertNotContains(self._seite(), 'class="feld breit"')
+
+    def test_das_stylesheet_fuehrt_keine_sonderbreite_mehr(self):
+        """Eine Regel ohne Traeger sieht in einem halben Jahr wie eine
+        Anforderung aus."""
+        self.assertNotIn(".filter .breit", self._stylesheet())
+
+    def test_die_feldeinheit_gibt_es_ueberhaupt_noch(self):
+        """Riegel gegen die drei Zeugen darueber im Vakuum."""
+        self.assertContains(self._seite(), 'class="feld"')
+
+    # --- Punkt 3: der Statusblock wird sichtbar abgesetzt -----------------
+
+    def _statusfilterregel(self):
+        quelle = re.sub(r"\s+", " ", self._stylesheet())
+        regel = quelle[quelle.index(".statusfilter {") :]
+        return regel[: regel.index("}")]
+
+    def test_der_statusblock_ist_sichtbar_abgesetzt(self):
+        """Eine erkennbare Abgrenzung - Linie oder eigener Flaechenton.
+
+        Ohne sie steht der Block als volle Zeile zwischen Suche und Land und
+        sieht aus wie alles andere; der Filterblock liest sich dann als eine
+        Kette gleicher Dinge.
+        """
+        regel = self._statusfilterregel()
+        hat_linie = "border-top" in regel or "border-bottom" in regel
+        hat_flaeche = "background" in regel
+        self.assertTrue(hat_linie or hat_flaeche, regel)
+
+    def test_die_abgrenzung_bekommt_auch_luft(self):
+        """Eine Linie ohne Innenabstand klebt am Inhalt und trennt nichts."""
+        self.assertIn("padding:", self._statusfilterregel())
+
+    def test_der_statusblock_bleibt_eine_volle_zeile(self):
+        """Sechs Kaestchen passen in keine Rasterspalte - das bleibt so."""
+        self.assertIn("grid-column: 1 / -1", self._statusfilterregel())
+
+    # --- Was unveraendert bleibt ------------------------------------------
+
+    def test_die_feldnamen_sind_unveraendert(self):
+        """Der Schutz sind die bestehenden Tests - und dieser hier."""
+        self.assertEqual(
+            list(self._seite().context["filterform"].fields),
+            [
+                "suche",
+                "status",
+                "land",
+                "portal",
+                "objekttyp",
+                "zustand",
+                "preis_von",
+                "preis_bis",
+                "flaeche_von",
+                "flaeche_bis",
+                "region",
+            ],
+        )
+
+    def test_die_reihenfolge_in_der_vorlage_ist_unveraendert(self):
+        quelle = (settings.BASE_DIR / "templates" / "objekte" / "objektliste.html").read_text(
+            encoding="utf-8"
+        )
+        gefunden = re.findall(r"filterform\.(\w+)", quelle)
+        self.assertEqual(
+            gefunden,
+            [
+                "suche",
+                "status",
+                "status",
+                "status",
+                "land",
+                "portal",
+                "objekttyp",
+                "zustand",
+                "preis_von",
+                "preis_bis",
+                "flaeche_von",
+                "flaeche_bis",
+                "region",
+            ],
+        )
+
+    def test_die_klasse_des_formulars_ist_unveraendert(self):
+        self.assertContains(self._seite(), '<form method="get" class="filter">')
+
+
+class BekannteDomainTests(SimpleTestCase):
+    """Die reine Funktion hinter dem Vorschau-Hinweis.
+
+    Sie beantwortet eine ANDERE Frage als `portal_und_id()`: gehoert die
+    Domain zu einem bekannten Portal? Eine Suchseite bei idealista liefert
+    dort `("", "")` und ist hier trotzdem bekannt. Genau daran haengt, dass
+    die Warnung nicht bei jedem unbekannten Pfadmuster mitspringt.
+    """
+
+    def test_eine_inseratsadresse_gilt_als_bekannt(self):
+        self.assertTrue(
+            portale.ist_bekannte_domain("https://www.idealista.com/inmueble/12345/")
+        )
+
+    def test_eine_suchseite_desselben_portals_gilt_ebenfalls_als_bekannt(self):
+        """DER Fall, an dem sich die Funktion von `portal_und_id()` trennt.
+
+        Der Pfad liefert kein Paar - die Domain ist trotzdem bekannt, und eine
+        Warnung waere hier falsch.
+        """
+        adresse = "https://www.idealista.com/venta-viviendas/alicante/"
+        self.assertEqual(portal_und_id(adresse), portale.LEER)
+        self.assertTrue(portale.ist_bekannte_domain(adresse))
+
+    def test_jedes_portal_der_tabelle_gilt_als_bekannt(self):
+        """ABGELEITET aus `PORTALE`, nicht abgeschrieben."""
+        for portal, domains, _ in portale.PORTALE:
+            for domain in domains:
+                with self.subTest(portal=portal, domain=domain):
+                    self.assertTrue(portale.ist_bekannte_domain(f"https://{domain}/x"))
+
+    def test_eine_subdomain_gilt_als_bekannt(self):
+        self.assertTrue(portale.ist_bekannte_domain("https://m.idealista.com/x"))
+
+    def test_www_stoert_nicht(self):
+        self.assertTrue(portale.ist_bekannte_domain("https://www.fotocasa.es/x"))
+
+    def test_grossschreibung_stoert_nicht(self):
+        self.assertTrue(portale.ist_bekannte_domain("https://WWW.PISOS.COM/x"))
+
+    def test_eine_fremde_domain_gilt_als_unbekannt(self):
+        self.assertFalse(portale.ist_bekannte_domain("https://www.immowelt.de/expose/x"))
+
+    def test_die_eigene_seite_gilt_als_unbekannt(self):
+        """Der Anlass fuer diese Runde: das Lesezeichen loest auf JEDER Seite
+        aus, und im Bestand liegt ein Objekt, das die Objektradar-Seite selbst
+        erfasst hat."""
+        self.assertFalse(portale.ist_bekannte_domain("http://localhost:8347/objekt/3/"))
+
+    def test_eine_domain_die_nur_so_endet_gilt_als_unbekannt(self):
+        """`endswith` allein traefe auch `nichtidealista.com`."""
+        self.assertFalse(portale.ist_bekannte_domain("https://nichtidealista.com/x"))
+
+    def test_eine_ausgeschiedene_laenderdomain_gilt_als_unbekannt(self):
+        """`idealista.it` ist am 02.09. herausgefallen und bleibt draussen."""
+        self.assertFalse(portale.ist_bekannte_domain("https://www.idealista.it/x"))
+
+    def test_eine_leere_eingabe_gilt_als_unbekannt(self):
+        self.assertFalse(portale.ist_bekannte_domain(""))
+
+    def test_eine_eingabe_ohne_host_gilt_als_unbekannt(self):
+        self.assertFalse(portale.ist_bekannte_domain("nur-ein-text"))
+
+    def test_eine_kaputte_ipv6_klammer_wirft_nicht(self):
+        """Kein 500er aus einer unlesbaren Adresse."""
+        self.assertFalse(portale.ist_bekannte_domain("https://[kaputt/x"))
+
+    def test_das_modul_importiert_weiterhin_kein_django(self):
+        """Die Zusage des Moduls gilt auch fuer die neue Funktion."""
+        quelle = inspect.getsource(portale)
+        self.assertNotIn("django", quelle)
+
+
+class VorschauHinweisTests(TestCase):
+    """Abschnitt 4: der Hinweis bei unbekannter Domain.
+
+    GESPERRT wird nichts. Ein Inserat von einem unbekannten Portal muss
+    erfassbar bleiben - das ist ein Vorteil dieses Weges und wird nicht
+    aufgegeben. Gewarnt wird stattdessen.
+    """
+
+    BEKANNT = "https://www.idealista.com/inmueble/12345/"
+    UNBEKANNT = "https://www.immowelt.de/expose/2xk4c5r"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _vorschau(self, url):
+        return self.client.get("/uebernehmen/", {"url": url, "titel": "Etwas"})
+
+    def _absenden(self, url, **abweichungen):
+        """Der Rumpf, den der Browser aus der Vorschau zurueckschickt.
+
+        `zustand` steht ausdruecklich drin: es ist das EINZIGE Pflichtfeld des
+        Vorschauformulars - die Modellspalte traegt einen Default, aber kein
+        `blank=True`, und damit ist das Formularfeld erforderlich. Ohne es
+        maessen die Zeugen unten eine abgewiesene Uebernahme und haetten mit
+        der Domain nichts zu tun.
+        """
+        daten = {"url": url, "titel": "Haus am Deich", "zustand": Zustand.UNKLAR}
+        daten.update(abweichungen)
+        return self.client.post("/uebernehmen/", daten)
+
+    def _meldungen(self, antwort):
+        return [str(m) for m in antwort.context["messages"]]
+
+    # --- Zeuge: bekannte Portaldomain -> kein Hinweis ---------------------
+
+    def test_eine_bekannte_domain_erzeugt_keinen_hinweis(self):
+        self.assertEqual(self._meldungen(self._vorschau(self.BEKANNT)), [])
+
+    def test_auch_eine_suchseite_des_portals_erzeugt_keinen_hinweis(self):
+        """Die Warnung haengt an der DOMAIN, nicht am Pfadmuster.
+
+        Ueber `portal_und_id()` gemessen spraenge sie hier mit an - und eine
+        Warnung, die bei bekannten Portalen mitspringt, liest nach der dritten
+        niemand mehr.
+        """
+        adresse = "https://www.idealista.com/venta-viviendas/alicante/"
+        self.assertEqual(self._meldungen(self._vorschau(adresse)), [])
+
+    # --- Zeuge: unbekannte Domain -> Hinweis erscheint --------------------
+
+    def test_eine_unbekannte_domain_erzeugt_einen_hinweis(self):
+        self.assertEqual(len(self._meldungen(self._vorschau(self.UNBEKANNT))), 1)
+
+    def test_der_hinweis_steht_auf_der_seite(self):
+        """Im Kontext allein nuetzt er nichts - er muss gerendert werden."""
+        self.assertContains(self._vorschau(self.UNBEKANNT), "keinem bekannten Portal")
+
+    def test_der_hinweis_sagt_dass_die_seite_vermutlich_kein_inserat_ist(self):
+        self.assertContains(self._vorschau(self.UNBEKANNT), "vermutlich")
+
+    def test_der_hinweis_sagt_dass_speichern_moeglich_bleibt(self):
+        """Wer nur "vermutlich kein Inserat" liest, bricht ab - auch dann,
+        wenn das Inserat echt ist und nur das Portal unbekannt."""
+        self.assertContains(self._vorschau(self.UNBEKANNT), "trotzdem möglich")
+
+    def test_der_hinweis_erscheint_auch_beim_abgewiesenen_formular(self):
+        """Die Vorschau wird an ZWEI Stellen gerendert.
+
+        In `get()` gesetzt, fehlte der Hinweis ausgerechnet beim zweiten Blick
+        auf dieselbe fremde Seite.
+        """
+        antwort = self._absenden(self.UNBEKANNT, baujahr="keine-zahl")
+        self.assertContains(antwort, "keinem bekannten Portal")
+
+    # --- Zeuge: der Hinweis ist kein Fehler -------------------------------
+
+    def test_der_hinweis_laeuft_auf_der_warnstufe(self):
+        """Die Stufe ZWISCHEN Hinweis und Fehler.
+
+        Bis zum 03.09. lief der Hinweis auf der neutralen Stufe, weil es keine
+        dazwischen gab. Jetzt gibt es sie, und er laeuft darueber.
+
+        Gemessen an den Tags, die `basis.html` als Klasse ausgibt - daran
+        haengt, welche Regel im Stylesheet greift.
+        """
+        antwort = self._vorschau(self.UNBEKANNT)
+        tags = [m.tags for m in antwort.context["messages"]]
+        self.assertEqual(tags, ["warning"])
+
+    def test_der_hinweis_laeuft_NICHT_auf_der_neutralen_stufe(self):
+        """Das Gegenstueck, und der eigentliche Riegel dieser Runde.
+
+        `messages.info` traegt den Tag `info`, fuer den es im Stylesheet KEINE
+        Regel gibt - die Meldung faellt dann auf die neutrale Vorgabe zurueck
+        und sieht aus wie "Das Inserat liegt schon in der Liste". Genau das
+        war der Zustand, den diese Runde behebt, und er kaeme durch eine
+        einzige geaenderte Zeile in der Ansicht zurueck.
+        """
+        antwort = self._vorschau(self.UNBEKANNT)
+        tags = [m.tags for m in antwort.context["messages"]]
+        self.assertNotIn("info", tags)
+
+    def test_die_warnklasse_steht_auch_wirklich_in_der_seite(self):
+        """Der Tag allein nuetzt nichts - die Vorlage muss ihn ausgeben."""
+        self.assertContains(self._vorschau(self.UNBEKANNT), '<li class="warning"')
+
+    def test_der_hinweis_laeuft_nicht_als_fehler(self):
+        """Es ist kein Fehler - `--fehler` waere die falsche Stufe.
+
+        `error` griffe im Stylesheet die Fehlerfarbe ab, und die gehoert einem
+        Tippfehler im Formular, nicht einer fremden Domain. Das Speichern
+        laeuft weiter, und eine Meldung in Fehlerfarbe behauptete das
+        Gegenteil.
+        """
+        antwort = self._vorschau(self.UNBEKANNT)
+        tags = [m.tags for m in antwort.context["messages"]]
+        self.assertNotIn("error", tags)
+
+    def test_die_seite_traegt_die_fehlerklasse_nicht(self):
+        self.assertNotContains(self._vorschau(self.UNBEKANNT), '<li class="error"')
+
+    # --- Zeuge: Speichern funktioniert trotzdem ---------------------------
+
+    def test_eine_unbekannte_domain_laesst_sich_speichern(self):
+        self._absenden(self.UNBEKANNT)
+        self.assertTrue(Objekt.objects.filter(url=self.UNBEKANNT).exists())
+
+    def test_das_gespeicherte_objekt_traegt_die_gelesenen_werte(self):
+        self._absenden(self.UNBEKANNT)
+        self.assertEqual(Objekt.objects.get(url=self.UNBEKANNT).titel, "Haus am Deich")
+
+    def test_nach_dem_speichern_fuehrt_der_weg_auf_die_objektansicht(self):
+        antwort = self._absenden(self.UNBEKANNT)
+        objekt = Objekt.objects.get(url=self.UNBEKANNT)
+        self.assertEqual(antwort["Location"], reverse("objekt", args=[objekt.pk]))
+
+    def test_das_objekt_bleibt_ohne_portal_und_ohne_id(self):
+        """Die Warnung aendert an der Erkennung nichts - sie warnt nur."""
+        self._absenden(self.UNBEKANNT)
+        objekt = Objekt.objects.get(url=self.UNBEKANNT)
+        self.assertEqual((objekt.portal, objekt.inserats_id), ("", ""))
+
+    def test_die_vorschau_der_unbekannten_domain_legt_nichts_an(self):
+        """Der Hinweis laeuft im GET - und der GET legt weiterhin nichts an."""
+        self._vorschau(self.UNBEKANNT)
+        self.assertFalse(Objekt.objects.exists())
+
+
+class WarnstufeTests(TestCase):
+    """Die Meldungsstufe zwischen Hinweis und Fehler, am 03.09. dazugekommen.
+
+    Der Tag allein reicht nicht: gaebe es `.meldungen li.warning` im
+    Stylesheet nicht, faellt die Meldung auf die neutrale Vorgabe zurueck und
+    saehe wieder aus wie ein beliebiger Hinweis - die Ansicht schriebe
+    weiterhin `messages.warning`, und NICHTS wuerde sich melden. Genau diese
+    stille Rueckkehr in den alten Zustand halten die Zeugen hier.
+
+    Gerechnet wird in CIELAB, nicht nach Augenmass. Zwei Zusagen sind Zahlen
+    und nur als Zahlen pruefbar: "deutlich sichtbarer als der neutrale
+    Hinweis" ist ein Buntheitsabstand, "klar von --fehler und --signal
+    unterschieden" ein Farbabstand.
+    """
+
+    #: Ab hier gelten zwei Farben als sicher unterscheidbar. Deutlich ueber
+    #: der Wahrnehmungsschwelle (etwa 2,3) und mit Luft nach unten, damit eine
+    #: kleine Korrektur am Ton den Zeugen nicht grundlos rot macht.
+    ABSTAND = 20.0
+
+    #: Die Warnung muss BUNTER sein als der neutrale Hinweis - daraus kommt
+    #: ihre Sichtbarkeit, nicht aus mehr Dunkelheit oder mehr Flaeche.
+    BUNTHEITSFAKTOR = 4.0
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _wert(self, name):
+        """Der Hexwert einer Eigenschaft aus `:root`."""
+        treffer = re.search(rf"{re.escape(name)}:\s*(#[0-9A-Fa-f]{{6}})\s*;", self._quelle())
+        self.assertIsNotNone(treffer, f"{name} ist nicht definiert")
+        return treffer.group(1)
+
+    def _regel(self, waehler):
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        self.assertIn(f"{waehler} {{", quelle, f"{waehler} fehlt im Stylesheet")
+        rest = quelle[quelle.index(f"{waehler} {{") :]
+        return rest[: rest.index("}")]
+
+    # --- Farbrechnung -----------------------------------------------------
+
+    @staticmethod
+    def _linear(hexwert):
+        werte = [int(hexwert.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+        return [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4 for x in werte]
+
+    @classmethod
+    def _lab(cls, hexwert):
+        r, g, b = cls._linear(hexwert)
+        x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+        y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+        def f(t):
+            return t ** (1 / 3) if t > 0.008856 else (7.787 * t + 16 / 116)
+
+        fx, fy, fz = f(x), f(y), f(z)
+        return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+
+    @classmethod
+    def _abstand(cls, a, b):
+        return math.dist(cls._lab(a), cls._lab(b))
+
+    @classmethod
+    def _buntheit(cls, hexwert):
+        _, a, b = cls._lab(hexwert)
+        return math.hypot(a, b)
+
+    @classmethod
+    def _helligkeit(cls, hexwert):
+        r, g, b = cls._linear(hexwert)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    @classmethod
+    def _kontrast(cls, a, b):
+        ha, hb = cls._helligkeit(a), cls._helligkeit(b)
+        return (max(ha, hb) + 0.05) / (min(ha, hb) + 0.05)
+
+    @classmethod
+    def _mischung(cls, farbe, anteil, grund):
+        """`color-mix(in srgb, farbe anteil%, grund)` - Mischung der kodierten Werte."""
+        f = [int(farbe.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)]
+        g = [int(grund.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)]
+        return "#%02X%02X%02X" % tuple(
+            round(anteil * fc + (1 - anteil) * gc) for fc, gc in zip(f, g)
+        )
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_die_farbrechnung_stimmt_an_einem_bekannten_wert(self):
+        """Ohne ihn koennten alle Zeugen unten auf einer kaputten Formel gruen
+        bleiben. Schwarz auf Weiss ist 21:1, das ist nachschlagbar."""
+        self.assertAlmostEqual(self._kontrast("#000000", "#FFFFFF"), 21.0, places=2)
+        self.assertAlmostEqual(self._lab("#FFFFFF")[0], 100.0, places=1)
+        self.assertLess(self._buntheit("#808080"), 1.0)
+
+    # --- Die Stufe gibt es ueberhaupt -------------------------------------
+
+    def test_es_gibt_eine_eigene_warnfarbe(self):
+        self.assertIn("--warnung:", self._quelle())
+
+    def test_es_gibt_eine_regel_fuer_die_warnstufe(self):
+        """Ohne sie faellt `messages.warning` auf die neutrale Vorgabe zurueck."""
+        self.assertIn("var(--warnung)", self._regel(".meldungen li.warning"))
+
+    def test_die_warnregel_faerbt_balken_UND_flaeche(self):
+        """Beide, wie bei Erfolg und Fehler - sonst ist es eine halbe Stufe."""
+        regel = self._regel(".meldungen li.warning")
+        self.assertIn("border-left-color: var(--warnung)", regel)
+        self.assertIn("var(--warnung)", regel[regel.index("background") :])
+
+    # --- Gedeckt, aber sichtbarer als der neutrale Hinweis ----------------
+
+    def test_die_warnung_ist_deutlich_bunter_als_der_neutrale_hinweis(self):
+        """DIE Zusage dieser Runde: sichtbarer als die neutrale Stufe.
+
+        Gemessen an der Buntheit und nicht an der Helligkeit - genau daher
+        soll die Aufmerksamkeit kommen. Ein Ton, der nur dunkler waere, machte
+        die Meldung lauter, ohne sie unterscheidbar zu machen.
+        """
+        warnung = self._wert("--warnung")
+        neutral = self._wert("--gedaempft")
+        self.assertGreater(
+            self._buntheit(warnung),
+            self._buntheit(neutral) * self.BUNTHEITSFAKTOR,
+            f"--warnung {warnung} ist nicht deutlich bunter als --gedaempft {neutral}",
+        )
+
+    def test_die_warnung_bleibt_in_der_helligkeitsklasse_des_balkens(self):
+        """Gedeckt heisst: sie wird nicht dunkler, nur farbig.
+
+        Der Balken soll genau so viel wiegen wie der neutrale. Waere die
+        Warnung deutlich dunkler, waere sie laut statt gedeckt - und naeher an
+        `--fehler`, als sie sein darf.
+        """
+        warnung = self._wert("--warnung")
+        neutral = self._wert("--gedaempft")
+        self.assertLess(abs(self._lab(warnung)[0] - self._lab(neutral)[0]), 12.0)
+
+    def test_die_warnung_ist_vom_neutralen_hinweis_unterscheidbar(self):
+        self.assertGreater(
+            self._abstand(self._wert("--warnung"), self._wert("--gedaempft")),
+            self.ABSTAND,
+        )
+
+    # --- Klar von --signal und --fehler unterschieden ---------------------
+
+    def test_die_warnung_ist_nicht_die_signalfarbe(self):
+        """`--signal` bleibt der Preissenkung vorbehalten.
+
+        Eine orange Warnung konkurrierte mit dem wichtigsten Kaufsignal der
+        Liste - genau der Grund, aus dem `--fehler` schon eine eigene Farbe
+        bekommen hat.
+        """
+        warnung = self._wert("--warnung")
+        signal = self._wert("--signal")
+        self.assertNotEqual(warnung.lower(), signal.lower())
+        self.assertGreater(self._abstand(warnung, signal), self.ABSTAND)
+
+    def test_die_warnung_ist_nicht_die_fehlerfarbe(self):
+        warnung = self._wert("--warnung")
+        fehler = self._wert("--fehler")
+        self.assertNotEqual(warnung.lower(), fehler.lower())
+        self.assertGreater(self._abstand(warnung, fehler), self.ABSTAND)
+
+    def test_die_warnregel_greift_weder_auf_signal_noch_auf_fehler_zu(self):
+        regel = self._regel(".meldungen li.warning")
+        self.assertNotIn("var(--signal)", regel)
+        self.assertNotIn("var(--fehler)", regel)
+
+    def test_die_fehlerstufe_behaelt_ihre_eigene_farbe(self):
+        """Riegel: die neue Stufe darf die bestehende nicht uebernehmen."""
+        self.assertIn("var(--fehler)", self._regel(".meldungen li.error"))
+        self.assertNotIn("var(--warnung)", self._regel(".meldungen li.error"))
+
+    # --- Der Kontrast reicht ----------------------------------------------
+
+    def test_die_schrift_bleibt_auf_der_warnflaeche_lesbar(self):
+        """Ein blasser Text auf blasser Flaeche waere schlechter als keine Farbe.
+
+        Die Toenung wird aus derselben Angabe gerechnet, die im Stylesheet
+        steht - der Anteil wird also mitgeprueft und nicht angenommen.
+        """
+        regel = self._regel(".meldungen li.warning")
+        anteil = re.search(r"var\(--warnung\)\s*(\d+)%", regel)
+        self.assertIsNotNone(anteil, f"kein Mischungsanteil in: {regel}")
+        grund = self._mischung(
+            self._wert("--warnung"), int(anteil.group(1)) / 100, self._wert("--flaeche")
+        )
+        self.assertGreater(self._kontrast(grund, self._wert("--text")), 4.5)

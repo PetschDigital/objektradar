@@ -9,8 +9,17 @@
   `label_tag` statt eines von Hand gebauten `<label>`: es traegt das `for`
   auf die tatsaechliche Feld-ID. Von Hand geschrieben bricht die Verbindung
   still, sobald ein Feld ein anderes Widget bekommt.
+
+  Der Doppelpunkt hinter der Beschriftung kommt aus `label_suffix` und wird
+  dort abgestellt, wo das Formular gebaut wird - nicht hier. Er stammt aus der
+  Zeit, als die Beschriftung NEBEN dem Feld stand.
+
+  Ein `breit`-Schalter stand hier bis zum 03.09. und setzte eine zweite
+  Klasse. Sein einziger Aufrufer war die Freitextsuche des Filterblocks, und
+  die nimmt jetzt dieselbe Rasterbreite wie alle anderen Felder. Ein Schalter
+  ohne Aufrufer sieht in einem halben Jahr wie eine Anforderung aus.
 {% endcomment %}
-<div class="feld{% if breit %} breit{% endif %}">
+<div class="feld">
   {{ feld.label_tag }}
   {{ feld }}
   {{ feld.errors }}

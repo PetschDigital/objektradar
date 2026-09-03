@@ -23,10 +23,15 @@
     Die ruhige Zeile unter der Bezeichnung. Der Status ist eine MARKE und kein
     Fliesstext: er wird gesucht, nicht gelesen, und in einem Satz mit Ort und
     Link findet ihn das Auge nicht wieder.
+
+    Die Klasse kommt aus dem GESPEICHERTEN Wert (`objekt.status`), nicht aus
+    der Beschriftung: die Beschriftung darf sich ändern, der Schlüssel nicht.
+    Damit gibt es keine zweite Zuordnungstabelle zwischen Status und Farbe —
+    das Stylesheet führt je Schlüssel genau eine Regel.
   {% endcomment %}
   <p class="objektzeile">
     <span class="ort">{{ objekt.ort|default:"—" }}{% if objekt.land %} · {{ objekt.get_land_display }}{% endif %}</span>
-    <span class="statusmarke">{{ objekt.get_status_display }}</span>
+    <span class="statusmarke status-{{ objekt.status }}">{{ objekt.get_status_display }}</span>
     <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
   </p>
 
@@ -187,8 +192,15 @@
   <h2>Status</h2>
   <form method="post" action="{% url 'status_setzen' objekt.pk %}" class="statuswechsel">
     {% csrf_token %}
+    {% comment %}
+      Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular -
+      der gespeicherte Wert steht als `selected` darin. Sie trägt deshalb
+      dieselbe Statusklasse wie die Marke oben und die Zellen der Liste. Kein
+      zweiter Marker daneben: derselbe Wert zweimal auf einer Seite sagt
+      nichts Zweites.
+    {% endcomment %}
     <label for="id_status">Status</label>
-    <select name="status" id="id_status">
+    <select name="status" id="id_status" class="statuswahl status-{{ objekt.status }}">
       {% for wert, beschriftung in statusauswahl %}
         <option value="{{ wert }}"{% if objekt.status == wert %} selected{% endif %}>{{ beschriftung }}</option>
       {% endfor %}
@@ -257,4 +269,18 @@
     · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
     · zuletzt gesehen {{ objekt.zuletzt_gesehen|date:"d.m.Y H:i"|default:"—" }}
   </p>
+
+  {% comment %}
+    Der Einstieg ins Löschen. Er liegt HIER und nicht in der Liste: dort wäre
+    er ein Fehlklick neben dem Öffnen.
+
+    Deutlich schwächer gewichtet als „Bearbeiten" — kein Knopf in derselben
+    Größe, sondern ein gedämpfter Textlink, abgesetzt am Seitenende beim
+    Beleg. Löschen ist die seltenste Handlung dieser Seite und darf nicht
+    aussehen wie die häufigste.
+
+    Ein `<a>` und kein Formular: der Link führt auf die Bestätigungsseite und
+    verändert nichts. Gelöscht wird erst durch den POST von dort.
+  {% endcomment %}
+  <p class="loeschen"><a href="{% url 'objekt_loeschen' objekt.pk %}">Objekt löschen</a></p>
 {% endblock %}

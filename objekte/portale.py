@@ -165,3 +165,36 @@ def portal_und_id(url: str) -> tuple[str, str]:
             return (portal, treffer.group(1)) if treffer else LEER
 
     return LEER
+
+
+def ist_bekannte_domain(url: str) -> bool:
+    """Ob die Domain zu einem der bekannten Portale gehoert.
+
+    NICHT dasselbe wie `portal_und_id(url) != LEER`. Eine idealista-URL mit
+    unbekanntem Pfad - eine Suchseite etwa - liefert dort `("", "")` und ist
+    hier trotzdem eine BEKANNTE Domain. Genau diese Trennung braucht die
+    Vorschau: sie warnt vor einer fremden Seite, nicht vor einem Pfadmuster,
+    das auf einem Portal noch nicht belegt ist. Ueber `portal_und_id()`
+    gemessen, warnte sie bei jeder idealista-Suchseite mit - und eine Warnung,
+    die bei bekannten Portalen mitspringt, liest nach der dritten niemand mehr.
+
+    Gelesen wird aus derselben `PORTALE`-Tabelle wie `portal_und_id()`, ueber
+    dieselben beiden Hilfsfunktionen. Eine zweite Domainliste daneben driftete
+    von der ersten weg, und dann warnte die Vorschau vor einem Portal, das der
+    Einwurf laengst erkennt.
+
+    `sonstiges` steht bewusst NICHT in der Tabelle: es ist der Auffangwert der
+    Auswahlliste und keine Domain. Es gibt keine Adresse, die dazu gehoerte.
+    """
+    try:
+        teile = urlsplit(url or "")
+    except ValueError:
+        # Dieselbe Behandlung wie in `portal_und_id()`: ein unlesbarer Host
+        # ist kein bekanntes Portal - und kein Grund fuer einen 500er.
+        return False
+
+    host = _host(teile)
+    if not host:
+        return False
+
+    return any(_passt(host, domains) for _, domains, _ in PORTALE)

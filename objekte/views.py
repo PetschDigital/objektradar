@@ -16,7 +16,7 @@ from .choices import PreisQuelle, Quelle, Status, Wertung
 from .forms import ObjektFilterForm, ObjektForm, UebernahmeForm
 from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
-from .portale import portal_und_id
+from .portale import ist_bekannte_domain, portal_und_id
 
 URL_MAXLAENGE = Objekt._meta.get_field("url").max_length
 
@@ -411,7 +411,12 @@ class ObjektlisteView(ListView):
         naechsten Feld mit `clean_…` waere "gleich" eine Annahme statt einer
         Zusage.
         """
-        return ObjektFilterForm(self.request.GET)
+        # `label_suffix=""` nimmt den Doppelpunkt aus den Beschriftungen.
+        # Er stammt aus der Zeit, als die Beschriftung NEBEN dem Feld stand;
+        # ueber dem Feld ist er falsch. Gesetzt beim Bauen und nicht in der
+        # Formklasse: die bleibt unveraendert, und `label_suffix` ist ein
+        # regulaeres Argument von `BaseForm.__init__` - kein Eingriff.
+        return ObjektFilterForm(self.request.GET, label_suffix="")
 
     def get_queryset(self):
         """Der Statusfilter entscheidet, welche Status erscheinen - er allein.
@@ -637,6 +642,74 @@ class ObjektBearbeitenView(UpdateView):
         return redirect("objekt", pk=objekt.pk)
 
 
+class ObjektLoeschenView(View):
+    """Loeschen in zwei Stationen, ohne JavaScript.
+
+    GET zeigt die Bestaetigung und legt nichts an und loescht nichts. Erst
+    POST loescht. Dieselbe Bauform wie die Uebernahme und aus demselben Grund:
+    ein Loeschen darf nicht an einem Link haengen. Ein Link wird von
+    Vorausladern, Linkpruefern und dem Zurueck-Knopf abgerufen, ohne dass
+    jemand ihn angeklickt haette.
+
+    Wer darf: jeder Angemeldete. `01_Konzept.md` legt fest, dass alle
+    gleichberechtigt sind und es kein Rollenkonzept gibt - eine Pruefung auf
+    "nur wer eingeworfen hat" waere genau so ein Konzept, nur unausgesprochen.
+    Die Anmeldung selbst verlangt `LoginRequiredMiddleware` fuer jede Ansicht,
+    die nicht ausdruecklich `login_not_required` traegt.
+    """
+
+    template_name = "objekte/objekt_loeschen.html"
+
+    def get(self, request, pk):
+        objekt = get_object_or_404(Objekt, pk=pk)
+        return render(
+            request,
+            self.template_name,
+            {"objekt": objekt, "anhang": self._anhang(objekt)},
+        )
+
+    def post(self, request, pk):
+        objekt = get_object_or_404(Objekt, pk=pk)
+        # VOR dem Loeschen gelesen: `__str__` faellt ohne Titel auf Portal und
+        # Inserats-ID zurueck, und beides steht nach `delete()` zwar noch in
+        # der Instanz - aber sich darauf zu verlassen hiesse, an einem
+        # Nebeneffekt von Djangos Collector zu haengen.
+        bezeichnung = str(objekt)
+        objekt.delete()
+        messages.success(request, f"„{bezeichnung}“ wurde gelöscht.")
+        return redirect("objektliste")
+
+    @staticmethod
+    def _anhang(objekt):
+        """Was am Objekt haengt, mit Zahlen aus dem Bestand.
+
+        Der Grund fuer die Zahlen steht auf der Seite selbst: fuenf Leute
+        arbeiten an derselben Liste, und wer loescht, loescht moeglicherweise
+        die Arbeit anderer, ohne es zu wissen. Eine Seite, die nur "wirklich
+        loeschen?" fragt, verschweigt das.
+
+        VIER einzelne `count()`-Abfragen und NICHT vier `Count`-Aggregate in
+        einer: die Aggregate liefen ueber vier verschiedene Beziehungen und
+        erzeugten miteinander ein Kreuzprodukt - jede Notiz vervielfachte
+        jedes Votum, und die Zahlen waeren still zu hoch. Dasselbe Muster, das
+        `mit_preisaenderung()` mit einer Subquery umgeht. Hier ist es ein
+        einzelnes Objekt und eine Seite, die selten aufgerufen wird; vier
+        kleine Abfragen sind die ehrliche Antwort und `distinct=True` waere
+        eine Feinheit, die niemand mehr nachliest.
+
+        Die Bilder stehen NICHT in dieser Liste, obwohl sie mitgehen. Sie sind
+        vom Portal verlinkt und niemandes Arbeit - und die Liste beantwortet
+        die Frage "verliere ich, was jemand hier hineingelegt hat", nicht
+        "wie viele Zeilen loescht die Datenbank".
+        """
+        return [
+            ("Vota", objekt.vota.count()),
+            ("Notizen", objekt.notizen.count()),
+            ("Einträge im Preisverlauf", objekt.preise.count()),
+            ("Statusänderungen", objekt.statusaenderungen.count()),
+        ]
+
+
 @require_POST
 def votum_setzen(request, pk):
     """Ein Votum je Person und Objekt, jederzeit aenderbar.
@@ -709,6 +782,18 @@ GELESENE_FELDER = {
 EINHEITEN = {"kaufpreis": "€", "wohnflaeche": "m²"}
 
 KEIN_LINK = "Kein Link übergeben. Öffne das Inserat und klicke das Lesezeichen erneut."
+
+#: Steht auf der Vorschau, wenn die Domain zu keinem bekannten Portal gehoert.
+#:
+#: Das Lesezeichen loest auf JEDER Seite aus - im Bestand liegt deshalb ein
+#: Objekt, das die Objektradar-Seite selbst erfasst hat. Gesperrt wird
+#: trotzdem nichts: ein Inserat von einem unbekannten Portal muss erfassbar
+#: bleiben, das ist der Vorteil dieses Weges. Gewarnt wird stattdessen, und
+#: das Speichern bleibt offen.
+DOMAIN_UNBEKANNT = (
+    "Diese Seite gehört zu keinem bekannten Portal — vermutlich ist sie kein "
+    "Inserat. Speichern ist trotzdem möglich."
+)
 
 #: Bild-URLs laufen nicht durch das Formular - sie kommen als wiederholter
 #: Parameter und werden einzeln geprueft.
@@ -861,6 +946,23 @@ class UebernehmenView(View):
         return url, portal, inserats_id, bestehendes_objekt(url, portal, inserats_id)
 
     def _zeigen(self, request, *, form, hinweise, vorhanden, url, portal, inserats_id, bilder):
+        # Der Hinweis steht HIER und nicht in `get()`: die Vorschau wird an
+        # zwei Stellen gerendert - nach dem GET und noch einmal, wenn ein POST
+        # am Formular scheitert. In `get()` gesetzt, fehlte er ausgerechnet
+        # beim zweiten Blick auf dieselbe fremde Seite.
+        #
+        # Gemessen wird die UEBERGEBENE Adresse, nicht `vorhanden.url`: gewarnt
+        # wird vor der Seite, auf der das Lesezeichen ausgeloest hat.
+        #
+        # `messages.warning` und NICHT `messages.info`: die Warnstufe ist am
+        # 03.09. eigens dafuer entstanden. Vorher kannte die
+        # Meldungsdarstellung nur neutral, Erfolg und Fehler - der Hinweis lief
+        # auf der neutralen Stufe und war dort zu leise. `--fehler` bleibt
+        # falsch: eine unbekannte Domain ist kein Fehler, das Speichern laeuft
+        # weiter. Die Farbe steht als `--warnung` im Stylesheet.
+        if not ist_bekannte_domain(url):
+            messages.warning(request, DOMAIN_UNBEKANNT)
+
         return render(
             request,
             self.template_name,
