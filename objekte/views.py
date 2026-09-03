@@ -323,6 +323,44 @@ def votum_uebersicht(objekt, personen):
     return " · ".join(teile)
 
 
+def preisaenderung(objekt):
+    """Die Preisaenderung fuer die Preisspalte - oder `None`, wenn keine dasteht.
+
+    Erwartet die Annotationen aus `mit_preisaenderung()`. Rechnet nicht selbst
+    nach, was die Datenbank schon geliefert hat, und fragt sie auch nicht noch
+    einmal - deshalb kostet der Aufruf je Zeile keine Abfrage.
+
+    Gebaut wird der Wert in Python und nicht im Template: die Template-Sprache
+    kennt keine Division, und der Prozentwert ist eine.
+
+    `None` in drei Faellen, und jeder hat seinen eigenen Grund:
+
+    - Kein vorheriger Eintrag. Das ist der Normalfall bei allem, was gerade
+      erst eingeworfen wurde: ein einziger Eintrag ist kein Verlauf. Es steht
+      dann NICHTS in der Zeile - kein Platzhalter, keine leere Zeile.
+    - Kein aktueller Preis. Ohne beide Seiten gibt es keine Veraenderung.
+    - Ein vorheriger Preis von 0. Durch ihn laesst sich nicht teilen, und
+      Postgres wirft dabei - ein 500er auf der Liste, ausgeloest von einem
+      einzelnen Datensatz. Ein Kaufpreis von 0 EUR ist ohnehin keine
+      Bezugsgroesse, an der sich eine Senkung messen liesse.
+
+    `senkung` traegt die Richtung und NICHT die Farbe: welche Klasse daraus
+    wird, entscheidet das Template. Eine Erhoehung wird ausdruecklich mit
+    angezeigt - sie zu verschweigen waere eine Luecke -, aber sie ist kein
+    Kaufsignal und bekommt deshalb die gedaempfte Darstellung.
+    """
+    vorher = objekt.vorheriger_preis
+    jetzt = objekt.aktueller_preis
+    if vorher is None or jetzt is None or not vorher:
+        return None
+    return {
+        "vorher": vorher,
+        "prozent": (jetzt - vorher) / vorher * 100,
+        "datum": objekt.preis_geaendert_am,
+        "senkung": jetzt < vorher,
+    }
+
+
 class ObjektlisteView(ListView):
     """Die Liste. Das Einwerfen liegt in `objekt_anlegen` auf eigener Adresse."""
 
@@ -393,7 +431,7 @@ class ObjektlisteView(ListView):
         # Einwerfer nicht an. Ein Aufruf ohne Leser waere eine Optimierung
         # ohne Nutzen - und saehe in einem halben Jahr wie eine Anforderung
         # aus. Kommt die Spalte, kommt er mit ihr zurueck, samt Zeugen.
-        objekte = mit_votumzaehlung(Objekt.objects.mit_qm_preis())
+        objekte = mit_votumzaehlung(Objekt.objects.mit_qm_preis().mit_preisaenderung())
         return self.filterform.filtern(objekte).order_by(*reihenfolge(self.sortierung))
 
     @cached_property
@@ -441,6 +479,11 @@ class ObjektlisteView(ListView):
         personen = get_user_model().objects.filter(is_active=True).count()
         for objekt in kontext["objekte"]:
             objekt.votum_uebersicht = votum_uebersicht(objekt, personen)
+            # Beide Werte liegen als Annotation schon an der Zeile; hier wird
+            # nur gerechnet. Keine Abfrage in dieser Schleife - das ist die
+            # Zusage, die `test_mehr_preisverlauf_kostet_nicht_mehr_abfragen`
+            # haelt.
+            objekt.preisaenderung = preisaenderung(objekt)
         return kontext
 
 

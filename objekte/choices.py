@@ -10,6 +10,13 @@ from django.db import models
 class Portal(models.TextChoices):
     IDEALISTA = "idealista", "idealista"
     IMMOSCOUT24 = "immoscout24", "ImmoScout24"
+    # Am 02.09. dazugekommen, jedes an einer echten URL belegt. Die
+    # Schluessel stehen ein zweites Mal in `portale.py` - das Modul darf
+    # Django nicht importieren und kommt an diese Klasse nicht heran. Dass
+    # beide Seiten zusammenpassen, haelt `PortalModulTests` fest.
+    FOTOCASA = "fotocasa", "fotocasa"
+    MILANUNCIOS = "milanuncios", "milanuncios"
+    PISOS = "pisos", "pisos"
     SONSTIGES = "sonstiges", "sonstiges"
 
 

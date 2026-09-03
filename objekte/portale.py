@@ -27,13 +27,26 @@ from urllib.parse import urlsplit
 #: und niemand meldete sich.
 PORTAL_IDEALISTA = "idealista"
 PORTAL_IMMOSCOUT24 = "immoscout24"
+PORTAL_FOTOCASA = "fotocasa"
+PORTAL_MILANUNCIOS = "milanuncios"
+PORTAL_PISOS = "pisos"
 
 #: Beide Werte oder keiner. Ein halb gefuelltes Paar ist wertlos - der
 #: partielle Unique-Index greift nur, wenn Portal UND ID gesetzt sind.
 LEER = ("", "")
 
-IDEALISTA_DOMAINS = ("idealista.com", "idealista.it", "idealista.pt")
+#: `idealista.it` und `idealista.pt` sind am 02.09. HERAUSGEFALLEN. Sie standen
+#: hier als Domain, ohne dass je ein Pfadmuster fuer sie belegt war: das
+#: spanische `inmueble` traf auf ihnen nur, weil niemand eine echte
+#: italienische oder portugiesische URL dagegengehalten hat. Damit taeuschten
+#: sie Abdeckung vor, die es nicht gab - und die Gruppe sucht ohnehin in
+#: Spanien. Eine `.it`-URL faellt jetzt auf "sonstiges", und das ist der
+#: richtige Ausgang.
+IDEALISTA_DOMAINS = ("idealista.com",)
 IMMOSCOUT24_DOMAINS = ("immobilienscout24.de",)
+FOTOCASA_DOMAINS = ("fotocasa.es",)
+MILANUNCIOS_DOMAINS = ("milanuncios.com",)
+PISOS_DOMAINS = ("pisos.com",)
 
 #: Sprachpraefix optional, abschliessender Schraegstrich optional, danach
 #: Schluss. Query und Fragment stehen nicht im Pfad - `urlsplit` hat sie
@@ -43,6 +56,62 @@ IDEALISTA_PFAD = re.compile(r"^/(?:[a-z]{2}/)?inmueble/(\d+)/?$")
 #: Bewusst NICHT bis zum Ende geprueft: ImmoScout24 haengt an die Expose-URL
 #: Fragmente und Unterpfade an.
 IMMOSCOUT24_PFAD = re.compile(r"^/expose/(\d+)")
+
+#: Die letzte Zahl im Pfad; ein einzelner Buchstabe als letztes Segment (`/d`
+#: an der Expose-URL) wird uebersprungen.
+#:
+#: Der Anfang des Pfades wird ABSICHTLICH nicht geprueft. Dasselbe Inserat
+#: heisst auf der deutschen Fassung `/de/kaufen/wohnimmobilie/...` und auf der
+#: spanischen `/es/comprar/vivienda/...` - haengt das Muster am Sprachpraefix
+#: oder an den Woertern dahinter, legen zwei Personen dasselbe Objekt doppelt
+#: an. Der Ausstattungspfad davor ist zudem beliebig lang.
+#:
+#: `(?:.*/)?` ist gierig und greift damit die LETZTE Zahl: die Neubau-URL
+#: traegt zwei (`.../20561853/189207445`) und muss die zweite liefern.
+FOTOCASA_PFAD = re.compile(r"^/(?:.*/)?(\d+)(?:/[a-zA-Z])?/?$")
+
+#: Die Zahl nach dem letzten Bindestrich vor `.htm`.
+#:
+#: Was das Ergebnis festnagelt, ist NICHT die Gier von `.*-`, sondern der
+#: Anker `\.htm$`: die Ziffern muessen unmittelbar davor stehen. Am 02.09. in
+#: der Sabotage-Gegenprobe nachgemessen - ein nicht-gieriges `.*?-` liefert
+#: an derselben URL denselben Wert. Der Hinweis steht hier, weil eine erste
+#: Fassung dieses Kommentars die Gier fuer tragend hielt und ein Zeuge, der
+#: sie bewachen sollte, deshalb nichts gemessen haette.
+#:
+#: DUENNE STELLE, ausdruecklich so gebaut: dieses Muster haengt an einem
+#: einzigen Beleg. Kleinanzeigenportale fuehren oft mehrere Anzeigentypen mit
+#: abweichenden Pfaden. Passt eine URL nicht, faellt sie auf "sonstiges" -
+#: das ist der richtige Ausgang, kein Fehler.
+MILANUNCIOS_PFAD = re.compile(r"^/.*-(\d+)\.htm$")
+
+#: Der VOLLSTAENDIGE Block aus zwei durch Unterstrich getrennten Zahlen am
+#: Pfadende, nicht eine der beiden.
+#:
+#: Die zweite Zahl ist in beiden Belegen sechsstellig und beginnt mit `10` -
+#: vermutlich eine Makler- oder Agenturkennung. Naehme man nur sie, truegen
+#: alle Objekte desselben Maklers denselben Schluessel und der Dublettenschutz
+#: waere still tot. Naehme man nur die erste, drohen Kollisionen. Der ganze
+#: Block ist die sichere Wahl: ist er zu breit gefasst, erscheint spaeter eine
+#: Dublette, die keine ist - sichtbar und reparierbar. Der umgekehrte Fehler
+#: waere unsichtbar.
+PISOS_PFAD = re.compile(r"^/.*[-/](\d+_\d+)/?$")
+
+#: Portal, Domains und Pfadmuster in EINER Tabelle statt in fuenf Zweigen.
+#: Ein weiteres Portal ist damit eine Zeile und keine vierte Kopie derselben
+#: drei Zeilen - und die Zeilen koennen nicht auseinanderdriften.
+#:
+#: Die Domainmengen ueberschneiden sich nicht; die Schleife nimmt den ersten
+#: Treffer. Passt die Domain, aber nicht der Pfad, ist die Antwort LEER - es
+#: wird NICHT beim naechsten Eintrag weitergesucht: eine idealista-URL mit
+#: unbekanntem Pfad ist kein fotocasa-Inserat.
+PORTALE = (
+    (PORTAL_IDEALISTA, IDEALISTA_DOMAINS, IDEALISTA_PFAD),
+    (PORTAL_IMMOSCOUT24, IMMOSCOUT24_DOMAINS, IMMOSCOUT24_PFAD),
+    (PORTAL_FOTOCASA, FOTOCASA_DOMAINS, FOTOCASA_PFAD),
+    (PORTAL_MILANUNCIOS, MILANUNCIOS_DOMAINS, MILANUNCIOS_PFAD),
+    (PORTAL_PISOS, PISOS_DOMAINS, PISOS_PFAD),
+)
 
 
 def _host(teile):
@@ -90,12 +159,9 @@ def portal_und_id(url: str) -> tuple[str, str]:
     if not host:
         return LEER
 
-    if _passt(host, IDEALISTA_DOMAINS):
-        treffer = IDEALISTA_PFAD.match(teile.path)
-        return (PORTAL_IDEALISTA, treffer.group(1)) if treffer else LEER
-
-    if _passt(host, IMMOSCOUT24_DOMAINS):
-        treffer = IMMOSCOUT24_PFAD.match(teile.path)
-        return (PORTAL_IMMOSCOUT24, treffer.group(1)) if treffer else LEER
+    for portal, domains, muster in PORTALE:
+        if _passt(host, domains):
+            treffer = muster.match(teile.path)
+            return (portal, treffer.group(1)) if treffer else LEER
 
     return LEER

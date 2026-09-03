@@ -58,6 +58,9 @@ from .portale import portal_und_id
 #: diese Funktion auch ausfuehrt.
 nachtragsmigration = import_module("objekte.migrations.0003_portal_und_inserats_id_nachtragen")
 
+#: Der zweite Lauf desselben Nachtrags, jetzt mit den drei Portalen vom 02.09.
+zweiter_nachtrag = import_module("objekte.migrations.0005_bestand_neue_portale_nachtragen")
+
 Person = get_user_model()
 
 
@@ -975,6 +978,58 @@ class ObjektlisteTests(TestCase):
             self.client.get(adresse)
 
 
+    def test_mehr_preisverlauf_kostet_nicht_mehr_abfragen(self):
+        """Der Riegel fuer die Preissenkungsmarkierung - der wichtigste dieser Runde.
+
+        Die beiden Zeugen darueber legen Objekte OHNE Preisverlauf an. Eine
+        Fassung, die den vorletzten Eintrag je Zeile einzeln nachschlaegt,
+        kaeme dort ungesehen durch: wo es keinen Verlauf gibt, gibt es auch
+        nichts nachzuschlagen. Gemessen wird deshalb an Objekten MIT Verlauf -
+        bei fuenfzig Zeilen ist der Unterschied zwischen einer Abfrage und
+        einundfuenfzig.
+
+        Zwei Eintraege je Objekt, nicht einer: mit nur einem Eintrag bliebe
+        `vorheriger_preis` ueberall NULL, das Template betraete den Zweig nie,
+        und ein N+1 in genau diesem Zweig bliebe unentdeckt.
+
+        Aufbau wie bei den Geschwistern darueber: mit gesetztem Filter und
+        gesetzter Sortierung, die erwartete Zahl beim ersten Durchgang
+        ERMITTELT statt hingeschrieben, und beide Messungen auf einer Seite.
+        """
+        adresse = "/?status=neu&sortierung=-qm_preis"
+
+        def anlegen(von, bis):
+            for nummer in range(von, bis):
+                objekt = Objekt.objects.create(
+                    url=f"https://x/{nummer}", aktueller_preis=Decimal("200000")
+                )
+                objekt.preis_setzen(self.person, Decimal("180000"))
+
+        self.client.get(adresse)  # Aufwaermen, damit Verbindungsaufbau nicht mitzaehlt.
+        anlegen(0, 5)
+        with CaptureQueriesContext(connection) as mit_fuenf:
+            self.client.get(adresse)
+        anlegen(5, views.OBJEKTE_JE_SEITE)
+        with self.assertNumQueries(len(mit_fuenf)):
+            self.client.get(adresse)
+
+    def test_die_markierung_ist_bei_dieser_messung_ueberhaupt_da(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Zeigte die Liste die Markierung gar nicht an - weil die Annotation
+        fehlt, das Template den Zweig nicht betritt oder der Filter die
+        Objekte ausblendet -, waere die Abfragezahl selbstverstaendlich
+        konstant und der Zeuge darueber gruen, ohne irgendetwas zu messen.
+        """
+        objekt = Objekt.objects.create(
+            url="https://x/1", aktueller_preis=Decimal("200000")
+        )
+        objekt.preis_setzen(self.person, Decimal("180000"))
+        self.assertContains(
+            self.client.get("/?status=neu&sortierung=-qm_preis"), "preisaenderung"
+        )
+
+
 class ObjektansichtTests(TestCase):
     """Ein Template, vier getrennte Aktionen. Kein Inline-Edit."""
 
@@ -1520,30 +1575,256 @@ class PortalUndIdTests(SimpleTestCase):
             ("idealista", "12345"),
         )
 
-    def test_idealista_italien_mit_spanischem_pfad(self):
+    def test_idealista_italien_wird_nicht_mehr_erkannt(self):
+        """`.it` ist am 02.09. herausgefallen - und zwar mitsamt dem Pfadmuster.
+
+        Die Domain stand hier, ohne dass je ein Pfad fuer sie belegt war: das
+        spanische `inmueble` traf auf ihr nur, weil niemand eine echte
+        italienische URL dagegengehalten hat. Damit taeuschte sie Abdeckung
+        vor, die es nicht gab.
+
+        Der frueher hier stehende Zeuge behauptete das Gegenteil - er war
+        gruen, weil die Domain in der Liste stand, nicht weil die Erkennung
+        etwas leistete. Eine `.it`-URL laeuft jetzt auf "sonstiges", also auf
+        das leere Paar, und das ist der richtige Ausgang.
+        """
         self.assertEqual(
-            portal_und_id("https://www.idealista.it/inmueble/12345/"),
-            ("idealista", "12345"),
+            portal_und_id("https://www.idealista.it/inmueble/12345/"), ("", "")
         )
 
-    def test_idealista_portugal_mit_spanischem_pfad(self):
+    def test_idealista_portugal_wird_nicht_mehr_erkannt(self):
         self.assertEqual(
-            portal_und_id("https://www.idealista.pt/inmueble/12345/"),
-            ("idealista", "12345"),
+            portal_und_id("https://www.idealista.pt/inmueble/12345/"), ("", "")
         )
 
-    def test_ein_landessprachlicher_pfad_wird_NICHT_erkannt(self):
-        """Haelt eine gemeldete Luecke fest, statt sie zu behaupten.
+    def test_ein_landessprachlicher_pfad_auf_it_wird_ebenfalls_nicht_erkannt(self):
+        """Der zweite Riegel an derselben Domain.
 
-        Die Spezifikation nennt `.it` und `.pt` als Domains, gibt aber nur das
-        spanische Pfadmuster `inmueble` vor. Ob die beiden Laenderseiten diesen
-        Pfad ueberhaupt ausliefern, ist unbelegt - eine echte URL lag nicht vor.
-        Solange das so ist, laufen `.it` und `.pt` ins Leere, und dieser Zeuge
-        sagt genau das. Faellt er, weil jemand ein Muster nachgetragen hat, ist
-        das kein Schaden, sondern der Anlass, ihn zu ersetzen.
+        Der Zeuge darueber koennte auch dann gruen sein, wenn nur das
+        spanische Pfadmuster nicht mehr traefe, die Domain aber noch in der
+        Tabelle stuende. Hier steht der landessprachliche Pfad - beide Wege
+        auf `.it` fuehren ins Leere.
         """
         self.assertEqual(
             portal_und_id("https://www.idealista.it/immobile/12345/"), ("", "")
+        )
+
+    # --- fotocasa ---------------------------------------------------------
+
+    def test_fotocasa_expose(self):
+        """Die URL aus der Spezifikation, woertlich.
+
+        Der Ausstattungspfad davor ist beliebig lang und darf nicht Teil des
+        Musters werden; das letzte Segment `/d` wird uebersprungen.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.fotocasa.es/de/kaufen/wohnimmobilie/marbella/"
+                "aire-acondicionado-heizung-terrasse-schwimmbad/190346632/d"
+            ),
+            ("fotocasa", "190346632"),
+        )
+
+    def test_fotocasa_neubau_liefert_die_zweite_zahl(self):
+        """Zwei Zahlen im Pfad - gefragt ist die LETZTE.
+
+        Die Neubau-URL traegt `.../20561853/189207445`. Ein Muster, das die
+        erste Zahl nimmt, ist an der Expose-URL darueber nicht zu
+        unterscheiden und faellt still auf den falschen Wert. Die
+        Spezifikation fuehrt diesen Fall ausdruecklich als Strukturbeleg auf.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.fotocasa.es/de/kaufen/wohnimmobilie/neubau/marbella/"
+                "20561853/189207445"
+            ),
+            ("fotocasa", "189207445"),
+        )
+
+    def test_fotocasa_neubau_liefert_NICHT_die_erste_zahl(self):
+        """Getrennter Zeuge, weil es die getrennte Zusage ist.
+
+        Der Zeuge darueber faellt auch dann, wenn gar nichts erkannt wird -
+        dieser sagt zusaetzlich, dass nicht die falsche der beiden Zahlen
+        herauskommt.
+        """
+        _, inserats_id = portal_und_id(
+            "https://www.fotocasa.es/de/kaufen/wohnimmobilie/neubau/marbella/"
+            "20561853/189207445"
+        )
+        self.assertNotEqual(inserats_id, "20561853")
+
+    def test_fotocasa_sprachvariante_liefert_dieselbe_id(self):
+        """Sprachunabhaengig - sonst legen zwei Personen dasselbe Objekt doppelt an.
+
+        Dasselbe Inserat hat auf der deutschen und der spanischen Fassung
+        einen anderen Pfad (`kaufen/wohnimmobilie` gegen `comprar/vivienda`),
+        aber dieselbe ID. Haengt das Muster am Sprachpraefix oder an den
+        Woertern dahinter, greift der Dublettenschutz nicht mehr.
+
+        Die spanische Fassung ist hier NACHGEBILDET und nicht abgerufen - die
+        Spezifikation belegt nur die deutsche. Bezeugt wird deshalb nicht,
+        wie fotocasa seine spanischen Pfade schreibt, sondern die Zusage, um
+        die es geht: das Muster darf am Pfadanfang nicht haengen.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.fotocasa.es/es/comprar/vivienda/marbella/"
+                "aire-acondicionado-calefaccion-terraza-piscina/190346632/d"
+            ),
+            ("fotocasa", "190346632"),
+        )
+
+    def test_fotocasa_ohne_sprachpraefix_liefert_dieselbe_id(self):
+        self.assertEqual(
+            portal_und_id(
+                "https://www.fotocasa.es/kaufen/wohnimmobilie/marbella/"
+                "aire-acondicionado-heizung-terrasse-schwimmbad/190346632/d"
+            ),
+            ("fotocasa", "190346632"),
+        )
+
+    def test_eine_fotocasa_suchseite_ergibt_beide_werte_leer(self):
+        """Eine Trefferliste ist kein Inserat.
+
+        Sie endet ebenfalls auf einen einzelnen Buchstaben (`/l`), traegt
+        davor aber keine Zahl - und faellt damit auf das leere Paar.
+
+        GEMELDETE DUENNE STELLE: die Regel "einzelner Buchstabe am Ende wird
+        uebersprungen" unterscheidet `/d` nicht von `/l`. Waere das vorletzte
+        Segment einer Suchseite eine Zahl - etwa eine Postleitzahl -, bekaeme
+        sie einen Schluessel, den sie nicht verdient. Belegt ist ein solcher
+        Pfad nicht; die Regel kommt woertlich aus der Spezifikation und wurde
+        deshalb nicht enger gefasst.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.fotocasa.es/es/comprar/viviendas/marbella/todas-las-zonas/l"
+            ),
+            ("", ""),
+        )
+
+    # --- milanuncios ------------------------------------------------------
+
+    def test_milanuncios_anzeige(self):
+        """Die URL aus der Spezifikation, woertlich.
+
+        Die ID ist die Zahl nach dem letzten Bindestrich vor `.htm`.
+
+        RICHTIGGESTELLT am 02.09. Hier stand, ein nicht-gieriges Muster haette
+        den ERSTEN Bindestrich genommen. Das ist falsch, und die
+        Sabotage-Gegenprobe hat es aufgedeckt: der Anker `\.htm$` nagelt die
+        Ziffern fest, gierig oder nicht. Was diese URL wirklich bewacht, ist
+        nur, dass ueberhaupt das richtige Paar herauskommt - die schaerferen
+        Zusagen tragen die beiden Zeugen darunter.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.milanuncios.com/venta-de-apartamentos-en-san-pedro-"
+                "de-alcantara-malaga/marbella-607639645.htm"
+            ),
+            ("milanuncios", "607639645"),
+        )
+
+    def test_milanuncios_haengt_nicht_am_pfadanfang(self):
+        """Sprachunabhaengig, dieselbe Zusage wie bei fotocasa.
+
+        milanuncios fuehrt kein Sprachpraefix - dieser Zeuge belegt deshalb
+        nicht eine zweite Fassung desselben Inserats, sondern dass das Muster
+        nur am Ende des Pfades greift. Faellt er, haengt die Erkennung an den
+        Woertern davor, und die naechste Anzeigenform faellt still heraus.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.milanuncios.com/de/irgendein-anderer-pfad/"
+                "marbella-607639645.htm"
+            ),
+            ("milanuncios", "607639645"),
+        )
+
+    def test_milanuncios_nimmt_nicht_die_erste_zahl_im_pfad(self):
+        """Eine Zahl weiter vorn im Pfad darf nicht gewinnen.
+
+        Kleinanzeigenpfade tragen oft Merkmale mit Zahlen - Zimmerzahl,
+        Flaeche, Baujahr. Eine Fassung, die einfach die erste Ziffernfolge im
+        Pfad nimmt, liefert hier `3` und truege damit fuer JEDE
+        Dreizimmerwohnung denselben Schluessel: der Dublettenschutz waere
+        still tot. Die vier Zeugen darueber sehen das nicht, weil die URL aus
+        der Spezifikation vor der ID gar keine Ziffern enthaelt.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.milanuncios.com/venta-de-pisos-3-dormitorios-en-marbella/"
+                "marbella-607639645.htm"
+            ),
+            ("milanuncios", "607639645"),
+        )
+
+    def test_eine_milanuncios_url_ohne_htm_ergibt_beide_werte_leer(self):
+        """Die duenne Stelle, ausdruecklich bezeugt statt verschwiegen.
+
+        Das Muster haengt an einem einzigen Beleg. Kleinanzeigenportale
+        fuehren oft mehrere Anzeigentypen mit abweichenden Pfaden. Passt eine
+        URL nicht, faellt sie auf "sonstiges" - das ist der richtige Ausgang,
+        kein Fehler, und dieser Zeuge haelt genau das fest.
+        """
+        self.assertEqual(
+            portal_und_id("https://www.milanuncios.com/anuncios/marbella-607639645"),
+            ("", ""),
+        )
+
+    # --- pisos ------------------------------------------------------------
+
+    def test_pisos_expose(self):
+        """Die erste URL aus der Spezifikation, woertlich.
+
+        Die ID ist der VOLLSTAENDIGE Block aus zwei durch Unterstrich
+        getrennten Zahlen.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.pisos.com/comprar/"
+                "atico-cabopino_reserva_de_marbella-65035296319_108900/"
+            ),
+            ("pisos", "65035296319_108900"),
+        )
+
+    def test_pisos_promotion(self):
+        """Die zweite URL aus der Spezifikation, woertlich - anderer Pfadaufbau."""
+        self.assertEqual(
+            portal_und_id("https://www.pisos.com/promocion-los_pacos-6109286238_109700/"),
+            ("pisos", "6109286238_109700"),
+        )
+
+    def test_pisos_nimmt_nicht_nur_die_agenturkennung(self):
+        """Der wichtigste der drei pisos-Zeugen.
+
+        Die zweite Zahl ist in beiden Belegen sechsstellig und beginnt mit
+        `10` - vermutlich eine Makler- oder Agenturkennung. Naehme das Muster
+        nur sie, truegen ALLE Objekte desselben Maklers denselben Schluessel,
+        und der Dublettenschutz waere still tot: jedes zweite Inserat dieses
+        Maklers liefe als Dublette des ersten auf. Genau dieser Fehler waere
+        unsichtbar, deshalb ein eigener Zeuge dagegen.
+        """
+        _, inserats_id = portal_und_id(
+            "https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        )
+        self.assertNotEqual(inserats_id, "109700")
+
+    def test_pisos_nimmt_nicht_nur_die_erste_zahl(self):
+        _, inserats_id = portal_und_id(
+            "https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        )
+        self.assertNotEqual(inserats_id, "6109286238")
+
+    def test_pisos_sprachvariante_liefert_dieselbe_id(self):
+        """Wie bei fotocasa nachgebildet: das Muster darf am Pfadanfang nicht haengen."""
+        self.assertEqual(
+            portal_und_id(
+                "https://www.pisos.com/de/kaufen/"
+                "atico-cabopino_reserva_de_marbella-65035296319_108900/"
+            ),
+            ("pisos", "65035296319_108900"),
         )
 
     def test_idealista_auf_einer_subdomain(self):
@@ -1684,6 +1965,37 @@ class PortalModulTests(TestCase):
 
     def test_der_immoscout24_schluessel_passt_zu_den_auswahllisten(self):
         self.assertEqual(portale.PORTAL_IMMOSCOUT24, Portal.IMMOSCOUT24.value)
+
+    def test_der_fotocasa_schluessel_passt_zu_den_auswahllisten(self):
+        self.assertEqual(portale.PORTAL_FOTOCASA, Portal.FOTOCASA.value)
+
+    def test_der_milanuncios_schluessel_passt_zu_den_auswahllisten(self):
+        self.assertEqual(portale.PORTAL_MILANUNCIOS, Portal.MILANUNCIOS.value)
+
+    def test_der_pisos_schluessel_passt_zu_den_auswahllisten(self):
+        self.assertEqual(portale.PORTAL_PISOS, Portal.PISOS.value)
+
+    def test_die_portaltabelle_ist_nicht_leer(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darunter.
+
+        Waere `PORTALE` leer, liefe die Schleife im naechsten Zeugen ueber
+        nichts und er bliebe gruen - waehrend die Erkennung gar nicht mehr
+        arbeitet.
+        """
+        self.assertNotEqual(portale.PORTALE, ())
+
+    def test_jeder_schluessel_der_portaltabelle_steht_in_den_auswahllisten(self):
+        """Deckt auch das Portal ab, das erst noch dazukommt.
+
+        Die fuenf Einzelzeugen darueber sind ausgeschrieben und benennen ihre
+        Zusage - aber sie sagen nichts ueber eine SECHSTE Zeile, die jemand
+        spaeter in `PORTALE` eintraegt und in `choices.py` vergisst. Dann
+        schriebe die View einen Schluessel, den keine Auswahlliste kennt: das
+        Feld bliebe ohne Beschriftung und der Filter fuende das Objekt nie.
+        """
+        for portal, _, _ in portale.PORTALE:
+            with self.subTest(portal=portal):
+                self.assertIn(portal, Portal.values)
 
 
 class SchnellerfassungMitSchluesselTests(TestCase):
@@ -2071,6 +2383,183 @@ class NachtragsmigrationTests(TestCase):
         self.assertEqual(Objekt.objects.count(), 2)
 
 
+class BestandsnachtragNeuePortaleTests(TestCase):
+    """Der Nachtrag vom 02.09.: Bestandsobjekte an den drei neuen Portalen.
+
+    Gerechnet wird gegen den historischen Modellzustand aus dem
+    Migrations-Loader, aus demselben Grund wie bei `NachtragsmigrationTests`:
+    eine Migration, die nur gegen das heutige Modell bezeugt ist, bleibt gruen,
+    bis das Modell sich bewegt.
+
+    Der Zustand ist der von 0004 - das ist der Stand, auf dem 0005 laeuft, und
+    der erste, auf dem `Portal` die drei neuen Schluessel ueberhaupt kennt.
+    """
+
+    def setUp(self):
+        self.alte_apps = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", "0004_alter_objekt_portal"))
+            .apps
+        )
+
+    def _nachtragen(self):
+        zweiter_nachtrag.Migration.operations[0].code(self.alte_apps, None)
+
+    # --- die Verdrahtung --------------------------------------------------
+
+    def test_die_migration_fuehrt_die_funktion_aus_0003_aus(self):
+        """Ohne diesen Zeugen sind alle folgenden blind - und er sagt noch mehr.
+
+        Er haelt fest, dass 0005 die Funktion aus 0003 AUSFUEHRT und nicht
+        nachbaut. Genau daran haengt die Kollisionsregel: das aeltere Objekt
+        bekommt den Schluessel. Ein Nachbau koennte davon abweichen, ohne dass
+        es jemandem auffiele - und dann liefe jeder kuenftige Einwurf auf das
+        juengere Objekt, waehrend Vota und Notizen am aelteren haengen.
+        """
+        (operation,) = zweiter_nachtrag.Migration.operations
+        self.assertIs(operation.code, nachtragsmigration.nachtragen)
+
+    def test_die_migration_ist_rueckwaerts_ein_noop(self):
+        (operation,) = zweiter_nachtrag.Migration.operations
+        self.assertIs(operation.reverse_code, migrations.RunPython.noop)
+
+    def test_sie_haengt_an_der_schemamigration_der_auswahlliste(self):
+        """Die Reihenfolge ist nicht beliebig.
+
+        Liefe der Nachtrag VOR 0004, schriebe er Portalwerte in eine Spalte,
+        deren Auswahlliste sie noch nicht kennt.
+        """
+        self.assertIn(("objekte", "0004_alter_objekt_portal"), zweiter_nachtrag.Migration.dependencies)
+
+    # --- die drei neuen Portale im Bestand --------------------------------
+
+    def test_traegt_fotocasa_an_einem_bestandsobjekt_nach(self):
+        bestand = Objekt.objects.create(
+            url="https://www.fotocasa.es/de/kaufen/wohnimmobilie/marbella/"
+            "aire-acondicionado-heizung/190346632/d"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id), (Portal.FOTOCASA, "190346632")
+        )
+
+    def test_traegt_milanuncios_an_einem_bestandsobjekt_nach(self):
+        bestand = Objekt.objects.create(
+            url="https://www.milanuncios.com/venta-de-apartamentos-en-san-pedro/"
+            "marbella-607639645.htm"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id), (Portal.MILANUNCIOS, "607639645")
+        )
+
+    def test_traegt_pisos_an_einem_bestandsobjekt_nach(self):
+        bestand = Objekt.objects.create(
+            url="https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id), (Portal.PISOS, "6109286238_109700")
+        )
+
+    def test_das_immowelt_testobjekt_bleibt_ohne_schluessel(self):
+        """Gewollt: es bleibt in der Liste und bleibt "sonstiges".
+
+        Immowelt hat kein bekanntes Muster. Ein geratener Schluessel liesse
+        zwei verschiedene Inserate am Unique-Index kollidieren - ein leerer
+        laesst den URL-Vergleich weiterarbeiten.
+        """
+        bestand = Objekt.objects.create(
+            url="https://www.immowelt.de/expose/88b946d7-1f96-43d4-925d-4c7ded15b6cb"
+            "?serp_view=list"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual((bestand.portal, bestand.inserats_id), ("", ""))
+
+    def test_das_immowelt_testobjekt_bleibt_in_der_datenbank(self):
+        Objekt.objects.create(url="https://www.immowelt.de/expose/88b946d7?x=1")
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    # --- die Kollisionsregel aus der Migration vom 29.08. ------------------
+
+    def test_bei_zwei_bestandsobjekten_auf_dasselbe_inserat_gewinnt_das_aeltere(self):
+        """Dieselbe Regel wie am 29.08., und zwar durch DIESELBE Funktion.
+
+        Zwei Schreibweisen desselben fotocasa-Inserats. Bekaeme das juengere
+        den Schluessel, liefe jeder kuenftige Einwurf dorthin - und die Vota
+        und Notizen am aelteren faenden sich nicht mehr.
+        """
+        aelteres = Objekt.objects.create(
+            url="https://www.fotocasa.es/de/kaufen/wohnimmobilie/marbella/a/190346632/d"
+        )
+        juengeres = Objekt.objects.create(
+            url="https://www.fotocasa.es/es/comprar/vivienda/marbella/b/190346632/d"
+        )
+        self._nachtragen()
+        aelteres.refresh_from_db()
+        juengeres.refresh_from_db()
+        self.assertEqual(aelteres.inserats_id, "190346632")
+        self.assertEqual(juengeres.inserats_id, "")
+
+    def test_zwei_bestandsobjekte_auf_dasselbe_inserat_brechen_den_lauf_nicht_ab(self):
+        Objekt.objects.create(
+            url="https://www.pisos.com/comprar/atico-a-65035296319_108900/"
+        )
+        Objekt.objects.create(
+            url="https://www.pisos.com/de/kaufen/atico-b-65035296319_108900/"
+        )
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.count(), 2)
+        self.assertEqual(Objekt.objects.exclude(portal="").count(), 1)
+
+    def test_ein_zweiter_lauf_aendert_nichts_mehr(self):
+        Objekt.objects.create(
+            url="https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        )
+        self._nachtragen()
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.get().inserats_id, "6109286238_109700")
+
+    def test_ein_bereits_vergebener_schluessel_bleibt_stehen(self):
+        """Was 0003 vergeben hat, schreibt 0005 nicht um.
+
+        Der Fall aus der Praxis: das Objekt wurde nach dem 29.08. eingeworfen
+        und hat seinen Schluessel schon vom Einwurf. Ein zweiter Nachtrag darf
+        ihn nicht anfassen.
+        """
+        bestand = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/54321/",
+            portal=Portal.IDEALISTA,
+            inserats_id="54321",
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id), (Portal.IDEALISTA, "54321")
+        )
+
+    def test_der_nachtrag_ruehrt_die_url_nicht_an(self):
+        url = "https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        Objekt.objects.create(url=url)
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.get().url, url)
+
+    def test_der_nachtrag_schreibt_zuletzt_geaendert_am_nicht_fort(self):
+        Objekt.objects.create(
+            url="https://www.pisos.com/promocion-los_pacos-6109286238_109700/"
+        )
+        vorher = Objekt.objects.values_list("zuletzt_geaendert_am", flat=True).get()
+        self._nachtragen()
+        self.assertEqual(
+            Objekt.objects.values_list("zuletzt_geaendert_am", flat=True).get(), vorher
+        )
+
+
 class SpaltenParser(HTMLParser):
     """Liest Spaltenkoepfe und `data-spalte` je Zeile aus der Objektliste.
 
@@ -2283,46 +2772,87 @@ class StylesheetKorrekturenTests(TestCase):
     """Abschnitt 4 im Stylesheet: gekappte Objektspalte, eigene Fehlerfarbe.
 
     Gelesen wird die CSS-Datei. Wie die Seite aussieht, entscheidet weiterhin
-    der Blick auf den Bildschirm - diese Zeugen halten nur die beiden
-    Festlegungen fest, die sich still zuruecknehmen liessen.
+    der Blick auf den Bildschirm - diese Zeugen halten nur die Festlegungen
+    fest, die sich still zuruecknehmen liessen.
+
+    DURCHGESEHEN am 02.09. nach einem Kriterium: misst ein Zeuge eine Zusage
+    an den Nutzer, die brechen kann, bleibt er; misst er Struktur oder
+    Schreibweise des Stylesheets, faellt er. Was dabei herauskam, steht je
+    Methode dort - und einer ist herausgefallen:
+
+    `test_der_media_block_ist_ueberhaupt_auffindbar` behauptete, die Datei
+    enthalte einen nicht-leeren `@media (min-width: 48rem)`-Block. Das ist
+    keine Zusage an irgendjemanden, sondern eine Ansage an die Gliederung der
+    Datei. Sie hat in der Layout-Runde eine Bauentscheidung diktiert: der
+    Media-Block musste EIN einziger bleiben, damit `_block_ab_48rem` ihn
+    greift. Das ist die falsche Reihenfolge - ein Test bewacht eine Zusage, er
+    schreibt nicht vor, wie das Stylesheet gegliedert ist. Derselbe Bildschirm
+    liesse sich mit zwei Bloecken, einer anderen Grenze oder Container-Queries
+    bauen, und der Zeuge waere rot, ohne dass irgendwem etwas fehlte.
+
+    Damit die Diktatur nicht ueber die Hintertuer zurueckkommt, sammelt
+    `_bloecke_ab_48rem` jetzt ALLE Bloecke dieser Breite statt des ersten. Wie
+    viele es sind, ist der Datei ueberlassen.
     """
 
     def _quelle(self):
         return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
 
-    def _block_ab_48rem(self):
-        """Der Inhalt des `@media (min-width: 48rem)`-Blocks, ueber Klammerzaehlung.
+    def _bloecke_ab_48rem(self):
+        """ALLE `@media (min-width: 48rem)`-Bloecke, aneinandergehaengt.
 
-        Ohne diese Eingrenzung koennte die Kappungsregel auf oberster Ebene
-        stehen und der Zeuge bliebe gruen - waehrend die Kartenansicht unter
-        48rem ihre Objektzeile auf eine Zeile zusammenzoege und abschnitte.
+        Frueher war das der ERSTE Block - und genau daran hing die Ansage, es
+        duerfe nur einen geben. Gezaehlt wird ueber die Klammern, weil ein
+        regulaerer Ausdruck verschachtelte Bloecke nicht sauber schliesst.
+
+        Die Eingrenzung selbst bleibt noetig: ohne sie koennte die
+        Kappungsregel auf oberster Ebene stehen und die Zeugen unten blieben
+        gruen - waehrend die Kartenansicht unter 48rem ihre Objektzeile auf
+        eine Zeile zusammenzoege und abschnitte. Eingegrenzt wird also auf die
+        BREITE, nicht mehr auf eine bestimmte Stelle in der Datei.
         """
         quelle = self._quelle()
-        start = quelle.index("@media (min-width: 48rem)")
-        offen = quelle.index("{", start)
-        tiefe = 0
-        for stelle in range(offen, len(quelle)):
-            if quelle[stelle] == "{":
-                tiefe += 1
-            elif quelle[stelle] == "}":
-                tiefe -= 1
-                if tiefe == 0:
-                    return quelle[offen : stelle + 1]
-        raise AssertionError("Der Media-Block ist nicht geschlossen.")
+        bloecke = []
+        stelle = 0
+        while True:
+            start = quelle.find("@media (min-width: 48rem)", stelle)
+            if start == -1:
+                return bloecke
+            offen = quelle.index("{", start)
+            tiefe = 0
+            for zeichen in range(offen, len(quelle)):
+                if quelle[zeichen] == "{":
+                    tiefe += 1
+                elif quelle[zeichen] == "}":
+                    tiefe -= 1
+                    if tiefe == 0:
+                        bloecke.append(quelle[offen : zeichen + 1])
+                        stelle = zeichen + 1
+                        break
+            else:
+                raise AssertionError("Der Media-Block ist nicht geschlossen.")
 
     # --- 4.1: die Objektspalte kappen -------------------------------------
 
-    def test_der_media_block_ist_ueberhaupt_auffindbar(self):
-        """Riegel gegen einen vakuum-gruenen Zeugen darunter.
-
-        Waere der Block leer, faende `assertIn` nichts und meldete sich - aber
-        `_block_ab_48rem` wuerfe schon vorher. Dieser Zeuge macht sichtbar,
-        welcher der beiden Faelle vorliegt.
-        """
-        self.assertNotEqual(self._block_ab_48rem().strip("{} \n"), "")
-
     def test_die_objektzelle_wird_ab_48rem_gekappt(self):
-        block = self._block_ab_48rem()
+        """BLEIBT - als GRENZFALL, und der wird hiermit gemeldet.
+
+        Die Zusage ist echt und kann brechen: ohne Titel steht in dieser Zelle
+        die volle URL, und die sprengt die Spalte. Gemessen wird sie aber an
+        vier Schreibweisen und einer Zahl. `max-width: 24rem` waere fuer
+        niemanden ein Unterschied und machte diesen Zeugen rot; umgekehrt
+        koennte die Kappung mit denselben vier Zeilen an einem Element
+        haengen, das gar nicht mehr da ist, und er bliebe gruen.
+
+        Er bleibt trotzdem stehen: aus der CSS-Datei allein laesst sich nicht
+        mehr ablesen, und ein zu Unrecht entfernter Zeuge faellt niemandem
+        auf. Wer die Zusage wirklich pruefen will, braucht einen Browser -
+        solange es den hier nicht gibt, ist das hier der beste verfuegbare
+        Ersatz, und er ist ausdruecklich nur das.
+        """
+        bloecke = self._bloecke_ab_48rem()
+        self.assertNotEqual(bloecke, [], "kein Block ab 48rem gefunden")
+        block = "".join(bloecke)
         regel = block[block.index('[data-spalte="Objekt"]') :]
         regel = regel[: regel.index("}")]
         for eigenschaft in (
@@ -2335,35 +2865,82 @@ class StylesheetKorrekturenTests(TestCase):
                 self.assertIn(eigenschaft, regel)
 
     def test_unter_48rem_bleibt_die_objektzelle_ungekappt(self):
-        """Die Kappungsregel steht NUR im Media-Block.
+        """BLEIBT - als GRENZFALL, gemeldet wie der Zeuge darueber.
 
-        In der Kartenansicht ist die Objektzelle die Ueberschrift der Karte und
-        hat die ganze Zeilenbreite - dort ist Platz, dort darf sie umbrechen.
+        Die Zusage dahinter ist die staerkere von beiden: in der
+        Kartenansicht ist die Objektzelle die UEBERSCHRIFT der Karte und hat
+        die ganze Zeilenbreite. Wuerde sie dort gekappt, verloere jede Karte
+        am Handy ihren Namen - und das Handy ist das Geraet, an dem die Liste
+        unterwegs gelesen wird. Ein echter, sichtbarer Schaden.
+
+        Gemessen wird trotzdem an der Datei und nicht am Bildschirm; auch das
+        ist ein Ersatz und kein Beweis.
         """
         quelle = self._quelle()
-        ausserhalb = quelle.replace(self._block_ab_48rem(), "")
+        ausserhalb = quelle
+        for block in self._bloecke_ab_48rem():
+            ausserhalb = ausserhalb.replace(block, "")
         self.assertNotIn('[data-spalte="Objekt"]', ausserhalb)
 
     # --- 4.2: Fehlerfarbe von der Preissenkung trennen --------------------
 
     def test_es_gibt_eine_eigene_fehlerfarbe(self):
+        """BLEIBT - als GRENZFALL, gemeldet.
+
+        Fuer sich genommen misst er eine Schreibweise: dass die Zeichenkette
+        `--fehler:` in der Datei steht. Er traegt aber etwas, das der Zeuge
+        darunter NICHT traegt: dass die Eigenschaft ueberhaupt DEFINIERT ist.
+        Faende sich nur `var(--fehler)` ohne Definition, bliebe der Zeuge
+        darunter gruen, und die Fehlermeldung verloere ihre Farbe ganz stumm.
+
+        Unsicher bleibt: eine umbenannte Eigenschaft - `--fehlerfarbe` etwa -
+        machte ihn rot, ohne dass jemand etwas merkte. Im Zweifel steht er
+        weiter da.
+        """
         self.assertIn("--fehler:", self._quelle())
 
     def test_die_meldungsregel_greift_auf_die_fehlerfarbe_zu(self):
+        """BLEIBT - eine Zusage an den Nutzer, kein Grenzfall.
+
+        Ein Tippfehler im Formular darf nicht aussehen wie eine Preissenkung.
+        Truege die Fehlermeldung `--signal`, stumpfte sie genau das Signal ab,
+        auf das die ganze Liste hinarbeitet - und die Person, die den Preis
+        sucht, saehe zwei laute Farben nebeneinander und keine Bedeutung mehr.
+
+        Diese Zusage kann brechen, und zwar durch eine einzige geaenderte
+        Zeile in der Meldungsregel. Genau das ist der Fall, den ein Zeuge
+        abfangen soll.
+        """
         quelle = self._quelle()
         regel = quelle[quelle.index(".meldungen li.error") :]
         regel = regel[: regel.index("}")]
         self.assertIn("var(--fehler)", regel)
 
-    def test_die_signalfarbe_wird_nirgends_verwendet(self):
-        """`--signal` bleibt der Preissenkung vorbehalten.
+    def test_die_signalfarbe_traegt_nur_die_preissenkung(self):
+        """BLEIBT - in NEUER Fassung, weil die alte ihre Grundlage verloren hat.
 
-        Gemessen an `var(--signal)`, nicht an `--signal` - die Definition
-        selbst soll ja stehen bleiben. Faellt dieser Zeuge, hat sich die
-        lauteste Farbe des Werkzeugs an eine Stelle gesetzt, an der sie das
-        Kaufsignal abstumpft.
+        Bis zum 02.09. lautete die Zusage "`var(--signal)` steht nirgends" -
+        richtig, solange die Preissenkung noch nicht gebaut war. Jetzt ist sie
+        gebaut, und die Farbe steht an genau einer Stelle.
+
+        Die Zusage selbst ist unveraendert und gehoert zu den Festlegungen,
+        die nicht angetastet werden: `--signal` ist der Preissenkung
+        vorbehalten. Nur ihre Messung musste mitwandern - von "nirgends" auf
+        "nur dort". Haette man den Zeugen stattdessen entfernt, waere die
+        lauteste Farbe des Werkzeugs ab sofort unbewacht gewesen.
+
+        Gezaehlt wird ueber ALLE Vorkommen von `var(--signal)` und nicht nur
+        geprueft, dass die Senkungsregel eines traegt: sonst duerfte die Farbe
+        nebenher an fuenf weiteren Stellen auftauchen.
         """
-        self.assertNotIn("var(--signal)", self._quelle())
+        quelle = self._quelle()
+        # Die Regel selbst herausschneiden - was danach noch uebrig bleibt,
+        # darf die Farbe nicht mehr nennen.
+        start = quelle.index(".preisaenderung.senkung {")
+        ende = quelle.index("}", start) + 1
+        uebrig = quelle[:start] + quelle[ende:]
+        self.assertIn("var(--signal)", quelle[start:ende])
+        self.assertNotIn("var(--signal)", uebrig)
 
 
 class KommentarTests(TestCase):
@@ -2371,26 +2948,45 @@ class KommentarTests(TestCase):
 
     Django wertet `{# ... #}` NUR EINZEILIG aus. Ein ueber mehrere Zeilen
     umgebrochener Kommentar ist deshalb kein Kommentar, sondern Text - und
-    wird ausgegeben. In der Objektliste standen drei davon; ein vierter
-    stand im Blaetter-Zweig und trat erst ab der zweiten Seite hervor.
+    wird vollstaendig ausgegeben, von der ersten Zeile an.
 
     Gemessen wird am KOMMENTARTEXT und nicht an `{#`. Ein Zeuge auf `{#`
     bliebe gruen, sobald derselbe Satz in anderer Form wieder auf der Seite
     landet - und genau der Satz ist es, den niemand dort lesen soll.
 
-    Der EINZIGE Zeuge dieser Runde. Layout laesst sich nicht bewachen: ein
-    Test, der Klassennamen zaehlt oder das Vorhandensein eines `<fieldset>`
-    prueft, maesse das eigene Markup und bliebe gruen, waehrend die Seite
-    unbrauchbar ist. Was die Kopfleiste, der Filterblock und die
-    Sortierleiste zusagen, entscheidet der Blick auf den Bildschirm.
+    NACHGEBESSERT am 02.09. Die erste Fassung mass an EINEM von damals vier
+    Kommentaren, und zwar auf Seite 1. Sie war damit an zwei Stellen blind:
+
+    1. Die uebrigen Kommentare wurden gar nicht angesehen. Ein Zeuge, der
+       einen von vier prueft, sagt ueber die anderen drei nichts.
+    2. Der Kommentar im Blaetter-Zweig steht in `{% if page_obj.has_other_pages %}`.
+       Bei einem einzigen Objekt gibt es nur eine Seite, der Zweig wird nie
+       betreten, und der Zeuge sah ihn auch dann nicht, wenn er ihn geprueft
+       haette.
+
+    Beides ist behoben: die Texte werden aus der Vorlage GELESEN statt hier
+    abgeschrieben - eine zweite Liste driftet von der ersten weg, und ein
+    spaeter ergaenzter Kommentar waere in einer abgeschriebenen Liste nicht
+    enthalten -, und geprueft wird auf Seite 1 UND auf Seite 2.
+
+    Gemessen wird je Block an dessen ERSTER Zeile. Sie ist in jedem der
+    Bloecke ein langer, eindeutiger Satzanfang, und sie ist genau das, was
+    beim beschriebenen Fehler zuerst auf der Seite steht. Die kuerzeren Zeilen
+    weiter unten in den Bloecken ("gebaut.", "anklickbar.") taugen nicht als
+    Messpunkt - sie koennten zufaellig auch anderswo stehen und den Zeugen
+    grundlos rot machen.
 
     `assertNotContains` prueft nebenbei auf Status 200 - ein 302 auf die
     Anmeldeseite enthielte den Kommentartext ebenfalls nicht und liesse den
     Zeugen im Vakuum gruen werden.
     """
 
-    #: Woertlich aus dem ersten der vier Kommentare in `objektliste.html`.
-    KOMMENTARTEXT = "Ein GET-Formular, damit ein gefilterter Stand teilbar ist"
+    VORLAGE = "templates/objekte/objektliste.html"
+
+    #: So viele Kommentarbloecke stehen in der Vorlage. Ausgeschrieben und
+    #: nicht mitgezaehlt: faellt ein Block heraus oder kommt einer dazu, soll
+    #: das AUFFALLEN und nicht stillschweigend in die Ableitung wandern.
+    BLOECKE = 6
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -2398,8 +2994,86 @@ class KommentarTests(TestCase):
         )
         self.client.force_login(self.person)
 
-    def test_kein_kommentartext_steht_im_gerenderten_html(self):
-        self.assertNotContains(self.client.get("/"), self.KOMMENTARTEXT)
+    def _quelle(self):
+        return (settings.BASE_DIR / self.VORLAGE).read_text(encoding="utf-8")
+
+    def _erste_zeilen(self):
+        """Die erste Textzeile jedes `{% comment %}`-Blocks der Vorlage."""
+        zeilen = []
+        for block in re.findall(
+            r"{% comment %}(.*?){% endcomment %}", self._quelle(), re.S
+        ):
+            inhalt = [z.strip() for z in block.splitlines() if z.strip()]
+            if inhalt:
+                zeilen.append(inhalt[0])
+        return zeilen
+
+    # --- die Riegel gegen einen Zeugen im Vakuum ---------------------------
+
+    def test_die_vorlage_traegt_ueberhaupt_kommentarbloecke(self):
+        """Ohne diesen Zeugen liefen die beiden unten ueber eine leere Liste."""
+        self.assertNotEqual(self._erste_zeilen(), [])
+
+    def test_die_ableitung_findet_jeden_block_der_vorlage(self):
+        """Riegel auf die Ableitung selbst.
+
+        Griffe der Ausdruck nur den ersten Block - etwa weil jemand `re.S`
+        entfernt -, prueften die Zeugen unten weiterhin einen von sechs und
+        die Runde staende wieder da, wo sie angefangen hat.
+        """
+        self.assertEqual(len(self._erste_zeilen()), self.BLOECKE)
+        self.assertEqual(self._quelle().count("{% comment %}"), self.BLOECKE)
+
+    def _mehrseitig(self):
+        """Drei Objekte bei einer Seitengroesse von zwei - also zwei Seiten."""
+        for nummer in range(3):
+            Objekt.objects.create(url=f"https://x/{nummer}", titel=f"Objekt {nummer}")
+
+    def test_seite_zwei_traegt_ueberhaupt_ein_objekt(self):
+        """Eine leere Seite 2 rendert die Tabelle nicht und damit auch nicht
+        die Kommentare darin - der Zeuge unten waere gruen ohne Messung."""
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self._mehrseitig()
+            self.assertEqual(len(self.client.get("/?seite=2").context["objekte"]), 1)
+
+    def test_der_blaetterzweig_wird_auf_seite_zwei_wirklich_betreten(self):
+        """Der vierte Kommentar sitzt in `{% if page_obj.has_other_pages %}`.
+
+        Wird der Zweig nicht betreten, steht sein Text selbstverstaendlich
+        nicht auf der Seite - und der Zeuge unten maesse ihn nur scheinbar.
+        """
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self._mehrseitig()
+            self.assertContains(self.client.get("/?seite=2"), 'class="blaettern"')
+
+    # --- die Zusage --------------------------------------------------------
+
+    def test_kein_kommentartext_steht_auf_seite_eins(self):
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self._mehrseitig()
+            antwort = self.client.get("/")
+            for zeile in self._erste_zeilen():
+                with self.subTest(zeile=zeile):
+                    self.assertNotContains(antwort, zeile)
+
+    def test_kein_kommentartext_steht_auf_seite_zwei(self):
+        with mock.patch.object(views, "OBJEKTE_JE_SEITE", 2):
+            self._mehrseitig()
+            antwort = self.client.get("/?seite=2")
+            for zeile in self._erste_zeilen():
+                with self.subTest(zeile=zeile):
+                    self.assertNotContains(antwort, zeile)
+
+    def test_kein_kommentartext_steht_in_der_leeren_liste(self):
+        """Die dritte Fassung der Seite: ohne ein einziges Objekt.
+
+        Tabelle und Blaetter-Zweig fehlen dort, der Filterblock steht aber da -
+        und mit ihm vier der sechs Bloecke.
+        """
+        antwort = self.client.get("/")
+        for zeile in self._erste_zeilen():
+            with self.subTest(zeile=zeile):
+                self.assertNotContains(antwort, zeile)
 
 
 # =========================================================================
@@ -2571,11 +3245,17 @@ class UebernahmeTests(TestCase):
 
     # --- Zusage 4: das bestehende Objekt wird erkannt ----------------------
 
-    ANDERE_SCHREIBWEISE = "https://www.idealista.it/en/inmueble/12345?utm_source=mail"
+    #: Am 02.09. von `.it` auf `.com` gezogen: `idealista.it` ist als Domain
+    #: herausgefallen und liefert kein Paar mehr. Die uebrigen drei
+    #: Abweichungen - Sprachpraefix, Tracking-Parameter, fehlender
+    #: abschliessender Schraegstrich - tragen den Zeugen unveraendert, und
+    #: `rstrip("/")` fuehrt die beiden Schreibweisen weiterhin NICHT zusammen.
+    #: Der starke Vergleich bleibt also der, der hier arbeitet.
+    ANDERE_SCHREIBWEISE = "https://www.idealista.com/en/inmueble/12345?utm_source=mail"
 
     def test_die_vorschau_erkennt_das_bestehende_objekt_ueber_den_schluessel(self):
-        """Andere Laenderdomain, Sprachpraefix, Tracking-Parameter, kein
-        abschliessender Schraegstrich - und trotzdem dasselbe Inserat.
+        """Sprachpraefix, Tracking-Parameter, kein abschliessender
+        Schraegstrich - und trotzdem dasselbe Inserat.
 
         Ueber die Roh-URL faende es keiner der beiden Vergleiche; ueber Portal
         und Inserats-ID schon.
@@ -3427,6 +4107,28 @@ class ListenfilterTests(ListenTestBasis):
         self._objekt(portal=Portal.IMMOSCOUT24)
         self.assertEqual(self._menge("/?portal=idealista"), {idealista.pk})
 
+    def test_der_portalfilter_kennt_auch_die_neuen_portale(self):
+        """Die drei vom 02.09. sind nicht nur erkennbar, sondern auch filterbar.
+
+        Die Auswahl des Filters wird aus `Portal.choices` abgeleitet - ein
+        neues Portal steht dort also von selbst. "Von selbst" ist aber genau
+        die Sorte Annahme, die still ausfaellt: waere der Filter irgendwann
+        auf eine eigene, abgeschriebene Liste umgestellt, fiele fotocasa
+        heraus, ohne dass irgendwo etwas rot wuerde. Die Objekte waeren in der
+        Liste, aber nicht mehr zu finden.
+        """
+        fotocasa = self._objekt(portal=Portal.FOTOCASA)
+        self._objekt(portal=Portal.MILANUNCIOS)
+        self._objekt(portal=Portal.PISOS)
+        self.assertEqual(self._menge("/?portal=fotocasa"), {fotocasa.pk})
+
+    def test_die_portalauswahl_des_filters_steht_vollstaendig_in_der_seite(self):
+        """Was sich filtern laesst, muss auch anzuklicken sein."""
+        antwort = self._seite()
+        for portal in (Portal.FOTOCASA, Portal.MILANUNCIOS, Portal.PISOS):
+            with self.subTest(portal=portal):
+                self.assertContains(antwort, f'value="{portal.value}"')
+
     def test_der_objekttypfilter_trifft(self):
         finca = self._objekt(objekttyp=Objekttyp.FINCA)
         self._objekt(objekttyp=Objekttyp.WOHNUNG)
@@ -3978,3 +4680,214 @@ class VotumUebersichtTests(ListenTestBasis):
             self._uebersicht("/?status=neu&sortierung=-qm_preis"),
             "1 dafür · 1 raus · 3 offen",
         )
+
+
+# =========================================================================
+# Portale/Preissenkung, Abschnitt 2: die Markierung in der Liste
+# =========================================================================
+
+
+class PreisaenderungTests(ListenTestBasis):
+    """Zusagen aus Abschnitt 2.4: was unter dem Preis steht und was nicht.
+
+    Gemessen wird an der gerenderten Zelle und nicht nur am Kontext: die
+    Markierung ist eine Zusage an das Auge, und ein Wert im Kontext, den kein
+    Template ausgibt, haelt sie nicht.
+    """
+
+    def _mit_verlauf(self, erster, zweiter, **felder):
+        """Ein Objekt mit genau zwei Verlaufseintraegen.
+
+        Der erste Preis entsteht beim Anlegen, der zweite ueber
+        `preis_setzen()` - das ist der einzige Weg, auf dem sich der Preis
+        aendert, und damit derselbe Weg, den die Oberflaeche geht.
+        """
+        objekt = self._objekt(aktueller_preis=Decimal(erster), **felder)
+        objekt.preis_setzen(self.person, Decimal(zweiter))
+        return objekt
+
+    def _preiszelle(self):
+        """Die Kaufpreis-Zelle der EINZIGEN Zeile der Liste.
+
+        Die Laengenpruefung ist der Riegel gegen einen vakuum-gruenen Zeugen:
+        faende der Ausdruck keine Zelle, verglichen die Zeugen unten leere
+        Zeichenketten und blieben gruen - auch wenn die Spalte gar nicht mehr
+        da ist.
+        """
+        inhalt = self._seite().content.decode()
+        zellen = re.findall(r'<td data-spalte="Kaufpreis">(.*?)</td>', inhalt, re.S)
+        self.assertEqual(len(zellen), 1, "erwartet wird genau eine Kaufpreis-Zelle")
+        return zellen[0]
+
+    # --- Zusage: Senkung ---------------------------------------------------
+
+    def test_bei_einer_senkung_erscheint_die_markierung(self):
+        self._mit_verlauf("200000", "180000")
+        self.assertIn("preisaenderung", self._preiszelle())
+
+    def test_die_markierung_zeigt_den_vorherigen_preis_durchgestrichen(self):
+        self._mit_verlauf("200000", "180000")
+        self.assertIn("<s>200.000 €</s>", self._preiszelle())
+
+    def test_die_markierung_zeigt_den_prozentwert(self):
+        # 200.000 auf 180.000 sind genau minus zehn Prozent.
+        self._mit_verlauf("200000", "180000")
+        self.assertIn("-10 %", self._preiszelle())
+
+    def test_der_prozentwert_stimmt_auch_wenn_er_nicht_glatt_aufgeht(self):
+        """Sonst bliebe der Zeuge darueber gruen, auch wenn gerundet wird.
+
+        249.000 auf 219.000 sind 12,048… Prozent. Eine Anzeige auf ganze
+        Prozent zeigte hier "-12 %" und waere um denselben Betrag daneben wie
+        eine, die richtig rechnet und falsch rundet.
+        """
+        self._mit_verlauf("249000", "219000")
+        self.assertIn("-12,0 %", self._preiszelle())
+
+    def test_der_prozentwert_steht_auch_im_kontext(self):
+        """Der genaue Wert, ungerundet - das Template zeigt nur eine Fassung davon."""
+        self._mit_verlauf("200000", "180000")
+        aenderung = self._seite().context["objekte"][0].preisaenderung
+        self.assertEqual(aenderung["prozent"], Decimal("-10"))
+
+    def test_die_markierung_zeigt_das_datum_der_aenderung(self):
+        """Das Datum des JUENGSTEN Eintrags - der hat die Aenderung gebracht.
+
+        Das Datum des vorletzten waere der Tag, an dem der ALTE Preis erfasst
+        wurde. Beide Eintraege heute anzulegen wuerde den Unterschied
+        verdecken, deshalb wird der erste zurueckdatiert.
+        """
+        objekt = self._mit_verlauf("200000", "180000")
+        aeltester = objekt.preise.order_by("datum", "id").first()
+        Preisverlauf.objects.filter(pk=aeltester.pk).update(
+            datum=date(2026, 1, 5)
+        )
+        zelle = self._preiszelle()
+        self.assertIn(timezone.localdate().strftime("%d.%m.%Y"), zelle)
+        self.assertNotIn("05.01.2026", zelle)
+
+    def test_die_senkung_traegt_die_signalklasse(self):
+        self._mit_verlauf("200000", "180000")
+        self.assertIn('class="preisaenderung senkung"', self._preiszelle())
+
+    # --- Zusage: Erhoehung -------------------------------------------------
+
+    def test_bei_einer_erhoehung_erscheint_die_markierung_ebenfalls(self):
+        """Eine Erhoehung zu verschweigen waere eine Luecke - sie ist Information."""
+        self._mit_verlauf("200000", "216000")
+        self.assertIn("preisaenderung", self._preiszelle())
+
+    def test_die_erhoehung_traegt_die_signalklasse_NICHT(self):
+        """`--signal` ist der Preissenkung vorbehalten.
+
+        Eine Erhoehung ist Information, aber kein Kaufsignal. Truege sie
+        dieselbe laute Farbe, stumpfte sie genau das Signal ab, auf das die
+        Liste hinarbeitet.
+        """
+        self._mit_verlauf("200000", "216000")
+        self.assertNotIn("senkung", self._preiszelle())
+
+    def test_die_erhoehung_zeigt_den_vorherigen_preis(self):
+        self._mit_verlauf("200000", "216000")
+        self.assertIn("<s>200.000 €</s>", self._preiszelle())
+
+    def test_die_erhoehung_traegt_ein_vorzeichen(self):
+        """Ohne das stuende dort "8 %" und niemand saehe, in welche Richtung."""
+        self._mit_verlauf("200000", "216000")
+        self.assertIn("+8 %", self._preiszelle())
+
+    # --- Zusage: wo NICHTS steht -------------------------------------------
+
+    def test_bei_genau_einem_eintrag_steht_keine_markierung(self):
+        """Kein Platzhalter, keine leere Zeile - der Normalfall nach dem Einwurf."""
+        self._objekt(aktueller_preis=Decimal("200000"))
+        self.assertNotIn("preisaenderung", self._preiszelle())
+
+    def test_bei_genau_einem_eintrag_steht_der_preis_trotzdem_da(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Faellt die ganze Zelle weg, findet `assertNotIn` ebenfalls nichts.
+        """
+        self._objekt(aktueller_preis=Decimal("200000"))
+        self.assertIn("200.000 €", self._preiszelle())
+
+    def test_ohne_preis_steht_keine_markierung(self):
+        self._objekt()
+        self.assertNotIn("preisaenderung", self._preiszelle())
+
+    def test_ohne_preis_antwortet_die_liste_trotzdem(self):
+        """"Kein Fehler" ist die zweite Haelfte der Zusage und ein eigener Zeuge."""
+        self._objekt()
+        self.assertEqual(self._seite().status_code, 200)
+
+    def test_ein_vorheriger_preis_von_null_erzeugt_keine_markierung(self):
+        """Durch Null laesst sich nicht teilen - und ein 500er auf der ganzen
+        Liste, ausgeloest von einem einzelnen Datensatz, waere der teuerste
+        denkbare Ausgang.
+
+        Ein Kaufpreis von 0 EUR ist ohnehin keine Bezugsgroesse, an der sich
+        eine Senkung messen liesse.
+        """
+        objekt = self._objekt(aktueller_preis=Decimal("0"))
+        objekt.preis_setzen(self.person, Decimal("199000"))
+        antwort = self._seite()
+        self.assertEqual(antwort.status_code, 200)
+        self.assertNotIn("preisaenderung", self._preiszelle())
+
+    # --- Zusage: beide Fassungen ------------------------------------------
+
+    def _stylesheet(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(
+            encoding="utf-8"
+        )
+
+    def _ab_48rem(self):
+        """Der Inhalt des Media-Blocks, ueber Klammerzaehlung."""
+        quelle = self._stylesheet()
+        start = quelle.index("@media (min-width: 48rem)")
+        offen = quelle.index("{", start)
+        tiefe = 0
+        for stelle in range(offen, len(quelle)):
+            if quelle[stelle] == "{":
+                tiefe += 1
+            elif quelle[stelle] == "}":
+                tiefe -= 1
+                if tiefe == 0:
+                    return quelle[offen : stelle + 1]
+        raise AssertionError("Der Media-Block ist nicht geschlossen.")
+
+    def test_die_markierung_gilt_fuer_BEIDE_fassungen(self):
+        """Tabelle ab 48rem UND Karten darunter.
+
+        Das Markup ist fuer beide dasselbe - unterschieden wird nur im
+        Stylesheet. Die Zusage ist damit genau die: die Regeln der Markierung
+        stehen NICHT im Media-Block, sondern darueber, und gelten deshalb
+        auch in der Kartenansicht. Stuenden sie drin, waere die Senkung am
+        Handy unmarkiert - und das Handy ist das Geraet, an dem die Liste
+        unterwegs gelesen wird.
+        """
+        ausserhalb = self._stylesheet().replace(self._ab_48rem(), "")
+        # Mit oeffnender Klammer gesucht: der Name allein steht auch in den
+        # Kommentaren der Datei, und ein Zeuge, den ein Kommentar gruen haelt,
+        # misst nichts.
+        self.assertIn(".preisaenderung {", ausserhalb)
+        self.assertIn(".preisaenderung.senkung {", ausserhalb)
+
+    def test_die_senkungsklasse_traegt_die_signalfarbe(self):
+        """Die Verbindung zwischen Markup und Farbe.
+
+        Der Zeuge auf `class="… senkung"` weiter oben sagt nur, dass die
+        Klasse gesetzt wird. Ohne diesen hier koennte sie auf nichts zeigen
+        und die Senkung saehe aus wie jede Nebenangabe.
+        """
+        quelle = self._stylesheet()
+        regel = quelle[quelle.index(".preisaenderung.senkung {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--signal)", regel)
+
+    def test_die_unmarkierte_aenderung_bleibt_gedaempft(self):
+        quelle = self._stylesheet()
+        regel = quelle[quelle.index(".preisaenderung {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--gedaempft)", regel)
+

@@ -128,7 +128,31 @@
               <td data-spalte="Region / Land">{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
               <td data-spalte="Wohnfläche">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>
               <td data-spalte="Grundstück">{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</td>
-              <td data-spalte="Kaufpreis">{% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
+              {% comment %}
+                Der aktuelle Preis steht wie bisher da; die Aenderung kommt
+                DARUNTER und kleiner. Beides steckt in einer gemeinsamen
+                Huelle: unter 48rem ist die Zelle eine Flexzeile mit der
+                Spaltenbezeichnung links und dem Wert rechts, und ohne die
+                Huelle waeren aktueller Preis und Aenderung zwei getrennte
+                Flexkinder, die die Zeile auseinanderziehen.
+
+                Ob gesenkt oder erhoeht, entscheidet NICHT das Vorzeichen des
+                Prozentwerts an dieser Stelle: die Richtung kommt als
+                `senkung` fertig aus der Ansicht. Hier steht nur, wie sie
+                aussieht.
+              {% endcomment %}
+              <td data-spalte="Kaufpreis">
+                <span class="preis">
+                  {% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}
+                  {% if o.preisaenderung %}
+                    <span class="preisaenderung{% if o.preisaenderung.senkung %} senkung{% endif %}">
+                      <s>{{ o.preisaenderung.vorher|floatformat:0 }} €</s>
+                      · {% if o.preisaenderung.prozent > 0 %}+{% endif %}{{ o.preisaenderung.prozent|floatformat:"-1" }} %
+                      · {{ o.preisaenderung.datum|date:"d.m.Y" }}
+                    </span>
+                  {% endif %}
+                </span>
+              </td>
               <td data-spalte="€/m²">{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
               <td data-spalte="Zustand">{{ o.get_zustand_display }}</td>
               <td data-spalte="Status">{{ o.get_status_display }}</td>

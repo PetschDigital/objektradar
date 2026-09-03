@@ -16,8 +16,11 @@
   --akzent:    #2F5D62;  /* Links, Fokus, aktive Bedienelemente */
 
   /* Die einzige laute Farbe. Reserviert fuer Preissenkungen - das wichtigste
-     Kaufsignal - und deshalb bis heute an keiner Stelle verwendet. Der Zeuge
-     `test_die_signalfarbe_wird_nirgends_verwendet` haelt sie frei. */
+     Kaufsignal - und seit dem 02.09. an GENAU EINER Stelle verwendet:
+     `.preisaenderung.senkung`. Der Zeuge
+     `test_die_signalfarbe_traegt_nur_die_preissenkung` haelt sie dort fest.
+     Kaeme sie irgendwo sonst dazu, stumpfte sie genau das Signal ab, auf das
+     die Liste hinarbeitet. */
   --signal:    #B4531F;
 
   /* Fehlermeldungen. Eigene Farbe, weil ein Tippfehler im Formular nicht
@@ -399,6 +402,40 @@ main input[type="checkbox"] {
   font-feature-settings: "tnum";
 }
 
+/* --- Preisaenderung in der Liste -----------------------------------------
+   Der aktuelle Preis fuehrt, die Aenderung steht darunter und kleiner. Beide
+   stecken in `.preis`, damit die Zelle unter 48rem GENAU ZWEI Flexkinder hat:
+   die Spaltenbezeichnung aus `::before` und den Wert. Ohne die Huelle risse
+   `justify-content: space-between` den aktuellen Preis und die Aenderung an
+   die beiden Enden der Zeile.
+
+   Kein eigener Abstandswert: `--eng` ist die Stufe fuer "innerhalb einer
+   Zeile", und genau das ist der Abstand zwischen einem Wert und seiner
+   Nebenangabe. Die Schriftgroesse .875rem ist dieselbe wie bei jeder anderen
+   Nebenangabe der Oberflaeche (Meldungen, Hilfetexte, Leisten). */
+.tabelle td > .preis { display: block; }
+
+.preisaenderung {
+  display: block;
+  margin-top: var(--eng);
+  font-size: .875rem;
+  color: var(--gedaempft);
+}
+
+/* Die EINZIGE Stelle mit `--signal`. Eine Senkung ist das Kaufsignal, auf das
+   die ganze Liste hinarbeitet.
+
+   Eine ERHOEHUNG bleibt bei `--gedaempft` und faellt damit unter die Regel
+   darueber. Sie zu verschweigen waere eine Luecke - sie ist Information -,
+   aber sie ist eben kein Kaufsignal, und zwei laute Farben nebeneinander
+   heben sich gegenseitig auf. */
+.preisaenderung.senkung { color: var(--signal); }
+
+/* Der durchgestrichene alte Preis erbt die Farbe seiner Umgebung - bei einer
+   Senkung also `--signal`. Das ist gewollt: die Angabe gehoert zusammen und
+   soll nicht in zwei Farben zerfallen. */
+.preisaenderung s { text-decoration-thickness: 1px; }
+
 /* --- Vorschau des Lesezeichen-Zulaufs ------------------------------------
    Drei Nebenzeilen unter dem Feld: der gelesene Wert, der abweicht; der
    Hilfetext des Modells; der Feldfehler. Alle drei gehoeren unter das Feld und
@@ -452,10 +489,15 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
 .leer { color: var(--gedaempft); text-align: center; margin: var(--weit) 0; }
 
 /* --- Ab 48rem -----------------------------------------------------------
-   EIN Media-Block fuer die ganze Datei. Nicht aus Ordnungsliebe: der Zeuge
-   `StylesheetKorrekturenTests._block_ab_48rem` greift den ERSTEN Block
-   dieser Breite und sucht darin die Kappungsregel der Objektspalte. Ein
-   zweiter Block davor liesse ihn ins Leere greifen. */
+   Ein Media-Block fuer die ganze Datei - aus Ordnungsliebe, und seit dem
+   02.09. NUR daraus.
+
+   Vorher stand hier, der Block muesse ein einziger bleiben, weil der Zeuge
+   `StylesheetKorrekturenTests._block_ab_48rem` den ERSTEN dieser Breite
+   griff. Das war die falsche Reihenfolge: ein Test bewacht eine Zusage, er
+   schreibt nicht vor, wie diese Datei gegliedert ist. Der Zeuge sammelt
+   jetzt alle Bloecke dieser Breite; wie viele es sind, entscheidet, wer hier
+   schreibt. */
 @media (min-width: 48rem) {
 
   /* Kopf: alle drei Bereiche in einer Zeile. Das `margin-right: auto` am

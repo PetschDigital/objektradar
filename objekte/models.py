@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
-from django.db.models import Case, DecimalField, F, Q, Value, When
+from django.db.models import Case, DecimalField, F, OuterRef, Q, Subquery, Value, When
 from django.db.models.functions import Cast
 from django.utils import timezone
 
@@ -50,6 +50,46 @@ class ObjektQuerySet(models.QuerySet):
                 ),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             )
+        )
+
+    def mit_preisaenderung(self):
+        """Vorheriger Preis und Datum der letzten Preisaenderung als Annotationen.
+
+        `vorheriger_preis` ist der Preis des VORLETZTEN Verlaufseintrags,
+        `preis_geaendert_am` das Datum des JUENGSTEN. Das ist kein Vertippen:
+        gefragt ist "von 249.000 auf 219.000, am 14.08." - der alte Preis kommt
+        aus dem vorletzten Eintrag, der Zeitpunkt der Aenderung aber aus dem
+        juengsten, denn DER hat die Aenderung gebracht. Das Datum des
+        vorletzten Eintrags waere der Tag, an dem der ALTE Preis erfasst wurde,
+        und damit die Antwort auf eine Frage, die niemand gestellt hat.
+
+        Gibt es nur einen Eintrag, ist `vorheriger_preis` NULL - der Ausschnitt
+        `[1:2]` greift dann ins Leere. Genau daran erkennt das Template, dass
+        keine Markierung zu setzen ist.
+
+        Zwei korrelierte Subqueries, KEIN zweites Aggregat: `mit_votumzaehlung()`
+        zaehlt bereits ueber `vota`, und ein `Count`/`Max` ueber `preise`
+        daneben erzeugte ein Kreuzprodukt - jeder Preiseintrag vervielfachte
+        jedes Votum und die Votumzahlen waeren still falsch. Eine Subquery im
+        SELECT joint nicht und kann das nicht ausloesen.
+
+        Und sie kostet KEINE zusaetzliche Abfrage: beide stehen in derselben
+        Anweisung wie die Liste selbst. Ein `prefetch_related` waere eine
+        zweite Abfrage, ein Zugriff je Zeile waeren einundfuenfzig - siehe
+        `test_mehr_preisverlauf_kostet_nicht_mehr_abfragen`.
+
+        Die Sortierung `-datum, -id` ist dieselbe wie `Preisverlauf.Meta.ordering`
+        und steht hier trotzdem ausgeschrieben: ein Ausschnitt auf einem
+        Queryset ohne ausdrueckliches `order_by()` haenge sonst daran, dass die
+        Meta-Angabe stehen bleibt - und "der vorletzte Eintrag" waere Zufall,
+        sobald sie sich bewegt.
+        """
+        verlauf = Preisverlauf.objects.filter(objekt=OuterRef("pk")).order_by(
+            "-datum", "-id"
+        )
+        return self.annotate(
+            vorheriger_preis=Subquery(verlauf.values("preis")[1:2]),
+            preis_geaendert_am=Subquery(verlauf.values("datum")[:1]),
         )
 
     def sichtbar(self):
