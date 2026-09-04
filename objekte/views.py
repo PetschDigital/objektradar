@@ -440,8 +440,21 @@ class ObjektlisteView(ListView):
         # ohne sie schluege das Template je Zeile in `bilder` nach, und aus
         # einer Abfrage wuerden einundfuenfzig. Siehe die Methode im Modell
         # und `test_mehr_bilder_kosten_nicht_mehr_abfragen`.
+        # `mit_besuchsmarke()` ist die zweite Optimierung dieser Art: fuenf
+        # Bewegungsarten je Zeile waeren bei fuenfzig Zeilen 250 Abfragen.
+        # Als `Exists()` im SELECT kosten sie keine einzige zusaetzliche.
+        #
+        # Die Schwelle kommt von `request` und NICHT aus `request.user.neu_seit`:
+        # die Middleware hat sie dort abgelegt, nachdem sie den Besuch
+        # fortgeschrieben hat. Ueber `getattr`, weil das Attribut fuer anonyme
+        # Anfragen bewusst nicht entsteht - hier kommt zwar keine an, aber der
+        # Zugriff soll auch dann nicht umfallen, wenn diese Ansicht einmal
+        # ausserhalb der Middleware gerendert wird.
         objekte = mit_votumzaehlung(
-            Objekt.objects.mit_qm_preis().mit_preisaenderung().mit_erstem_bild()
+            Objekt.objects.mit_qm_preis()
+            .mit_preisaenderung()
+            .mit_erstem_bild()
+            .mit_besuchsmarke(self.request.user, getattr(self.request, "neu_seit", None))
         )
         return self.filterform.filtern(objekte).order_by(*reihenfolge(self.sortierung))
 

@@ -14,13 +14,14 @@ import math
 import inspect
 import re
 import textwrap
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 from importlib import import_module
 from urllib.parse import parse_qs, urlparse
 from unittest import mock
 from decimal import Decimal
 
+from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib import admin
 from django.contrib.auth import get_user_model
@@ -37,6 +38,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from django.utils.html import escape
 
+from konten.models import BESUCHSPAUSE
+
 from . import forms, lesezeichen, portale, views
 from .choices import (
     STATUS_AUSGEBLENDET,
@@ -50,7 +53,7 @@ from .choices import (
     Zustand,
 )
 from .forms import STATUS_VORBELEGUNG, ObjektForm
-from .models import Bild, Notiz, Objekt, Preisverlauf, Votum
+from .models import Bild, Notiz, Objekt, Preisverlauf, Statusaenderung, Votum
 from .portale import portal_und_id
 
 #: Der Modulname faengt mit einer Ziffer an - ein `import` schreibt sich dafuer
@@ -61,6 +64,9 @@ nachtragsmigration = import_module("objekte.migrations.0003_portal_und_inserats_
 
 #: Der zweite Lauf desselben Nachtrags, jetzt mit den drei Portalen vom 02.09.
 zweiter_nachtrag = import_module("objekte.migrations.0005_bestand_neue_portale_nachtragen")
+
+#: Der Erfassungszeitpunkt am Preisverlauf, nachgezogen am 04.09.
+erfassungsmigration = import_module("objekte.migrations.0006_preisverlauf_erfasst_am")
 
 Person = get_user_model()
 
@@ -3068,7 +3074,10 @@ class KommentarTests(TestCase):
     #: Freitextsuche und der Statuszelle je einen Block gegeben. Beide sind
     #: damit von den Zeugen unten mitbewacht, ohne dass hier ein Text
     #: abgeschrieben werden musste.
-    BLOECKE = 9
+    #: Am 04.09. auf zehn: die Besuchsmarke hat ihren eigenen Block in der
+    #: Bezeichnungszelle. Der Zeuge unten hat den Zuwachs gemeldet - genau
+    #: dafuer steht die Zahl hier ausgeschrieben.
+    BLOECKE = 10
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -6687,3 +6696,764 @@ class WarnstufeTests(TestCase):
             self._wert("--warnung"), int(anteil.group(1)) / 100, self._wert("--flaeche")
         )
         self.assertGreater(self._kontrast(grund, self._wert("--text")), 4.5)
+
+
+class ListenzeilenParser(HTMLParser):
+    """Je Zeile im `<tbody>` der Liste: Verweise, Zellen und Besuchsmarken.
+
+    Eingegrenzt auf den TABELLENKOERPER und nicht auf die ganze Antwort. In
+    diesem Projekt haben zwei Zeugen ihre Zeichenkette schon einmal im
+    Basis-Template gefunden und dort gemessen, wo die Zusage gar nicht steht.
+    Eine Marke wird deshalb nur gezaehlt, wenn sie IN einer Listenzeile sitzt -
+    und es steht fest, in welcher.
+
+    `marke_in` haelt die Spaltenbezeichnung der Zelle fest, in der die Marke
+    steht. Daran haengt die Zusage, dass der Punkt keine eigene Spalte kostet.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.zeilen = []
+        self.kopfzellen = []
+        self._tiefe_tbody = 0
+        self._in_thead = False
+        self._zeile = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "thead":
+            self._in_thead = True
+        elif tag == "th" and self._in_thead:
+            self.kopfzellen.append(attrs.get("data-spalte"))
+        elif tag == "tbody":
+            self._tiefe_tbody += 1
+        elif not self._tiefe_tbody:
+            return
+        elif tag == "tr":
+            self._zeile = {"verweise": [], "marken": [], "zellen": [], "marke_in": []}
+            self.zeilen.append(self._zeile)
+        elif self._zeile is None:
+            return
+        elif tag == "td":
+            self._zeile["zellen"].append(attrs.get("data-spalte"))
+        elif tag == "a" and attrs.get("href"):
+            self._zeile["verweise"].append(attrs["href"])
+        elif "besuchsmarke" in (attrs.get("class") or "").split():
+            self._zeile["marken"].append(attrs.get("title"))
+            self._zeile["marke_in"].append(
+                self._zeile["zellen"][-1] if self._zeile["zellen"] else None
+            )
+
+    def handle_endtag(self, tag):
+        if tag == "thead":
+            self._in_thead = False
+        elif tag == "tbody":
+            self._tiefe_tbody = max(0, self._tiefe_tbody - 1)
+            self._zeile = None
+        elif tag == "tr":
+            self._zeile = None
+
+    @classmethod
+    def lesen(cls, antwort):
+        parser = cls()
+        parser.feed(antwort.content.decode())
+        return parser
+
+
+class BesuchsmarkeTests(TestCase):
+    """Punkt 6: "seit deinem letzten Besuch" an der Objektliste.
+
+    Markiert ist ein Objekt, wenn NACH der Schwelle jemand ANDERES etwas daran
+    getan hat. Die Schwelle ist `besuch_davor` und kommt ueber
+    `request.neu_seit` aus der Middleware.
+
+    Aufbau der Zeugen: die Schwelle liegt eine Stunde zurueck, und `_objekt()`
+    legt Objekte an, deren Einstellzeitpunkt VOR der Schwelle liegt. Ohne das
+    truege jedes frisch angelegte Objekt schon wegen seiner eigenen Anlage
+    eine Marke - und jeder Zeuge unten waere gruen, ohne die Bewegung zu
+    messen, um die es ihm geht.
+
+    Gemessen wird an der gerenderten Liste (`_markiert()`), nicht am Queryset.
+    Wo zusaetzlich die Annotation selbst gemeint ist, steht das dabei.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("ich", password="ein-langes-passwort")
+        self.andere = Person.objects.create_user("andere", password="ein-langes-passwort")
+        self.client.force_login(self.person)
+        self.schwelle = timezone.now() - timedelta(hours=1)
+        self._schwelle_setzen(self.schwelle)
+        self._nummer = 0
+
+    # --- Aufbau -----------------------------------------------------------
+
+    def _schwelle_setzen(self, schwelle, letzte_aktivitaet=None):
+        """Schwelle setzen und die letzte Aktivitaet FRISCH halten.
+
+        Frisch, damit der naechste Aufruf die Schwelle nicht weiterdreht -
+        sonst maesse jeder Zeuge eine Schwelle, die er nicht gesetzt hat.
+        """
+        Person.objects.filter(pk=self.person.pk).update(
+            besuch_davor=schwelle, letzter_besuch=letzte_aktivitaet or timezone.now()
+        )
+
+    def _vorher(self):
+        return self.schwelle - timedelta(minutes=10)
+
+    def _nachher(self):
+        return self.schwelle + timedelta(minutes=10)
+
+    def _objekt(self, eingestellt_von=None, eingestellt_am=None):
+        self._nummer += 1
+        objekt = Objekt.objects.create(
+            url=f"https://x.example/{self._nummer}",
+            titel=f"Objekt {self._nummer}",
+            eingestellt_von=eingestellt_von,
+        )
+        # `auto_now_add` vergibt "jetzt"; ueber `update()` gesetzt, weil
+        # `save()` den Wert nicht annaehme.
+        Objekt.objects.filter(pk=objekt.pk).update(
+            eingestellt_am=eingestellt_am or self._vorher()
+        )
+        return Objekt.objects.get(pk=objekt.pk)
+
+    def _votum(self, objekt, person, wann):
+        votum = Votum.objects.create(objekt=objekt, person=person, wertung=Wertung.DAFUER)
+        Votum.objects.filter(pk=votum.pk).update(geaendert_am=wann)
+        return votum
+
+    def _notiz(self, objekt, person, wann):
+        notiz = Notiz.objects.create(objekt=objekt, person=person, text="Ein Hinweis")
+        Notiz.objects.filter(pk=notiz.pk).update(erstellt_am=wann)
+        return notiz
+
+    def _statusaenderung(self, objekt, person, wann):
+        aenderung = objekt.status_setzen(person, Status.BESICHTIGUNG)
+        Statusaenderung.objects.filter(pk=aenderung.pk).update(datum=wann)
+        return aenderung
+
+    def _preiseintrag(self, objekt, erfasst_am, datum=None):
+        eintrag = objekt.preis_setzen(self.andere, Decimal("200000"))
+        werte = {"erfasst_am": erfasst_am}
+        if datum is not None:
+            werte["datum"] = datum
+        Preisverlauf.objects.filter(pk=eintrag.pk).update(**werte)
+        return eintrag
+
+    # --- Messen -----------------------------------------------------------
+
+    def _antwort(self):
+        """Die Liste mit ALLEN Status - sonst faellt die Haelfte heraus,
+        sobald ein Zeuge den Status aendert."""
+        return self.client.get(
+            reverse("objektliste"), {"status": [s.value for s in Status]}
+        )
+
+    def _markiert(self, antwort=None):
+        """Die Objekte, die auf der gerenderten Liste eine Marke tragen."""
+        antwort = antwort if antwort is not None else self._antwort()
+        nach_verweis = {reverse("objekt", args=[o.pk]): o.pk for o in Objekt.objects.all()}
+        markiert = set()
+        for zeile in ListenzeilenParser.lesen(antwort).zeilen:
+            if zeile["marken"]:
+                markiert |= {
+                    nach_verweis[verweis]
+                    for verweis in zeile["verweise"]
+                    if verweis in nach_verweis
+                }
+        return markiert
+
+    def _markiert_laut_abfrage(self, antwort=None):
+        """Dasselbe an der Annotation statt am Markup."""
+        antwort = antwort if antwort is not None else self._antwort()
+        return {o.pk for o in antwort.context["objekte"] if o.seit_besuch_bewegt}
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_der_parser_findet_eine_vorhandene_marke(self):
+        """Ohne ihn waere jeder `assertEqual(..., set())` unten auch dann
+        gruen, wenn der Parser grundsaetzlich nichts findet."""
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_ohne_jede_bewegung_traegt_die_liste_keine_marke(self):
+        """Die Gegenrichtung: der Parser meldet nicht einfach jede Zeile."""
+        self._objekt()
+        self.assertEqual(self._markiert(), set())
+
+    def test_die_marke_wird_nicht_ausserhalb_der_liste_gefunden(self):
+        """Zeuge 12, als Riegel formuliert.
+
+        Der Parser zaehlt nur, was IN einer Listenzeile steht. Eine Marke im
+        Rahmen der Seite - Kopfzeile, Navigation, Basis-Template - darf nicht
+        durchschlagen. Gemessen an einer Zeile, die es gar nicht gibt: ohne
+        Objekt hat die Liste keinen Tabellenkoerper, und trotzdem enthaelt die
+        Antwort eine vollstaendige Seite.
+        """
+        parser = ListenzeilenParser()
+        parser.feed(
+            '<span class="besuchsmarke" title="seit deinem letzten Besuch"></span>'
+            "<table><tbody><tr><td>ohne Marke</td></tr></tbody></table>"
+        )
+        self.assertEqual([z["marken"] for z in parser.zeilen], [[]])
+
+    # --- Zusage 1 und 5: fremde Bewegung nach der Schwelle markiert --------
+
+    def test_ein_fremd_eingestelltes_objekt_nach_der_schwelle_markiert(self):
+        objekt = self._objekt(
+            eingestellt_von=self.andere, eingestellt_am=self._nachher()
+        )
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_ein_fremdes_votum_nach_der_schwelle_markiert(self):
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_eine_fremde_notiz_nach_der_schwelle_markiert(self):
+        objekt = self._objekt()
+        self._notiz(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_eine_fremde_statusaenderung_nach_der_schwelle_markiert(self):
+        objekt = self._objekt()
+        self._statusaenderung(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_ein_preiseintrag_nach_der_schwelle_markiert(self):
+        objekt = self._objekt()
+        self._preiseintrag(objekt, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_ein_objekt_ohne_einwerfer_markiert_ebenfalls(self):
+        """`eingestellt_von` ist nullbar, und ab Schritt 3 ist das der
+        Normalfall: der Mail-Parser legt Objekte ohne Person an.
+
+        Ein `~Q(eingestellt_von=person)` allein liesse in SQL eine NULL
+        uebrig - und genau die Objekte, die niemand eingeworfen hat, truegen
+        dann nie eine Marke.
+        """
+        objekt = self._objekt(eingestellt_von=None, eingestellt_am=self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    # --- Zusage 2: eigene Bewegung markiert nicht -------------------------
+
+    def test_das_selbst_eingestellte_objekt_markiert_nicht(self):
+        self._objekt(eingestellt_von=self.person, eingestellt_am=self._nachher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_das_eigene_votum_markiert_nicht(self):
+        objekt = self._objekt()
+        self._votum(objekt, self.person, self._nachher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_die_eigene_notiz_markiert_nicht(self):
+        objekt = self._objekt()
+        self._notiz(objekt, self.person, self._nachher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_die_eigene_statusaenderung_markiert_nicht(self):
+        objekt = self._objekt()
+        self._statusaenderung(objekt, self.person, self._nachher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_die_eigene_bewegung_verdeckt_die_fremde_nicht(self):
+        """Riegel gegen ein zu grobes "eigene Bewegung zaehlt nicht".
+
+        Wer die eigene Bewegung nicht je Eintrag, sondern je OBJEKT
+        ausschliesst, loescht damit auch die fremde Bewegung am selben
+        Objekt - und die Marke verschwaende genau dann, wenn sie am
+        wichtigsten ist: bei einem Objekt, an dem gerade alle arbeiten.
+        """
+        objekt = self._objekt()
+        self._votum(objekt, self.person, self._nachher())
+        self._notiz(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_der_eigene_preiseintrag_markiert_trotzdem(self):
+        """Die bewusste Ausnahme aus Abschnitt 2 der Spezifikation.
+
+        Am Preisverlauf haengt keine Person - `02` fuehrt nur Objekt, Datum,
+        Preis und Quelle. Eine von Hand eingetragene Preisaenderung ist
+        deshalb nicht zuzuordnen und markiert auch fuer die eintragende
+        Person. Das ist eine ENTSCHEIDUNG und kein Fehler; sie steht hier als
+        Zeuge, damit sie nicht unbemerkt gedreht wird.
+        """
+        objekt = self._objekt()
+        eintrag = objekt.preis_setzen(self.person, Decimal("180000"))
+        Preisverlauf.objects.filter(pk=eintrag.pk).update(erfasst_am=self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    # --- Zusage 3: Bewegung vor der Schwelle markiert nicht ---------------
+
+    def test_ein_fremd_eingestelltes_objekt_vor_der_schwelle_markiert_nicht(self):
+        self._objekt(eingestellt_von=self.andere, eingestellt_am=self._vorher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_ein_fremdes_votum_vor_der_schwelle_markiert_nicht(self):
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._vorher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_eine_fremde_notiz_vor_der_schwelle_markiert_nicht(self):
+        objekt = self._objekt()
+        self._notiz(objekt, self.andere, self._vorher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_eine_fremde_statusaenderung_vor_der_schwelle_markiert_nicht(self):
+        objekt = self._objekt()
+        self._statusaenderung(objekt, self.andere, self._vorher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_ein_preiseintrag_vor_der_schwelle_markiert_nicht(self):
+        objekt = self._objekt()
+        self._preiseintrag(objekt, self._vorher())
+        self.assertEqual(self._markiert(), set())
+
+    def test_genau_auf_der_schwelle_markiert_nicht(self):
+        """`__gt`, nicht `__gte`.
+
+        Die Schwelle IST die letzte Aktivitaet der Person aus dem vorherigen
+        Besuch. Was in dieser Mikrosekunde geschah, hat sie gesehen.
+        """
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self.schwelle)
+        self.assertEqual(self._markiert(), set())
+
+    # --- Zusage 4: Schwelle `None` markiert nichts ------------------------
+
+    def test_ohne_schwelle_ist_nichts_markiert(self):
+        """Der erste Besuch einer Person, oder ein Konto von vor der
+        Einfuehrung der Besuchszeiten.
+
+        Die Gegenlesart - "alles ist neu" - liesse beim ersten Login die
+        komplette Liste leuchten, und danach schaut niemand mehr hin.
+        Gemessen MIT frischer fremder Bewegung: ohne sie waere der Zeuge auch
+        dann gruen, wenn gar nichts zu markieren waere.
+        """
+        self._schwelle_setzen(None)
+        objekt = self._objekt(eingestellt_von=self.andere, eingestellt_am=timezone.now())
+        self._votum(objekt, self.andere, timezone.now())
+        self._notiz(objekt, self.andere, timezone.now())
+        self.assertEqual(self._markiert(), set())
+
+    def test_ohne_schwelle_traegt_auch_die_annotation_nichts(self):
+        """Nicht nur das Template schweigt - schon die Abfrage sagt Nein."""
+        self._schwelle_setzen(None)
+        objekt = self._objekt(eingestellt_von=self.andere, eingestellt_am=timezone.now())
+        self.assertEqual(self._markiert_laut_abfrage(), set())
+        self.assertIn(objekt.pk, {o.pk for o in self._antwort().context["objekte"]})
+
+    # --- Nachtrag: `erfasst_am` fuehrt, nicht `datum` ---------------------
+
+    def test_ein_alter_preiseintrag_mit_frischer_erfassung_markiert(self):
+        """Das fachliche Preisdatum darf beliebig weit zurueckliegen.
+
+        Wer heute eine Preissenkung von vorletzter Woche nachtraegt, hat
+        HEUTE etwas getan - und genau das soll die Marke zeigen.
+        """
+        objekt = self._objekt()
+        self._preiseintrag(
+            objekt, erfasst_am=self._nachher(), datum=date(2026, 1, 15)
+        )
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_ein_heutiger_preiseintrag_mit_alter_erfassung_markiert_nicht(self):
+        """Die Gegenrichtung: ein heutiges Preisdatum macht einen laengst
+        gesehenen Eintrag nicht wieder frisch.
+
+        `datum` ist von Hand setzbar und an nichts gebunden - es darf vor wie
+        hinter dem Erfassungszeitpunkt liegen. Hier liegt es DAHINTER: erfasst
+        wurde der Eintrag vorgestern, das Preisdatum steht auf heute.
+
+        Gegen `erfasst_am` geprueft ist das ein laengst gesehener Eintrag und
+        traegt keine Marke. Gegen `datum` geprueft leuchtete er - und mit ihm
+        jeder Eintrag, dessen Preisdatum juenger ist als der letzte Besuch,
+        ganz gleich wann ihn jemand eingetragen hat.
+
+        Die Schwelle liegt eigens auf GESTERN und nicht wie sonst eine Stunde
+        zurueck. `datum` ist ein `DateField`, und Django wirft die Uhrzeit beim
+        Vergleich weg: laege die Schwelle auf demselben Kalendertag wie
+        `datum`, waere `datum > schwelle` auch in der falschen Fassung falsch
+        und der Zeuge liefe ins Leere. Die Sabotage-Gegenprobe hat genau das
+        aufgedeckt - er war gruen, ohne die Pruefrichtung zu messen.
+        """
+        self.schwelle = timezone.now() - timedelta(days=1)
+        self._schwelle_setzen(self.schwelle)
+        objekt = self._objekt()
+        self._preiseintrag(
+            objekt,
+            erfasst_am=timezone.now() - timedelta(days=2),
+            datum=timezone.localdate(),
+        )
+        self.assertEqual(self._markiert(), set())
+
+    # --- Zusage 6, 7 und 8: die Schwelle steht und rueckt nach ------------
+
+    def test_zwei_aufrufe_kurz_hintereinander_lassen_die_marke_stehen(self):
+        """Zeuge 6. Unter BESUCHSPAUSE bleibt die Schwelle stehen - und damit
+        die Marke. Verschwaende sie beim zweiten Blick, waere sie wertlos:
+        niemand traut einem Hinweis, der beim Hinsehen weggeht."""
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        self.assertEqual(self._markiert(), {objekt.pk})
+        self.assertEqual(self._markiert(), {objekt.pk})
+
+    def test_zwei_aufrufe_kurz_hintereinander_bewegen_die_schwelle_nicht(self):
+        self._objekt()
+        self._antwort()
+        self._antwort()
+        self.assertEqual(
+            Person.objects.get(pk=self.person.pk).besuch_davor, self.schwelle
+        )
+
+    def test_nach_der_besuchspause_rueckt_die_schwelle_nach(self):
+        """Zeuge 7."""
+        letzte_aktivitaet = timezone.now() - BESUCHSPAUSE
+        self._schwelle_setzen(self.schwelle, letzte_aktivitaet=letzte_aktivitaet)
+        self._antwort()
+        self.assertEqual(
+            Person.objects.get(pk=self.person.pk).besuch_davor, letzte_aktivitaet
+        )
+
+    def test_der_erste_aufruf_eines_neuen_besuchs_nutzt_die_frische_schwelle(self):
+        """Zeuge 8 - der Zeuge fuer die REIHENFOLGE in der Middleware.
+
+        Aufbau: die alte Schwelle liegt fuenf Stunden zurueck, die letzte
+        Aktivitaet des vorherigen Besuchs eine Besuchspause. Dieser Aufruf
+        dreht die Schwelle also auf die letzte Aktivitaet.
+
+        `gesehen` bewegte sich DAZWISCHEN - nach der alten Schwelle, aber vor
+        der neuen. Die Person hat es in ihrem letzten Besuch also bereits
+        gesehen, und es darf nicht leuchten. Wuerde die Schwelle VOR dem
+        Fortschreiben gelesen, truege es eine Marke.
+
+        `frisch` bewegte sich nach BEIDEN Schwellen und ist der Riegel: ohne
+        ihn waere der Zeuge auch dann gruen, wenn ueberhaupt nichts markiert
+        wuerde.
+        """
+        letzte_aktivitaet = timezone.now() - BESUCHSPAUSE
+        self._schwelle_setzen(
+            timezone.now() - timedelta(hours=5), letzte_aktivitaet=letzte_aktivitaet
+        )
+        gesehen = self._objekt(eingestellt_am=self._vorher())
+        self._votum(gesehen, self.andere, timezone.now() - timedelta(hours=2))
+        frisch = self._objekt(eingestellt_am=self._vorher())
+        self._votum(frisch, self.andere, timezone.now() - timedelta(minutes=1))
+        self.assertEqual(self._markiert(), {frisch.pk})
+
+    # --- Zusage 3 der Darstellung ----------------------------------------
+
+    def test_die_marke_traegt_die_erklaerung_im_title(self):
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        marken = [t for z in ListenzeilenParser.lesen(self._antwort()).zeilen for t in z["marken"]]
+        self.assertEqual(marken, ["seit deinem letzten Besuch"])
+
+    def test_die_marke_traegt_kein_wort_in_der_liste(self):
+        """Das Wort "neu" ist in der Oberflaeche gesperrt - es gehoert dem
+        Status NEU ("von niemandem angesehen") und meint etwas anderes. Die
+        Marke traegt ueberhaupt kein Wort, nur den `title`."""
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        inhalt = self._antwort().content.decode()
+        stelle = inhalt.index('class="besuchsmarke"')
+        self.assertRegex(inhalt[stelle:], r'^class="besuchsmarke" title="[^"]+"></span>')
+
+    def test_die_marke_kostet_keine_spalte(self):
+        """Sie sitzt IN der Bezeichnungszelle. Eine zwoelfte Spalte kostete
+        Breite in jeder Zeile, auch in den neunundvierzig ohne Marke."""
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        parser = ListenzeilenParser.lesen(self._antwort())
+        self.assertEqual(parser.zeilen[0]["marke_in"], ["Objekt"])
+        self.assertEqual(len(parser.zeilen[0]["zellen"]), len(parser.kopfzellen))
+
+    def test_eine_zeile_ohne_bewegung_bekommt_keinen_platzhalter(self):
+        """Kein leerer Punkt, kein leeres Element - nichts. Ein Platzhalter
+        veraenderte die Zeilenhoehe und machte genau das kaputt, wofuer die
+        Liste da ist: untereinander stehende Zahlen."""
+        bewegt = self._objekt()
+        self._votum(bewegt, self.andere, self._nachher())
+        self._objekt()
+        marken = [len(z["marken"]) for z in ListenzeilenParser.lesen(self._antwort()).zeilen]
+        self.assertEqual(sorted(marken), [0, 1])
+
+    # --- Zusage 11: beide Fassungen --------------------------------------
+
+    def _stylesheet(self):
+        quelle = (settings.BASE_DIR / "static" / "objektradar.css").read_text(
+            encoding="utf-8"
+        )
+        # Kommentare heraus: sie nennen die Klasse ebenfalls, und ein Zeuge,
+        # der einen Kommentar misst, misst gar nichts.
+        return re.sub(r"/\*.*?\*/", "", quelle, flags=re.S)
+
+    def _regeln_zur_marke(self):
+        """Alle Regeln, deren Selektor `.besuchsmarke` nennt - mit ihrer Stelle."""
+        return [
+            (treffer.group(1), treffer.group(2), treffer.start())
+            for treffer in re.finditer(
+                r"([^{}]*\.besuchsmarke[^{}]*)\{([^{}]*)\}", self._stylesheet()
+            )
+        ]
+
+    def test_das_markup_der_marke_ist_fuer_beide_fassungen_dasselbe(self):
+        """Zeuge 11, erste Haelfte.
+
+        Karte und Tabelle sind EIN Markup; unter 48rem bricht das Stylesheet
+        die Tabelle in Karten auf. Die Marke sitzt in der Bezeichnungszelle,
+        und die ist ab 48rem eine Tabellenzelle und darunter die Ueberschrift
+        der Karte. Damit steht sie in beiden Fassungen.
+        """
+        objekt = self._objekt()
+        self._votum(objekt, self.andere, self._nachher())
+        self.assertEqual(ListenzeilenParser.lesen(self._antwort()).zeilen[0]["marke_in"], ["Objekt"])
+
+    def test_die_marke_bekommt_ihr_aussehen_ausserhalb_jedes_media_blocks(self):
+        """Zeuge 11, zweite Haelfte.
+
+        Ein leeres `<span>` ohne Masse ist unsichtbar. Staende die einzige
+        Regel im Block ab 48rem, truege die Tabelle die Marke und die Karte
+        ein Element ohne Ausdehnung - und die erste Haelfte oben fiele darauf
+        herein, weil das Markup ja da waere.
+
+        Auf oberster Ebene heisst: bis zu dieser Stelle sind alle geoeffneten
+        Klammern wieder geschlossen.
+        """
+        quelle = self._stylesheet()
+        regeln = self._regeln_zur_marke()
+        self.assertTrue(regeln, "keine Regel zu `.besuchsmarke` im Stylesheet")
+        oberste = [
+            rumpf
+            for _, rumpf, stelle in regeln
+            if quelle.count("{", 0, stelle) == quelle.count("}", 0, stelle)
+        ]
+        self.assertTrue(oberste, "die Marke wird nur innerhalb eines Media-Blocks gestaltet")
+        self.assertIn("background", "".join(oberste))
+
+    def test_die_marke_wird_in_keiner_fassung_ausgeblendet(self):
+        """Zeuge 11, dritte Haelfte - und der, den die Sabotage trifft.
+
+        `display: none` in irgendeiner Regel zur Marke nimmt sie genau einer
+        der beiden Fassungen weg, je nachdem, wo die Regel steht.
+        """
+        for selektor, rumpf, _ in self._regeln_zur_marke():
+            with self.subTest(selektor=selektor.strip()):
+                self.assertNotIn("display:none", rumpf.replace(" ", "").replace("\n", ""))
+
+    # --- Zusage 10: Abfragelast ------------------------------------------
+
+    def _adresse(self):
+        """Mit gesetztem Filter und gesetzter Sortierung, wie bei den
+        Geschwistern in `SortierungTests`: beides veraendert den Abfragepfad.
+
+        ALLE Status, weil die Zeugen unten den Status aendern und die Objekte
+        sonst aus der Liste fielen.
+        """
+        return "/?" + "&".join(f"status={s.value}" for s in Status) + "&sortierung=-qm_preis"
+
+    def test_mehr_bewegte_objekte_kosten_nicht_mehr_abfragen(self):
+        """Zeuge 10 - der eigentliche Bauteil dieses Punktes.
+
+        Fuenf Bewegungsarten je Objekt, fuenfzig Objekte je Seite: naiv sind
+        das 250 Abfragen je Seitenaufruf. Als `Exists()` im SELECT sind es
+        null zusaetzliche.
+
+        Gemessen mit FUENFZIG Objekten und nicht mit fuenf. Eine kleine Menge
+        faengt ein N+1 nicht - das ist in diesem Projekt schon einmal
+        passiert und steht als bekannter Fehler in den Projektnotizen.
+
+        Jedes Objekt bekommt ALLE Bewegungsarten. Ohne Bewegung liefen die
+        Unterabfragen zwar auch, aber eine Fassung, die nur bei vorhandenen
+        Eintraegen nachschlaegt, kaeme ungesehen durch.
+
+        Der EINSTELLZEITPUNKT liegt bewusst VOR der Schwelle, obwohl das
+        Objekt markiert sein soll. Die Sabotage-Gegenprobe hat es aufgedeckt:
+        lag er dahinter, war das Objekt schon aus seiner eigenen ZEILE heraus
+        markiert - und diese eine Bedingung braucht keine Unterabfrage. Eine
+        Schleife je Objekt kurzschliesst darauf, fragt die Datenbank kein
+        einziges Mal und kam ungesehen durch. Jetzt kann die Marke NUR aus den
+        vier Bewegungsarten kommen, die eine Unterabfrage brauchen.
+
+        Die erwartete Zahl wird beim ersten Durchgang ERMITTELT und nicht
+        hingeschrieben: Sitzung und Middleware fragen ohnehin mit, und deren
+        Zahl ist nicht die Zusage, die hier gehalten werden soll.
+        """
+        def anlegen(anzahl):
+            for _ in range(anzahl):
+                objekt = self._objekt(eingestellt_von=self.andere)
+                self._votum(objekt, self.andere, self._nachher())
+                self._notiz(objekt, self.andere, self._nachher())
+                self._statusaenderung(objekt, self.andere, self._nachher())
+                self._preiseintrag(objekt, self._nachher())
+
+        adresse = self._adresse()
+        self.client.get(adresse)  # Aufwaermen, damit der Verbindungsaufbau nicht mitzaehlt.
+        anlegen(5)
+        with CaptureQueriesContext(connection) as mit_fuenf:
+            self.client.get(adresse)
+        anlegen(views.OBJEKTE_JE_SEITE - 5)
+        with self.assertNumQueries(len(mit_fuenf)):
+            self.client.get(adresse)
+
+    def test_bei_dieser_messung_sind_die_marken_ueberhaupt_da(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Zeigte die Liste die Marke gar nicht an - weil die Annotation fehlt,
+        das Template den Zweig nicht betritt oder der Filter die Objekte
+        ausblendet -, waere die Abfragezahl selbstverstaendlich konstant und
+        der Zeuge darueber gruen, ohne irgendetwas zu messen.
+
+        Derselbe Aufbau wie dort, samt Einstellzeitpunkt VOR der Schwelle:
+        ein Riegel, der etwas anderes misst als der Zeuge, den er sichert,
+        sichert ihn nicht.
+        """
+        objekt = self._objekt(eingestellt_von=self.andere)
+        self._votum(objekt, self.andere, self._nachher())
+        self._notiz(objekt, self.andere, self._nachher())
+        self._statusaenderung(objekt, self.andere, self._nachher())
+        self._preiseintrag(objekt, self._nachher())
+        self.assertEqual(self._markiert(self.client.get(self._adresse())), {objekt.pk})
+
+    def test_die_seitengroesse_deckt_die_messung_ab(self):
+        """Der Zeuge oben legt `OBJEKTE_JE_SEITE` Objekte an und misst damit
+        EINE Seite. Waere die Seitengroesse kleiner als fuenfzig, maesse er
+        weniger Zeilen als zugesagt."""
+        self.assertGreaterEqual(views.OBJEKTE_JE_SEITE, 50)
+
+
+class ErfassungszeitpunktMigrationTests(TestCase):
+    """Migration 0006: `Preisverlauf.erfasst_am` und der Bestandsnachtrag.
+
+    Der Bestand wird aus `datum` ABGELEITET und nicht auf den
+    Migrationszeitpunkt gesetzt. Stuenden alle Alteintraege auf "jetzt", laege
+    ihr Erfassungszeitpunkt hinter jeder bestehenden Besuchsschwelle - und
+    beim naechsten Aufruf leuchtete die halbe Liste gleichzeitig auf. Genau
+    einmal, und danach traute niemand der Marke mehr.
+
+    Die Ableitung wird gegen die ECHTE Modellregistrierung gefahren. Sie liest
+    nur `datum` und schreibt nur `erfasst_am`; ein historischer Zustand
+    zwischen den drei Operationen einer Datei liesse sich ueber
+    `project_state()` ohnehin nicht greifen.
+    """
+
+    def setUp(self):
+        self.objekt = Objekt.objects.create(url="https://x.example/1")
+
+    def _eintrag(self, datum, erfasst_am=None):
+        eintrag = Preisverlauf.objects.create(
+            objekt=self.objekt, preis=Decimal("200000"), datum=datum
+        )
+        # `auto_now_add` hat "jetzt" gesetzt - genau den Wert, den die
+        # Migration im Bestand NICHT stehen lassen soll.
+        Preisverlauf.objects.filter(pk=eintrag.pk).update(
+            erfasst_am=erfasst_am or timezone.now()
+        )
+        return eintrag
+
+    def _ableiten(self):
+        erfassungsmigration.aus_datum_ableiten(django_apps, None)
+
+    def _nachher(self, eintrag):
+        return Preisverlauf.objects.get(pk=eintrag.pk).erfasst_am
+
+    # --- die Verdrahtung ---------------------------------------------------
+
+    def test_die_migration_fuehrt_genau_diese_funktion_aus(self):
+        """Ohne diesen Zeugen sind die folgenden blind: sie rufen die Funktion
+        direkt auf. Waere sie nicht in den Operationen verdrahtet, liefe die
+        Migration im Betrieb nichts - und die Zeugen unten waeren gruen."""
+        lauf = [
+            o for o in erfassungsmigration.Migration.operations
+            if isinstance(o, migrations.RunPython)
+        ]
+        self.assertEqual([o.code for o in lauf], [erfassungsmigration.aus_datum_ableiten])
+
+    def test_die_ableitung_laeuft_zwischen_anlegen_und_festziehen(self):
+        """Die Reihenfolge ist die Zusage, nicht die Kosmetik.
+
+        Zuerst nullbar anlegen, dann fuellen, dann auf `auto_now_add`
+        festziehen. Liefe die Ableitung nach dem Festziehen, muesste die
+        Spalte schon vorher nicht-null sein - und die Bestandszeilen bekaemen
+        den Wert, den sie gerade nicht bekommen sollen.
+        """
+        arten = [type(o).__name__ for o in erfassungsmigration.Migration.operations]
+        self.assertEqual(arten, ["AddField", "RunPython", "AlterField"])
+
+    def test_das_feld_wird_zuerst_nullbar_und_ohne_auto_now_add_angelegt(self):
+        anlegen = erfassungsmigration.Migration.operations[0]
+        self.assertTrue(anlegen.field.null)
+        self.assertFalse(getattr(anlegen.field, "auto_now_add", False))
+
+    def test_das_feld_wird_danach_auf_auto_now_add_festgezogen(self):
+        festziehen = erfassungsmigration.Migration.operations[2]
+        self.assertTrue(festziehen.field.auto_now_add)
+
+    def test_die_ableitung_ist_rueckwaerts_ein_noop(self):
+        lauf = erfassungsmigration.Migration.operations[1]
+        self.assertIs(lauf.reverse_code, migrations.RunPython.noop)
+
+    # --- die Zusage --------------------------------------------------------
+
+    def test_der_bestand_bekommt_mitternacht_ortszeit_des_preisdatums(self):
+        eintrag = self._eintrag(date(2026, 1, 15))
+        self._ableiten()
+        self.assertEqual(
+            self._nachher(eintrag),
+            timezone.make_aware(datetime.combine(date(2026, 1, 15), time.min)),
+        )
+
+    def test_der_bestand_bekommt_nicht_den_migrationszeitpunkt(self):
+        """Die eigentliche Zusage dieser Migration.
+
+        Ein Eintrag mit einem Preisdatum von vor dreissig Tagen darf danach
+        nicht so aussehen, als sei er gerade eben erfasst worden.
+        """
+        eintrag = self._eintrag(timezone.localdate() - timedelta(days=30))
+        self._ableiten()
+        self.assertLess(self._nachher(eintrag), timezone.now() - timedelta(days=29))
+
+    def test_ein_alteintrag_leuchtet_nach_der_migration_nicht_auf(self):
+        """Dieselbe Zusage, aber an der Wirkung gemessen statt am Wert.
+
+        Gegen eine Schwelle von gestern darf ein dreissig Tage alter Eintrag
+        keine Marke ausloesen. Auf den Migrationszeitpunkt gesetzt taete er
+        genau das - und mit ihm jeder andere Alteintrag gleichzeitig.
+        """
+        eintrag = self._eintrag(timezone.localdate() - timedelta(days=30))
+        self._ableiten()
+        schwelle = timezone.now() - timedelta(days=1)
+        self.assertFalse(
+            Preisverlauf.objects.filter(pk=eintrag.pk, erfasst_am__gt=schwelle).exists()
+        )
+
+    def test_die_ableitung_geht_ueber_jede_zeile(self):
+        """Riegel: `bulk_update` mit einer leeren Liste faellt nicht auf.
+
+        Verglichen wird in ORTSZEIT. Mitternacht Europe/Berlin ist in UTC der
+        Vorabend, und `erfasst_am.date()` liefert den UTC-Tag - der Zeuge
+        haette den Bestand sonst pauschal um einen Tag danebengesehen.
+        """
+        eintraege = [
+            self._eintrag(timezone.localdate() - timedelta(days=tage))
+            for tage in (10, 20, 30)
+        ]
+        self._ableiten()
+        for eintrag in eintraege:
+            with self.subTest(datum=eintrag.datum):
+                self.assertEqual(
+                    timezone.localtime(self._nachher(eintrag)).date(), eintrag.datum
+                )
+
+    def test_ein_frischer_eintrag_bekommt_weiterhin_den_erfassungszeitpunkt(self):
+        """Die Migration betrifft den BESTAND. Neue Eintraege kommen ueber
+        `auto_now_add` und tragen die echte Uhrzeit - sonst haette die Marke
+        ab morgen wieder nur Tagesgenauigkeit."""
+        eintrag = Preisverlauf.objects.create(
+            objekt=self.objekt, preis=Decimal("190000")
+        )
+        self.assertAlmostEqual(
+            eintrag.erfasst_am, timezone.now(), delta=timedelta(minutes=1)
+        )

@@ -154,7 +154,25 @@
                   <span class="platzhalter"></span>
                 {% endif %}
               </td>
-              <td data-spalte="Objekt" class="bezeichnung"><a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
+              {% comment %}
+                Die Besuchsmarke steht IN der Bezeichnungszelle und bekommt
+                keine eigene Spalte: eine zwoelfte Spalte kostete Breite in
+                jeder Zeile, auch in den neunundvierzig ohne Marke.
+
+                Kein Wort daneben. "neu" ist in der Oberflaeche gesperrt - das
+                Wort gehoert dem Status NEU ("von niemandem angesehen") und
+                meint etwas anderes. Die Erklaerung steht im `title`.
+
+                Ohne Bewegung steht hier NICHTS - kein Platzhalter. Ein leerer
+                Punkt derselben Groesse hielte zwar die Ausrichtung, machte
+                aber genau das kaputt, wofuer die Marke da ist: dass ein Blick
+                ueber die Liste reicht.
+
+                Das Markup ist dasselbe fuer beide Fassungen - ab 48rem eine
+                Tabellenzelle, darunter die Ueberschrift der Karte. Die Marke
+                steht damit in beiden.
+              {% endcomment %}
+              <td data-spalte="Objekt" class="bezeichnung">{% if o.seit_besuch_bewegt %}<span class="besuchsmarke" title="seit deinem letzten Besuch"></span>{% endif %}<a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
               <td data-spalte="Ort">{{ o.ort|default:"—" }}</td>
               <td data-spalte="Region / Land">{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
               <td data-spalte="Wohnfläche">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>

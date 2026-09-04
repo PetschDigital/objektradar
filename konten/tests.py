@@ -546,6 +546,9 @@ class BesuchMiddlewareTests(TestCase):
 
     def setUp(self):
         self.person = Person.objects.create_user("steffen", password="ein-langes-passwort")
+        #: Eine Schwelle, die weit genug zurueckliegt, um von den Aufrufen der
+        #: Zeugen unten nicht versehentlich getroffen zu werden.
+        self.t0 = timezone.now() - timedelta(days=1)
 
     def test_ein_aufruf_schreibt_die_aktivitaet_fort(self):
         self.client.force_login(self.person)
@@ -581,6 +584,94 @@ class BesuchMiddlewareTests(TestCase):
         # nicht hier ein AttributeError den Aufruf zerlegen.
         antwort = BesuchMiddleware(lambda r: HttpResponse("ok"))(RequestFactory().get("/"))
         self.assertEqual(antwort.status_code, 200)
+
+    # --- Die Schwelle an `request` ---------------------------------------
+
+    def _durchlauf(self, pfad="/", person=True):
+        """Ein Middleware-Durchlauf. Gibt die Anfrage zurueck.
+
+        Die Person wird FRISCH geholt und nicht `self.person` gereicht: die
+        Middleware schreibt auf dem Objekt, das sie bekommt, und mit
+        `self.person` liesse sich hinterher nicht mehr unterscheiden, ob ein
+        Wert in der Datenbank steht oder nur im Arbeitsspeicher.
+        """
+        anfrage = RequestFactory().get(pfad)
+        if person:
+            anfrage.user = Person.objects.get(pk=self.person.pk)
+        BesuchMiddleware(lambda r: HttpResponse())(anfrage)
+        return anfrage
+
+    def _in_der_datenbank(self):
+        return Person.objects.get(pk=self.person.pk)
+
+    def test_die_schwelle_liegt_nach_dem_durchlauf_an_request(self):
+        """Die Ansicht liest `request.neu_seit` und nicht `request.user.neu_seit`.
+
+        Das ist kein Geschmack: die Middleware legt den Wert ab, NACHDEM sie
+        fortgeschrieben hat. Ein Attribut an `request` haelt diesen Zeitpunkt
+        fest; `request.user` liesse sich spaeter noch bewegen.
+        """
+        Person.objects.filter(pk=self.person.pk).update(
+            besuch_davor=self.t0, letzter_besuch=timezone.now()
+        )
+        self.assertEqual(self._durchlauf().neu_seit, self.t0)
+
+    def test_ohne_anmeldung_entsteht_keine_schwelle_an_request(self):
+        """Fuer eine anonyme Anfrage soll nichts entstehen, was danach so
+        aussieht, als haette sie eine Schwelle. `None` waere ein Wert."""
+        self.assertFalse(hasattr(self._durchlauf(person=False), "neu_seit"))
+
+    def test_die_schwelle_an_request_ist_die_frische_und_nicht_die_vorletzte(self):
+        """Gelesen wird NACH dem Fortschreiben.
+
+        Aufgebaut als neuer Besuch: die letzte Aktivitaet liegt laenger als
+        BESUCHSPAUSE zurueck, dieser Aufruf dreht die Schwelle also weiter.
+        Andersherum gelesen stuende hier noch die Schwelle des vorletzten
+        Besuchs - und alles aus dem letzten Besuch erschiene ein zweites Mal
+        als bewegt.
+        """
+        letzte_aktivitaet = timezone.now() - BESUCHSPAUSE
+        Person.objects.filter(pk=self.person.pk).update(
+            besuch_davor=self.t0, letzter_besuch=letzte_aktivitaet
+        )
+        self.assertEqual(self._durchlauf().neu_seit, letzte_aktivitaet)
+
+    # --- Statische Dateien schreiben nichts fort -------------------------
+
+    def test_eine_anfrage_auf_eine_statische_datei_schreibt_nichts_fort(self):
+        """Jeder Aufruf schreibt in die Datenbank; fuer ein Stylesheet ist das
+        ein Schreibzugriff ohne Gegenwert.
+
+        Schwerer wiegt die Zeitrechnung: eine Seite zieht mehrere statische
+        Dateien nach, und jede davon schoebe `letzter_besuch` weiter. Die
+        Besuchspause liefe dann ab dem letzten Bild statt ab dem letzten Klick.
+        """
+        self._durchlauf(f"{settings.STATIC_URL}objektradar.css")
+        self.assertIsNone(self._in_der_datenbank().letzter_besuch)
+
+    def test_eine_gewoehnliche_anfrage_schreibt_auf_demselben_weg_sehr_wohl_fort(self):
+        """Riegel gegen einen Zeugen im Vakuum.
+
+        Schriebe dieser Weg NIE fort - weil die Anfrage aus der Fabrik etwas
+        nicht mitbringt -, waere der Zeuge darueber gruen, ohne den Ausschluss
+        zu messen.
+        """
+        self._durchlauf("/")
+        self.assertIsNotNone(self._in_der_datenbank().letzter_besuch)
+
+    def test_der_ausschluss_folgt_der_eingestellten_static_url(self):
+        """Fest hingeschriebenes `/static/` waere eine zweite Wahrheit neben
+        den Einstellungen."""
+        with override_settings(STATIC_URL="/dateien/"):
+            self._durchlauf("/dateien/objektradar.css")
+        self.assertIsNone(self._in_der_datenbank().letzter_besuch)
+
+    def test_ein_pfad_der_nur_so_aehnlich_heisst_wird_nicht_ausgenommen(self):
+        """`/statusbericht/` faengt nicht mit `/static/` an - `/statistik/`
+        aber schon fast. Gemessen wird auf dem vollstaendigen Praefix samt
+        abschliessendem Schraegstrich, den Django an `STATIC_URL` haelt."""
+        self._durchlauf("/statistik/")
+        self.assertIsNotNone(self._in_der_datenbank().letzter_besuch)
 
 
 class PasswortAendernTests(TestCase):

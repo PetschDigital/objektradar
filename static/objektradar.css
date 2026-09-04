@@ -544,6 +544,40 @@ main input[type="checkbox"] {
    Layout-Runde bleibt damit unangetastet. */
 .tabelle .bezeichnung { overflow-wrap: anywhere; }
 
+/* --- Die Marke "seit deinem letzten Besuch" ------------------------------
+   Ein Punkt, kein Wort. Das Wort "neu" ist in der Oberflaeche gesperrt - es
+   gehoert dem Status NEU ("von niemandem angesehen") und meint etwas
+   anderes. Was der Punkt bedeutet, steht im `title` am Element.
+
+   `--akzent`, weil die Marke ein Hinweis ist und kein Zustand: `--signal`
+   gehoert der Preissenkung, `--fehler` den Fehlern. Keine neue Farbe.
+
+   KEINE eigene Spalte, KEIN Platzhalter. Der Punkt sitzt inline vor der
+   Bezeichnung; wo nichts passiert ist, steht nichts. Deshalb auch
+   `inline-block` mit fester Groesse statt eines Pseudo-Elements an der Zelle:
+   ein `::before` an jeder Zelle stuende auch in den Zeilen ohne Bewegung und
+   muesste dort leer gehalten werden - genau der Platzhalter, den es nicht
+   geben soll.
+
+   `vertical-align: middle` haelt ihn auf der Mittellinie der Schrift; ohne
+   das saesse er auf der Grundlinie und zoege die Zeilenhoehe auseinander.
+   `flex-shrink: 0`, weil die Bezeichnungszelle unter 48rem ein Flexkasten ist
+   und der Punkt sonst zum Strich zusammengedrueckt wuerde.
+
+   Die Regel steht auf oberster Ebene und NICHT in einem Media-Block: sie gilt
+   fuer die Karte wie fuer die Tabelle. Genau das haelt der Zeuge
+   `test_die_marke_wird_in_keiner_fassung_ausgeblendet`. */
+.besuchsmarke {
+  display: inline-block;
+  flex-shrink: 0;
+  width: .5rem;
+  height: .5rem;
+  margin-right: var(--eng);
+  border-radius: 50%;
+  background: var(--akzent);
+  vertical-align: middle;
+}
+
 /* --- Das Bild in der Liste ----------------------------------------------
    Mobil zuerst: die Zelle ist der Kopf der Karte, volle Breite, festes
    Seitenverhaeltnis. Ab 48rem wird sie eine schmale erste Spalte - siehe den

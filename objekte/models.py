@@ -3,7 +3,19 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
-from django.db.models import Case, DecimalField, F, OuterRef, Q, Subquery, Value, When
+from django.db.models import (
+    BooleanField,
+    Case,
+    DecimalField,
+    Exists,
+    ExpressionWrapper,
+    F,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.functions import Cast
 from django.utils import timezone
 
@@ -122,6 +134,92 @@ class ObjektQuerySet(models.QuerySet):
         """
         bilder = Bild.objects.filter(objekt=OuterRef("pk")).order_by("reihenfolge", "id")
         return self.annotate(erstes_bild=Subquery(bilder.values("url")[:1]))
+
+    def mit_besuchsmarke(self, person, schwelle):
+        """`seit_besuch_bewegt` als Annotation: hat sich hier etwas getan?
+
+        Wahr, wenn NACH der Schwelle mindestens eine der fuenf Bewegungsarten
+        stattfand - und zwar durch JEMAND ANDEREN. Eigenes Tun zaehlt nicht:
+        sonst leuchtet der Person ihr eigener letzter Klick entgegen, und die
+        Marke ist nach zwei Tagen wertlos.
+
+        Ist die Schwelle `None`, ist NICHTS markiert. Das ist der erste Besuch
+        einer Person oder ein Konto von vor der Einfuehrung der Besuchszeiten.
+        `Person.neu_seit` entscheidet ausdruecklich nicht, was `None` bedeutet -
+        diese Entscheidung gehoert hierher, wo man sie sieht. Die Gegenlesart
+        "alles ist neu" liesse beim ersten Login die komplette Liste leuchten,
+        und danach schaut niemand mehr hin.
+
+        VIER `Exists()`-Unterabfragen und eine Bedingung auf der Zeile selbst,
+        alles im SELECT derselben Anweisung. Das ist der eigentliche Bauteil
+        dieses Punktes: fuenf Bewegungsarten mal fuenfzig Zeilen waeren naiv
+        250 Abfragen je Seitenaufruf. So sind es null zusaetzliche - die
+        Seitenabfrage bleibt unabhaengig von der Objektzahl konstant.
+
+        `Exists` und KEIN Aggregat: die Liste zieht bereits drei bedingte
+        `Count` ueber `vota`, und ein zweiter JOIN auf `notizen` oder `preise`
+        daneben erzeugte ein Kreuzprodukt - jede Notiz vervielfachte jedes
+        Votum und die Votumzahlen waeren still falsch. Eine `Exists`-Subquery
+        joint nicht und kann das nicht ausloesen. Dieselbe Ueberlegung wie bei
+        `mit_preisaenderung()` und `mit_erstem_bild()`.
+
+        `__gt` und nicht `__gte`: die Schwelle IST die letzte Aktivitaet der
+        Person aus dem vorherigen Besuch. Was genau in dieser Mikrosekunde
+        geschah, hat sie gesehen - mit `__gte` markierte ihr eigener letzter
+        Aufruf das Objekt, das sie gerade angesehen hat.
+
+        Der Preisverlauf prueft gegen `erfasst_am` und NIE gegen `datum`.
+        `datum` ist das fachliche Preisdatum, darf in der Vergangenheit liegen
+        und ist ein `DateField` - eine Schwelle mit Uhrzeit laesst sich
+        dagegen nicht pruefen. Siehe das Feld im Modell.
+
+        Am Preisverlauf haengt als EINZIGEM keine Person: `02` fuehrt nur
+        Objekt, Datum, Preis und Quelle. Eine von Hand eingetragene
+        Preisaenderung ist deshalb nicht zuzuordnen und markiert auch fuer die
+        eintragende Person. Das ist bewusst so hingenommen und kein Fehler -
+        ab Schritt 3 kommen Preisaenderungen ohnehin ueberwiegend aus den
+        Suchagenten-Mails, wo es gar keine Person gibt.
+        """
+        if schwelle is None:
+            return self.annotate(
+                seit_besuch_bewegt=Value(False, output_field=BooleanField())
+            )
+
+        def durch_andere(modell, zeitfeld):
+            """Gibt es an diesem Objekt einen Eintrag NACH der Schwelle, der
+            nicht von dieser Person stammt?"""
+            return Exists(
+                modell.objects.filter(
+                    objekt=OuterRef("pk"), **{f"{zeitfeld}__gt": schwelle}
+                ).exclude(person=person)
+            )
+
+        bewegt = (
+            # Das Objekt selbst - keine Unterabfrage, die Spalten stehen an
+            # der Zeile. `eingestellt_von` ist NULLBAR, und das ausgeschrieben
+            # zu behandeln ist hier keine Ziererei: ab Schritt 3 legt der
+            # Mail-Parser Objekte ohne Person an. `~Q(...)` allein liesse in
+            # SQL eine NULL uebrig, und genau die Objekte, die niemand
+            # eingeworfen hat, truegen dann nie eine Marke.
+            (
+                Q(eingestellt_am__gt=schwelle)
+                & (Q(eingestellt_von__isnull=True) | ~Q(eingestellt_von=person))
+            )
+            | Q(durch_andere(Votum, "geaendert_am"))
+            | Q(durch_andere(Notiz, "erstellt_am"))
+            | Q(durch_andere(Statusaenderung, "datum"))
+            # Ohne Personenfilter - siehe Docstring.
+            | Q(
+                Exists(
+                    Preisverlauf.objects.filter(
+                        objekt=OuterRef("pk"), erfasst_am__gt=schwelle
+                    )
+                )
+            )
+        )
+        return self.annotate(
+            seit_besuch_bewegt=ExpressionWrapper(bewegt, output_field=BooleanField())
+        )
 
     def sichtbar(self):
         """Ohne verworfene und vom Markt genommene Objekte. Geloescht wird nichts."""
@@ -401,6 +499,23 @@ class Preisverlauf(models.Model):
         Objekt, verbose_name="Objekt", on_delete=models.CASCADE, related_name="preise"
     )
     datum = models.DateField("Datum", default=timezone.localdate)
+    # Zwei Zeitbegriffe an einem Modell, und das ist Absicht.
+    #
+    # `datum` ist das FACHLICHE Preisdatum: der Tag, an dem der Preis im
+    # Inserat stand. Es wird von Hand gesetzt, darf in der Vergangenheit
+    # liegen und bleibt tagesgenau - der Preisverlauf, die Sortierung und die
+    # Preissenkungsmarkierung haengen daran und werden davon nicht beruehrt.
+    #
+    # `erfasst_am` ist der ERFASSUNGSZEITPUNKT: wann dieser Eintrag in die
+    # Datenbank kam. Nur daran laesst sich "seit deinem letzten Besuch"
+    # messen. Eine Schwelle von 14:30 Uhr gegen ein reines Datum zu pruefen
+    # geht nicht - Django wirft die Uhrzeit beim Vergleich still weg und macht
+    # aus 2026-09-04 14:30 die nackte 2026-09-04. Die Marke saehe damit
+    # innerhalb eines Tages gar nichts, und wer die Liste zweimal am Tag
+    # aufmacht, bekaeme jede Preisaenderung des Tages nie zu sehen.
+    #
+    # Die Besuchsmarkierung prueft ausschliesslich gegen `erfasst_am`.
+    erfasst_am = models.DateTimeField("erfasst am", auto_now_add=True)
     preis = models.DecimalField(
         "Preis (€)",
         max_digits=12,
