@@ -5933,11 +5933,64 @@ class StatusfarbenTests(TestCase):
         self.assertEqual(werte & verboten, set())
 
 
+class MarkenParser(HTMLParser):
+    """Sammelt den VOLLSTAENDIGEN `class`-Wert jedes Elements einer Klasse.
+
+    Nachgetragen am 04.09. Die Zeugen dieser Runde massen die Farbklasse
+    vorher als Teilzeichenkette IRGENDWO in der Antwort - und einer von ihnen
+    nur fuer einen einzigen der sechs Status. Beides misst nicht, was
+    zugesagt ist: dass am Element genau `statusmarke status-<wert>` steht.
+
+    Gemessen wird deshalb am geparsten Element und am ganzen Attribut. Ein
+    fehlendes, ein leeres und ein falsch geschriebenes Suffix sind damit alle
+    drei rot - `class="statusmarke "` faellt genauso auf wie `class="statusmarke"`.
+    """
+
+    def __init__(self, gesucht):
+        super().__init__()
+        self.gesucht = gesucht
+        self.gefunden = []  # [klassenwert, text]
+        self._tiefe = None
+
+    def handle_starttag(self, tag, attrs):
+        klasse = dict(attrs).get("class") or ""
+        if self.gesucht in klasse.split():
+            self.gefunden.append([klasse, ""])
+            self._tiefe = 0
+        elif self._tiefe is not None:
+            self._tiefe += 1
+
+    def handle_data(self, daten):
+        if self._tiefe is not None and self.gefunden:
+            self.gefunden[-1][1] += daten
+
+    def handle_endtag(self, tag):
+        if self._tiefe is not None:
+            if self._tiefe == 0:
+                self._tiefe = None
+            else:
+                self._tiefe -= 1
+
+    @classmethod
+    def lesen(cls, antwort, gesucht):
+        parser = cls(gesucht)
+        parser.feed(antwort.content.decode())
+        return [(k, t.strip()) for k, t in parser.gefunden]
+
+
 class StatusfarbenInDenSeitenTests(TestCase):
-    """Die Statusklasse kommt an den drei Stellen an, an denen ein Status steht.
+    """Die Farbklasse kommt an den drei Stellen an, an denen ein Status steht.
 
     Liste (beide Fassungen tragen dasselbe Markup), Objektansicht und die
     Anzeige des aktuellen Status am Statusformular.
+
+    NACHGEZOGEN am 04.09. Die vorigen Zeugen waren blind: der eine suchte
+    `status-<wert>` als Teilzeichenkette in der ganzen Antwort - der Treffer
+    haette auch aus einem Kommentar oder einem Formularfeld stammen koennen
+    und sagte nichts darueber, ob die Klasse AM ELEMENT steht -, der andere
+    prueft die Objektansicht nur fuer `heisse_spur` und liess fuenf von sechs
+    Status ungemessen. Jetzt wird je Status das vollstaendige `class`-Attribut
+    am geparsten Element geprueft, in beiden Ansichten.
     """
 
     def setUp(self):
@@ -5949,48 +6002,126 @@ class StatusfarbenInDenSeitenTests(TestCase):
             url=f"https://x.example/{status}", titel=f"Objekt {status}", status=status
         )
 
-    def test_die_liste_traegt_je_zeile_die_statusklasse(self):
-        for status in Status:
-            with self.subTest(status=status.value):
-                self._objekt(status)
-        # Alle sechs sichtbar machen, auch die ausgeblendeten.
-        antwort = self.client.get(
+    def _alle_sichtbar(self):
+        """Auch `raus` und `vom Markt` - sonst faellt die Haelfte aus der Liste."""
+        return self.client.get(
             reverse("objektliste"), {"status": [s.value for s in Status]}
         )
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_der_parser_findet_ueberhaupt_eine_marke(self):
+        """Ohne ihn waeren die Zeugen unten auch dann gruen, wenn der Parser
+        nie etwas findet - und genau das war der alte Fehlstand."""
+        objekt = self._objekt(Status.NEU)
+        marken = MarkenParser.lesen(
+            self.client.get(reverse("objekt", args=[objekt.pk])), "statusmarke"
+        )
+        self.assertEqual(len(marken), 1)
+
+    def test_der_parser_meldet_eine_fehlende_klasse(self):
+        """Der Riegel auf den Parser selbst: an einem Element OHNE die zweite
+        Klasse muss er den nackten Wert liefern, nicht stillschweigend etwas
+        ergaenzen."""
+        parser = MarkenParser("statusmarke")
+        parser.feed('<span class="statusmarke">heiße Spur</span>')
+        self.assertEqual([(k, t.strip()) for k, t in parser.gefunden],
+                         [("statusmarke", "heiße Spur")])
+
+    # --- Objektansicht: alle sechs ---------------------------------------
+
+    def test_die_objektansicht_traegt_je_status_die_volle_klasse(self):
+        """ABGELEITET aus `Status`, und fuer JEDEN der sechs.
+
+        Gemessen wird das ganze Attribut. `class="statusmarke"` ohne Suffix -
+        der gemeldete Fehlstand - faellt damit auf, und ein leer gerendertes
+        `status-` ebenfalls.
+        """
         for status in Status:
             with self.subTest(status=status.value):
-                self.assertContains(antwort, f"status-{status.value}")
+                objekt = self._objekt(status)
+                marken = MarkenParser.lesen(
+                    self.client.get(reverse("objekt", args=[objekt.pk])), "statusmarke"
+                )
+                self.assertEqual(len(marken), 1)
+                klasse, text = marken[0]
+                self.assertEqual(klasse, f"statusmarke status-{status.value}")
+                self.assertEqual(text, status.label)
+
+    def test_das_statusformular_traegt_je_status_die_volle_klasse(self):
+        """Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular."""
+        for status in Status:
+            with self.subTest(status=status.value):
+                objekt = self._objekt(status)
+                wahl = MarkenParser.lesen(
+                    self.client.get(reverse("objekt", args=[objekt.pk])), "statuswahl"
+                )
+                self.assertEqual(len(wahl), 1)
+                self.assertEqual(wahl[0][0], f"statuswahl status-{status.value}")
+
+    # --- Liste: alle sechs, in einem Durchgang ---------------------------
+
+    def test_die_liste_traegt_je_zeile_die_volle_klasse(self):
+        """Alle sechs auf einer Seite, jede Marke mit ihrem eigenen Suffix.
+
+        Ueber die MENGE der Paare gemessen und nicht je Zeile einzeln: so
+        faellt auch auf, wenn alle Zeilen dieselbe Klasse tragen - der Fall,
+        den eine fest hineingeschriebene Klasse erzeugte.
+        """
+        for status in Status:
+            self._objekt(status)
+        marken = MarkenParser.lesen(self._alle_sichtbar(), "statusmarke")
+        self.assertEqual(
+            sorted(marken),
+            sorted((f"statusmarke status-{s.value}", s.label) for s in Status),
+        )
+
+    def test_die_liste_zeigt_genau_eine_marke_je_objekt(self):
+        for status in Status:
+            self._objekt(status)
+        self.assertEqual(len(MarkenParser.lesen(self._alle_sichtbar(), "statusmarke")),
+                         len(Status.choices))
 
     def test_die_liste_zeigt_den_status_weiterhin_ausgeschrieben(self):
         """Die Marke ersetzt die Beschriftung nicht, sie umgibt sie."""
         self._objekt(Status.BESICHTIGUNG)
-        antwort = self.client.get(reverse("objektliste"))
-        self.assertContains(antwort, ">Besichtigung<")
+        marken = MarkenParser.lesen(self.client.get(reverse("objektliste")), "statusmarke")
+        self.assertEqual([t for _, t in marken], ["Besichtigung"])
 
-    def test_die_objektansicht_traegt_die_statusklasse_an_der_marke(self):
-        objekt = self._objekt(Status.HEISSE_SPUR)
-        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
-        self.assertContains(antwort, 'class="statusmarke status-heisse_spur"')
+    # --- Die Klasse folgt dem gespeicherten Wert -------------------------
 
-    def test_das_statusformular_zeigt_den_aktuellen_status_farbig(self):
-        """Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular."""
-        objekt = self._objekt(Status.RAUS)
-        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
-        self.assertContains(antwort, 'class="statuswahl status-raus"')
-
-    def test_die_klasse_am_formular_folgt_dem_gespeicherten_status(self):
+    def test_die_marke_folgt_dem_gespeicherten_status(self):
         """Riegel gegen eine fest hineingeschriebene Klasse."""
         objekt = self._objekt(Status.NEU)
-        objekt.status_setzen(self.person, Status.BESICHTIGUNG)
-        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
-        self.assertContains(antwort, 'class="statuswahl status-besichtigung"')
-        self.assertNotContains(antwort, 'class="statuswahl status-neu"')
-
-    def test_die_marke_folgt_ebenfalls_dem_gespeicherten_status(self):
-        objekt = self._objekt(Status.NEU)
         objekt.status_setzen(self.person, Status.VOM_MARKT)
-        antwort = self.client.get(reverse("objekt", args=[objekt.pk]))
-        self.assertContains(antwort, 'class="statusmarke status-vom_markt"')
+        marken = MarkenParser.lesen(
+            self.client.get(reverse("objekt", args=[objekt.pk])), "statusmarke"
+        )
+        self.assertEqual(marken[0][0], "statusmarke status-vom_markt")
+
+    def test_die_klasse_am_formular_folgt_dem_gespeicherten_status(self):
+        objekt = self._objekt(Status.NEU)
+        objekt.status_setzen(self.person, Status.BESICHTIGUNG)
+        wahl = MarkenParser.lesen(
+            self.client.get(reverse("objekt", args=[objekt.pk])), "statuswahl"
+        )
+        self.assertEqual(wahl[0][0], "statuswahl status-besichtigung")
+
+    # --- Das Feld heisst `status` und liefert den Schluessel -------------
+
+    def test_das_feld_heisst_status_und_liefert_den_gespeicherten_schluessel(self):
+        """Die Klasse wird aus `objekt.status` gebaut - nicht aus der
+        Beschriftung und nicht aus einem zweiten Feld.
+
+        Gemessen am Modell, damit eine Umbenennung des Feldes hier auffaellt
+        und nicht erst als leer gerenderte Klasse im Browser.
+        """
+        objekt = self._objekt(Status.IN_PRUEFUNG)
+        self.assertEqual(objekt.status, "in_pruefung")
+        self.assertEqual(objekt.get_status_display(), "in Prüfung")
+        self.assertEqual(
+            [f.name for f in Objekt._meta.get_fields() if f.name == "status"], ["status"]
+        )
 
 
 class FilterblockNachbesserungTests(TestCase):
