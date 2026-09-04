@@ -221,6 +221,50 @@ class ObjektQuerySet(models.QuerySet):
             seit_besuch_bewegt=ExpressionWrapper(bewegt, output_field=BooleanField())
         )
 
+    def mit_eigenem_votum(self, person):
+        """`hat_eigenes_votum` als Annotation: hat DIESE Person an DIESEM Objekt gestimmt?
+
+        Die Freischaltung des verdeckten Votums. Wer an einem Objekt noch nicht
+        abgestimmt hat, sieht dort die Vota der anderen nicht - weder Zaehlstand
+        noch Wertung noch Begruendung. Das kippt die Zusage aus `01` und `02`
+        ("Alle sehen alle Vota") und ist mit dem Ankereffekt begruendet: wer
+        "3 dafuer" liest, stimmt eher zu, und dann misst das Votum eine Meinung
+        plus vier Bestaetigungen.
+
+        JE OBJEKT und je Person, nicht global. Deshalb `OuterRef("pk")` in der
+        Unterabfrage: ein Votum an Objekt A schaltet Objekt B nicht frei. Eine
+        Fassung ohne diesen Bezug - "hat diese Person irgendwo gestimmt" - waere
+        ein globaler Schalter und traefe die Zusage nicht.
+
+        JEDES Votum schaltet frei, auch "anschauen". Deshalb steht hier kein
+        Filter auf `wertung`: eine Sonderbehandlung einzelner Wertungen waere
+        eine zweite Regel, die niemand angefordert hat.
+
+        `Exists` und KEIN Aggregat: die Liste zieht bereits drei bedingte
+        `Count` ueber `vota`, und ein zweites Aggregat daneben - auch ueber
+        dieselbe Relation - braeuchte einen eigenen Filter am selben JOIN und
+        waere von den drei Zaehlungen nicht mehr zu trennen. Eine
+        `Exists`-Subquery steht im SELECT, joint nicht und kann die Zahlen
+        nicht anfassen. Dieselbe Ueberlegung wie bei `mit_besuchsmarke()`.
+
+        Und sie kostet KEINE zusaetzliche Abfrage: sie steht in derselben
+        Anweisung wie die Liste selbst. Ein Zugriff je Zeile - `objekt.vota`
+        im Template oder eine Schleife in der Ansicht - waere bei fuenfzig
+        Zeilen einundfuenfzig Abfragen. Siehe
+        `test_mehr_objekte_kosten_nicht_mehr_abfragen` in `VerdecktesVotumTests`.
+
+        Die Frage laesst sich aus KEINER Zeile selbst beantworten: an `Objekt`
+        haengt keine Spalte, die "diese Person hat hier gestimmt" wuesste. Die
+        Unterabfrage ist damit nicht wegzukuerzen - anders als bei
+        `mit_besuchsmarke()`, wo `eingestellt_am` an der Zeile steht und eine
+        naive Schleife darauf kurzschliessen konnte.
+        """
+        return self.annotate(
+            hat_eigenes_votum=Exists(
+                Votum.objects.filter(objekt=OuterRef("pk"), person=person)
+            )
+        )
+
     def sichtbar(self):
         """Ohne verworfene und vom Markt genommene Objekte. Geloescht wird nichts."""
         from .choices import STATUS_AUSGEBLENDET
@@ -579,8 +623,17 @@ class Statusaenderung(models.Model):
 class Votum(models.Model):
     """Ein Votum je Person und Objekt, jederzeit aenderbar.
 
-    Alle sehen alle Vota. Kein verdecktes Abstimmen - es geht um Uebersicht,
-    nicht um ein faires Wahlverfahren.
+    UMGEDREHT am 04.09. Bis dahin galt hier und in `01`/`02`: alle sehen alle
+    Vota, kein verdecktes Abstimmen. Jetzt sieht die Vota an einem Objekt nur,
+    wer an DIESEM Objekt selbst gestimmt hat - der Ankereffekt hat die
+    Uebersicht teurer gemacht, als sie wert war: wer "3 dafuer" liest, stimmt
+    eher zu, und dann misst das Votum eine Meinung plus vier Bestaetigungen.
+
+    Am Modell aendert das NICHTS. Die Freischaltung ist eine Frage der
+    Darstellung und wird dort entschieden, wo dargestellt wird: in der Abfrage
+    (`ObjektQuerySet.mit_eigenem_votum()`) und in den beiden Vorlagen. Ein
+    Feld oder ein Manager, der "sichtbare Vota" lieferte, waere eine zweite
+    Stelle mit derselben Regel - und die driftet.
     """
 
     objekt = models.ForeignKey(

@@ -215,7 +215,31 @@
                 dasselbe, also auch die Marke.
               {% endcomment %}
               <td data-spalte="Status"><span class="statusmarke status-{{ o.status }}">{{ o.get_status_display }}</span></td>
-              <td data-spalte="Votum">{{ o.votum_uebersicht }}</td>
+              {% comment %}
+                Verdecktes Votum: den Zaehlstand sieht nur, wer an DIESEM
+                Objekt selbst gestimmt hat. Wer noch nicht gestimmt hat,
+                bekommt den Aufruf dazu.
+
+                Der Zaehlstand wird nicht ausgegeben und NICHT nachtraeglich
+                unsichtbar gemacht - kein `hidden`, keine Klasse, kein
+                Stylesheet. Er steht nicht im ausgelieferten Markup, und wer
+                den Quelltext ansieht, findet ihn nicht. Eine Verdeckung, die
+                nur im Auge wirkt, ist keine.
+
+                Die Entscheidung faellt HIER und nur hier. Die Ansicht
+                berechnet `votum_uebersicht` weiter fuer jede Zeile: zwei
+                Mechanismen fuer dieselbe Entscheidung verdecken sich
+                gegenseitig, und faellt der eine aus, haelt der andere den
+                Zeugen gruen, waehrend die Zusage schon weg ist.
+
+                `hat_eigenes_votum` kommt als `Exists()`-Annotation aus der
+                Abfrage - kein Nachschlagen je Zeile.
+
+                Ein Verweis und kein Knopf: abgestimmt wird in der
+                Objektansicht, wo die Begruendung danebensteht. Ein Knopf in
+                der Liste braeuchte eine Wertung, und die waere hier geraten.
+              {% endcomment %}
+              <td data-spalte="Votum">{% if o.hat_eigenes_votum %}{{ o.votum_uebersicht }}{% else %}<a href="{% url 'objekt' o.pk %}">abstimmen</a>{% endif %}</td>
             </tr>
           {% endfor %}
         </tbody>

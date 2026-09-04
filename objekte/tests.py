@@ -1165,9 +1165,23 @@ class ObjektansichtTests(TestCase):
         self.assertContains(self._seite(), "179.000 €")
 
     def test_die_ansicht_zeigt_die_vota_der_anderen(self):
+        """NACHGEZOGEN am 04.09. Die Zusage hat eine Vorbedingung bekommen.
+
+        Bis dahin sah jeder die Vota der anderen. Seit dem verdeckten Votum
+        sieht sie nur, wer an DIESEM Objekt selbst gestimmt hat - deshalb
+        stimmt die angemeldete Person hier zuerst ab. Ohne diese Zeile maesse
+        der Zeuge die Verdeckung und nicht die Anzeige.
+
+        Der Zeuge bleibt trotzdem stehen und wird nicht durch die neuen
+        ersetzt: er ist der Riegel dagegen, dass die Freischaltung zwar
+        greift, aber gar nichts mehr freischaltet.
+        """
         anna = Person.objects.create_user("anna", first_name="Anna", last_name="B.")
         Votum.objects.create(
             objekt=self.objekt, person=anna, wertung=Wertung.DAFUER, begruendung="Lage"
+        )
+        Votum.objects.create(
+            objekt=self.objekt, person=self.person, wertung=Wertung.ANSCHAUEN
         )
         self.assertContains(self._seite(), "Anna B.")
 
@@ -3077,7 +3091,9 @@ class KommentarTests(TestCase):
     #: Am 04.09. auf zehn: die Besuchsmarke hat ihren eigenen Block in der
     #: Bezeichnungszelle. Der Zeuge unten hat den Zuwachs gemeldet - genau
     #: dafuer steht die Zahl hier ausgeschrieben.
-    BLOECKE = 10
+    #: Am 04.09. weiter auf elf: das verdeckte Votum hat der Votum-Zelle einen
+    #: eigenen Block gegeben.
+    BLOECKE = 11
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -5124,9 +5140,13 @@ class ObjektansichtDatenblockTests(TestCase):
 
 
 class ObjektansichtVotaTests(TestCase):
-    """Alle sehen alle Vota. Eine Ansicht, die nur das eigene zeigt, waere ein
-    Fehlstand - `02_Datenmodell.md` sagt ausdruecklich: kein verdecktes
-    Abstimmen.
+    """Wer selbst gestimmt hat, sieht die Vota ALLER anderen - nicht nur eines.
+
+    UMGESCHRIEBEN am 04.09. Bis dahin trug diese Klasse die Zusage "alle sehen
+    alle Vota" aus `02_Datenmodell.md`. Die ist gefallen; was bleibt, ist die
+    zweite Haelfte: ist einmal freigeschaltet, wird nichts mehr weggelassen.
+    Die angemeldete Person stimmt im Aufbau deshalb mit ab - ohne ihr Votum
+    maesse jeder Zeuge unten die Verdeckung.
 
     Gemessen wird mit DREI Personen und nicht mit zweien: bei zwei Vota liesse
     sich "alle ausser meinem" nicht von "eines der anderen" unterscheiden.
@@ -7456,4 +7476,824 @@ class ErfassungszeitpunktMigrationTests(TestCase):
         )
         self.assertAlmostEqual(
             eintrag.erfasst_am, timezone.now(), delta=timedelta(minutes=1)
+        )
+
+
+# =========================================================================
+# Verdecktes Votum - Bauspezifikation vom 04.09.
+#
+# Kippt die Entscheidung aus `01` und `02` ("Alle sehen alle Vota"). Wer an
+# einem Objekt noch nicht abgestimmt hat, sieht dort die Vota der anderen
+# nicht - weder in der Liste noch in der Objektansicht.
+# =========================================================================
+
+
+class VotumzellenParser(HTMLParser):
+    """Je Zeile im `<tbody>` der Liste: die Votum-Zelle mit Text und Verweisen.
+
+    Eingegrenzt auf den TABELLENKOERPER und auf die Zelle mit
+    `data-spalte="Votum"`. In diesem Projekt haben Zeugen ihre Zeichenkette
+    schon einmal im Basis-Template gefunden und dort gemessen, wo die Zusage
+    gar nicht steht - eine Angabe zaehlt deshalb nur, wenn sie IN der
+    Votum-Zelle EINER Listenzeile sitzt.
+
+    Die Zeile wird ueber den Verweis in ihrer Bezeichnungszelle
+    wiedererkannt (`objekt_href`). Ueber die Reihenfolge ginge es auch, aber
+    dann haenge Zeuge 4 - zwei Objekte, eines frei, eines verdeckt - an der
+    Sortierung der Liste statt an der Zusage.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.zeilen = []
+        self._tiefe_tbody = 0
+        self._zeile = None
+        self._in_zelle = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "tbody":
+            self._tiefe_tbody += 1
+        elif not self._tiefe_tbody:
+            return
+        elif tag == "tr":
+            self._zeile = {"objekt_href": None, "text": "", "verweise": []}
+            self.zeilen.append(self._zeile)
+        elif self._zeile is None:
+            return
+        elif tag == "td":
+            self._in_zelle = attrs.get("data-spalte") == "Votum"
+        elif tag == "a" and attrs.get("href"):
+            if self._in_zelle:
+                self._zeile["verweise"].append(attrs["href"])
+            elif self._zeile["objekt_href"] is None:
+                self._zeile["objekt_href"] = attrs["href"]
+
+    def handle_data(self, daten):
+        if self._in_zelle and self._zeile is not None:
+            self._zeile["text"] += daten
+
+    def handle_endtag(self, tag):
+        if tag == "tbody":
+            self._tiefe_tbody = max(0, self._tiefe_tbody - 1)
+            self._zeile = None
+            self._in_zelle = False
+        elif tag == "tr":
+            self._zeile = None
+            self._in_zelle = False
+        elif tag == "td":
+            self._in_zelle = False
+
+    @classmethod
+    def nach_href(cls, antwort):
+        """`{Adresse der Objektansicht: {"text", "verweise"}}` fuer jede Zeile."""
+        parser = cls()
+        parser.feed(antwort.content.decode())
+        return {
+            zeile["objekt_href"]: {
+                "text": " ".join(zeile["text"].split()),
+                "verweise": zeile["verweise"],
+            }
+            for zeile in parser.zeilen
+        }
+
+
+class VotaBlockParser(HTMLParser):
+    """Die Eintraege aus `<ul class="vota">` der Objektansicht.
+
+    Gemessen wird am BLOCK und nicht an der blossen Anwesenheit eines Wortes
+    auf der Seite: "dafuer", "anschauen" und "raus" stehen ohnehin auf jeder
+    Objektansicht - als Beschriftung der drei Wertungsknoepfe im Formular, das
+    auch ohne eigenes Votum bedienbar bleibt. Ein `assertNotContains`
+    auf "anschauen" waere deshalb rot, egal was die Verdeckung tut, und ein
+    `assertContains` gruen, egal was sie tut.
+
+    Was ausschliesslich zu den Vota der anderen gehoert, ist die Liste selbst:
+    `ul.vota` mit je einem `<li>` aus Person, Wertung und Begruendung.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.eintraege = []
+        self.listen = 0
+        self._in_liste = False
+        self._eintrag = None
+        self._feld = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        klassen = (attrs.get("class") or "").split()
+        if tag == "ul" and "vota" in klassen:
+            self._in_liste = True
+            self.listen += 1
+        elif not self._in_liste:
+            return
+        elif tag == "li":
+            self._eintrag = {"person": "", "wertung": "", "begruendung": ""}
+            self.eintraege.append(self._eintrag)
+        elif tag == "span" and self._eintrag is not None:
+            self._feld = next(
+                (name for name in self._eintrag if name in klassen), None
+            )
+
+    def handle_data(self, daten):
+        if self._feld is not None and self._eintrag is not None:
+            self._eintrag[self._feld] += daten.strip()
+
+    def handle_endtag(self, tag):
+        if tag == "ul":
+            self._in_liste = False
+            self._eintrag = None
+        elif tag == "li":
+            self._eintrag = None
+        elif tag == "span":
+            self._feld = None
+
+    @classmethod
+    def lesen(cls, antwort):
+        parser = cls()
+        parser.feed(antwort.content.decode())
+        return parser.eintraege
+
+    @classmethod
+    def anzahl_listen(cls, antwort):
+        parser = cls()
+        parser.feed(antwort.content.decode())
+        return parser.listen
+
+
+class VerdecktesVotumBasis(TestCase):
+    """Gemeinsamer Unterbau der Zeugen zum verdeckten Votum.
+
+    FUENF Personen, weil die Votum-Uebersicht der Liste die Zahl der aktiven
+    Personen fuer "offen" braucht - mit zweien staende dort nie ein
+    Zaehlstand, an dem sich eine Verdeckung messen liesse.
+
+    Liste und Objektansicht verlangen eine Anmeldung; ohne sie maessen alle
+    Zeugen unten dieselbe Umleitung und niemand merkte es.
+    """
+
+    #: Eine Zeichenkette, die auf keiner Seite dieses Projekts sonst vorkommt.
+    #: Die Begruendung bekommt einen EIGENEN Zeugen, und der taugt nur mit
+    #: einem Text, den kein Formular, kein Statusname und kein Kommentar
+    #: zufaellig ebenfalls traegt.
+    BEGRUENDUNG = "Zisterne unter der Terrasse"
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "ich", password="ein-langes-passwort", first_name="Ich", last_name="Selbst"
+        )
+        self.anna = Person.objects.create_user(
+            "anna", first_name="Anna", last_name="Beispiel"
+        )
+        self.bernd = Person.objects.create_user(
+            "bernd", first_name="Bernd", last_name="Beispiel"
+        )
+        self.clara = Person.objects.create_user(
+            "clara", first_name="Clara", last_name="Beispiel"
+        )
+        self.doris = Person.objects.create_user(
+            "doris", first_name="Doris", last_name="Beispiel"
+        )
+        self.client.force_login(self.person)
+        self._nummer = 0
+
+    # --- Aufbau -----------------------------------------------------------
+
+    def _objekt(self, **felder):
+        self._nummer += 1
+        felder.setdefault("url", f"https://x.example/{self._nummer}")
+        felder.setdefault("titel", f"Objekt {self._nummer}")
+        return Objekt.objects.create(**felder)
+
+    def _votum(self, objekt, person, wertung=Wertung.DAFUER, begruendung=""):
+        return Votum.objects.create(
+            objekt=objekt, person=person, wertung=wertung, begruendung=begruendung
+        )
+
+    def _liste(self, adresse="/"):
+        return self.client.get(adresse)
+
+    def _seite(self, objekt):
+        return self.client.get(reverse("objekt", args=[objekt.pk]))
+
+    def _zelle(self, objekt, adresse="/"):
+        """Text und Verweise der Votum-Zelle in der Zeile DIESES Objekts."""
+        zeilen = VotumzellenParser.nach_href(self._liste(adresse))
+        return zeilen[reverse("objekt", args=[objekt.pk])]
+
+
+class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
+    """Abschnitt 2: die Votum-Spalte der Liste.
+
+    Aufbau: drei andere stimmen mit "dafuer". Ohne eigenes Votum stuende in
+    der Spalte "3 dafuer · 2 offen", mit eigenem "3 dafuer · 1 anschauen ·
+    1 offen". Beide Zeichenketten kommen auf der Seite sonst nirgends vor -
+    "raus" allein taugte nicht, das Wort ist auch ein Statusname und steht im
+    Filterblock.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.objekt = self._objekt(titel="Zur Abstimmung")
+        for person in (self.anna, self.bernd, self.clara):
+            self._votum(self.objekt, person, Wertung.DAFUER)
+
+    #: Was in der Spalte staende, wenn die Verdeckung ausfiele.
+    VERDECKT = "3 dafür · 2 offen"
+    #: Was dort steht, sobald selbst abgestimmt wurde.
+    FREI = "3 dafür · 1 anschauen · 1 offen"
+
+    def _selbst_abstimmen(self):
+        self._votum(self.objekt, self.person, Wertung.ANSCHAUEN)
+
+    # --- Zeuge 1 ----------------------------------------------------------
+
+    def test_ohne_eigenes_votum_steht_der_zaehlstand_nicht_im_antworttext(self):
+        """Zeuge 1 - der Kern der Zusage.
+
+        NICHT "ist unsichtbar", sondern nicht vorhanden: der Zaehlstand wird
+        gar nicht erst gerendert. Gemessen am ganzen Antworttext und nicht nur
+        an der Zelle - wer den Quelltext ansieht, soll ihn nirgends finden,
+        auch nicht in einem `title`, einem Datenattribut oder einem Kommentar.
+        """
+        self.assertNotContains(self._liste(), self.VERDECKT)
+
+    def test_ohne_eigenes_votum_steht_auch_die_blosse_zahl_nicht_da(self):
+        """Riegel gegen eine Verdeckung, die nur den ZUSAMMENGESETZTEN Satz
+        weglaesst und die Zahl anderswo stehen laesst.
+
+        "3 dafür" ist der ankernde Teil - genau der, der die eigene Stimme
+        zieht. Der Zeuge darueber faende ihn nicht mehr, sobald jemand die
+        Zusammensetzung aendert; dieser hier schon.
+        """
+        self.assertNotContains(self._liste(), "3 dafür")
+
+    def test_ohne_eigenes_votum_steht_dort_auch_kein_noch_kein_votum(self):
+        """`02` sagt: keine Zahl, kein Zaehlstand, kein "noch kein Votum".
+
+        Der Satz ist selbst eine Aussage ueber den Stand - er behauptete, es
+        habe niemand abgestimmt, waehrend drei es getan haben.
+        """
+        self.assertNotIn(views.KEIN_VOTUM, self._zelle(self.objekt)["text"])
+
+    # --- Zeuge 2 ----------------------------------------------------------
+
+    def test_ohne_eigenes_votum_steht_der_aufruf_zum_abstimmen_da(self):
+        """Zeuge 2. Wortlaut "abstimmen" - nicht "keine Angabe", nicht leer.
+
+        Eine leere Zelle saehe aus wie ein Anzeigefehler, und die Spalte
+        traegt hier ihre einzige verbliebene Aufgabe: den Weg zur eigenen
+        Stimme.
+        """
+        self.assertEqual(self._zelle(self.objekt)["text"], "abstimmen")
+
+    def test_der_aufruf_verlinkt_auf_die_objektansicht(self):
+        """Getrennt vom Zeugen darueber: dass das Wort dasteht, sagt noch
+        nicht, dass es irgendwohin fuehrt. Abgestimmt wird in der
+        Objektansicht - ein Knopf in der Liste braeuchte eine Wertung, und
+        die waere geraten."""
+        self.assertEqual(
+            self._zelle(self.objekt)["verweise"],
+            [reverse("objekt", args=[self.objekt.pk])],
+        )
+
+    # --- Zeuge 3 ----------------------------------------------------------
+
+    def test_mit_eigenem_votum_steht_der_zaehlstand_da(self):
+        """Zeuge 3 - und der Riegel gegen alle Zeugen oben im Vakuum.
+
+        Verdeckte die Liste den Zaehlstand IMMER, waeren die Zeugen 1 und 2
+        gruen, ohne die Freischaltung zu messen.
+        """
+        self._selbst_abstimmen()
+        self.assertContains(self._liste(), self.FREI)
+
+    def test_mit_eigenem_votum_steht_der_aufruf_nicht_mehr_da(self):
+        """Beide Zustaende schliessen einander aus. Staende der Aufruf neben
+        dem Zaehlstand, saehe die Spalte nach einer offenen Abstimmung aus,
+        an der man noch teilnehmen kann - und man hat schon."""
+        self._selbst_abstimmen()
+        self.assertNotIn("abstimmen", self._zelle(self.objekt)["text"])
+
+    def test_jedes_votum_schaltet_frei_auch_anschauen(self):
+        """`02`: jedes Votum schaltet frei, auch "anschauen". Keine
+        Sonderbehandlung einzelner Wertungen.
+
+        Der Zeuge darueber stimmt bereits mit "anschauen" ab; dieser hier
+        prueft die beiden anderen Wertungen, damit die Zusage nicht an einer
+        einzelnen haengt.
+        """
+        for wertung in (Wertung.DAFUER, Wertung.RAUS):
+            with self.subTest(wertung=wertung):
+                Votum.objects.update_or_create(
+                    objekt=self.objekt,
+                    person=self.person,
+                    defaults={"wertung": wertung},
+                )
+                self.assertNotIn("abstimmen", self._zelle(self.objekt)["text"])
+
+    # --- Zeuge 4 ----------------------------------------------------------
+
+    def test_die_freischaltung_gilt_je_objekt_in_einer_einzigen_antwort(self):
+        """Zeuge 4 - der Riegel gegen einen globalen Schalter.
+
+        Dieselbe Person, zwei Objekte, an EINEM gestimmt. Eine Fassung, die
+        "hat diese Person irgendwo gestimmt" fragt, zeigte beide - und faellt
+        hier.
+
+        Gemessen in EINER Antwort und nicht in zweien: zwei Aufrufe koennten
+        sich in der Sitzung, im Besuchszeitpunkt oder in der Sortierung
+        unterscheiden, und der Unterschied laege dann nicht bewiesen am
+        Objekt.
+        """
+        zweites = self._objekt(titel="Ohne eigene Stimme")
+        for person in (self.anna, self.bernd, self.clara):
+            self._votum(zweites, person, Wertung.DAFUER)
+        self._selbst_abstimmen()
+
+        zeilen = VotumzellenParser.nach_href(self._liste())
+        self.assertEqual(
+            zeilen[reverse("objekt", args=[self.objekt.pk])]["text"], self.FREI
+        )
+        self.assertEqual(
+            zeilen[reverse("objekt", args=[zweites.pk])]["text"], "abstimmen"
+        )
+
+    def test_ein_votum_an_einem_objekt_laesst_das_andere_verdeckt(self):
+        """Dieselbe Lage, am ANTWORTTEXT gemessen.
+
+        Der Zeuge darueber sagt, was in welcher Zelle steht. Dieser hier
+        haelt die Zusage aus Abschnitt 4 fuer das zweite Objekt: sein
+        Zaehlstand steht nirgends in der Antwort - auch nicht ausserhalb der
+        Tabelle.
+        """
+        zweites = self._objekt(titel="Ohne eigene Stimme")
+        for person in (self.anna, self.bernd, self.clara):
+            self._votum(zweites, person, Wertung.DAFUER)
+        self._selbst_abstimmen()
+        # Am zweiten Objekt haben genau drei gestimmt und die angemeldete
+        # Person nicht - "3 dafür · 2 offen" ist damit sein Zaehlstand und
+        # steht auf der Seite nur, wenn die Verdeckung dort ausgefallen ist.
+        self.assertNotContains(self._liste(), self.VERDECKT)
+
+    # --- Zeuge 12 ---------------------------------------------------------
+
+    def test_die_zusage_gilt_in_beiden_fassungen(self):
+        """Zeuge 12, erste Haelfte.
+
+        Karte und Tabelle sind EIN Markup; unter 48rem bricht das Stylesheet
+        die Tabelle in Karten auf. Der Aufruf steht in der Votum-Zelle, und
+        die ist ab 48rem eine Tabellenzelle und darunter eine Zeile der Karte.
+        Damit steht er in beiden Fassungen - und der Zaehlstand fehlt in
+        beiden, denn er fehlt im gemeinsamen Markup.
+        """
+        self.assertEqual(self._zelle(self.objekt)["text"], "abstimmen")
+        self.assertContains(self._liste(), 'data-spalte="Votum"')
+
+    def test_das_stylesheet_verdeckt_die_votum_spalte_in_keiner_fassung(self):
+        """Zeuge 12, zweite Haelfte - und der, den die Sabotage trifft.
+
+        Verlegte jemand die Verdeckung ins Stylesheet, staende der Zaehlstand
+        im Markup und waere nur fuer das Auge weg: im Quelltext zu finden, im
+        Suchfeld des Browsers zu finden, im gespeicherten HTML zu finden. Und
+        je nachdem, ob die Regel im Media-Block steht oder darueber, traefe
+        sie nur EINE der beiden Fassungen.
+
+        Geprueft an jeder Regel, deren Selektor die Votum-Spalte nennt.
+        Kommentare heraus: sie nennen die Spalte ebenfalls, und ein Zeuge,
+        der einen Kommentar misst, misst gar nichts.
+        """
+        quelle = (settings.BASE_DIR / "static" / "objektradar.css").read_text(
+            encoding="utf-8"
+        )
+        ohne_kommentare = re.sub(r"/\*.*?\*/", "", quelle, flags=re.S)
+        regeln = re.findall(
+            r"([^{}]*\[data-spalte=\"Votum\"\][^{}]*)\{([^{}]*)\}", ohne_kommentare
+        )
+        for selektor, rumpf in regeln:
+            with self.subTest(selektor=selektor.strip()):
+                gedraengt = rumpf.replace(" ", "").replace("\n", "")
+                self.assertNotIn("display:none", gedraengt)
+                self.assertNotIn("visibility:hidden", gedraengt)
+
+
+class VerdecktesVotumInDerObjektansichtTests(VerdecktesVotumBasis):
+    """Abschnitt 3: die Vota der anderen in der Objektansicht.
+
+    Aufbau: Anna stimmt mit "anschauen" und einer unverwechselbaren
+    Begruendung, Bernd mit "raus". Zwei andere und nicht einer: bei einem
+    liesse sich "alle verdeckt" nicht von "einer faellt durch" unterscheiden.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.objekt = self._objekt(titel="Finca am Hang")
+        self._votum(self.objekt, self.anna, Wertung.ANSCHAUEN, self.BEGRUENDUNG)
+        self._votum(self.objekt, self.bernd, Wertung.RAUS, "Zu weit weg")
+
+    def _selbst_abstimmen(self, wertung=Wertung.DAFUER, begruendung=""):
+        return self._votum(self.objekt, self.person, wertung, begruendung)
+
+    # --- Zeuge 5 ----------------------------------------------------------
+
+    def test_ohne_eigenes_votum_steht_keine_fremde_wertung_im_markup(self):
+        """Zeuge 5, erste Haelfte: die Wertungen der anderen.
+
+        Gemessen am Block `ul.vota` und NICHT am Wort: "anschauen" und "raus"
+        stehen ohnehin auf jeder Objektansicht - als Beschriftung der drei
+        Wertungsknoepfe des Formulars, das bedienbar bleiben muss. Ein Zeuge
+        auf das blosse Wort maesse das Formular und nicht die Verdeckung.
+        """
+        self.assertEqual(VotaBlockParser.lesen(self._seite(self.objekt)), [])
+
+    def test_ohne_eigenes_votum_steht_die_liste_der_anderen_gar_nicht_da(self):
+        """Nicht nur leer, sondern nicht vorhanden.
+
+        Eine leere `<ul class="vota">` waere der Ort, an dem die Eintraege
+        stehen - und ein Stylesheet oder ein spaeterer Eingriff koennte sie
+        wieder fuellen, ohne dass ein Zeuge es merkt.
+
+        NACHGEBESSERT in der Sabotage-Gegenprobe. Die erste Fassung suchte die
+        Zeichenkette `class="vota"` im Antworttext. Die Sabotage "Verdeckung
+        ins Stylesheet verlegen" schrieb `class="vota verdeckt"` - dieselbe
+        Liste, dieselbe Klasse, und der Zeuge blieb gruen, weil das
+        Anfuehrungszeichen nicht mehr da stand, wo er es erwartete. Gemessen
+        wird deshalb am ELEMENT, ueber denselben Parser wie die Eintraege.
+        """
+        self.assertEqual(VotaBlockParser.anzahl_listen(self._seite(self.objekt)), 0)
+
+    def test_mit_eigenem_votum_steht_die_liste_der_anderen_da(self):
+        """Riegel gegen den Zeugen darueber im Vakuum: faende der Parser die
+        Liste NIE, waere er gruen, ohne die Verdeckung zu messen."""
+        self._selbst_abstimmen()
+        self.assertEqual(VotaBlockParser.anzahl_listen(self._seite(self.objekt)), 1)
+
+    def test_ohne_eigenes_votum_steht_die_fremde_begruendung_nicht_im_antworttext(self):
+        """Zeuge 5, zweite Haelfte - mit eigener, unverwechselbarer Zeichenkette.
+
+        Die Begruendung ist der Teil, der am staerksten ankert: eine Zahl
+        laesst sich uebersehen, ein Satz wie "Dach ist neu" nicht. Sie
+        bekommt deshalb einen eigenen Zeugen, und der misst am GANZEN
+        Antworttext: die Sabotage "Begruendung stehen lassen, nur die Wertung
+        verdecken" faellt genau hier.
+        """
+        self.assertNotContains(self._seite(self.objekt), self.BEGRUENDUNG)
+
+    def test_ohne_eigenes_votum_steht_der_name_der_anderen_nicht_da(self):
+        """Auch die Person nicht: `02` nennt Wertung, Begruendung, Person und
+        Zaehlstand in einem Atemzug. Wer weiss, DASS Anna gestimmt hat,
+        weiss zwar noch nicht wie - aber er weiss, dass die Abstimmung
+        laeuft, und genau das ist ein Zaehlstand von eins."""
+        antwort = self._seite(self.objekt)
+        self.assertNotContains(antwort, "Anna Beispiel")
+        self.assertNotContains(antwort, "Bernd Beispiel")
+
+    def test_an_stelle_der_vota_steht_ein_hinweis(self):
+        """`02`: an ihrer Stelle steht ein kurzer Hinweis, dass die Vota der
+        anderen nach der eigenen Stimme sichtbar werden.
+
+        Ohne ihn saehe die Seite aus, als habe niemand abgestimmt - und das
+        waere eine Falschaussage ueber den Stand, keine Verdeckung.
+        """
+        self.assertContains(
+            self._seite(self.objekt), "Sichtbar, sobald du selbst abgestimmt hast."
+        )
+
+    def test_der_hinweis_behauptet_nicht_dass_niemand_abgestimmt_hat(self):
+        """Der dritte Zweig des Blocks gehoert HINTER die Freischaltung.
+
+        "Von den anderen hat noch niemand abgestimmt." ist selbst eine
+        Aussage ueber die Vota der anderen. Vor der Freischaltung waere sie
+        entweder ein verratener Zaehlstand oder - wie hier, wo zwei gestimmt
+        haben - schlicht falsch.
+        """
+        self.assertNotContains(
+            self._seite(self.objekt), "Von den anderen hat noch niemand abgestimmt."
+        )
+
+    # --- Zeuge 6 ----------------------------------------------------------
+
+    def test_ohne_eigenes_votum_steht_das_votum_formular_da(self):
+        """Zeuge 6, erste Haelfte. Die Verdeckung nimmt die Vota der anderen
+        weg, nicht den Weg zur eigenen Stimme - sonst waere sie nicht
+        aufloesbar und die Spalte in der Liste zeigte fuer immer
+        "abstimmen"."""
+        antwort = self._seite(self.objekt)
+        self.assertContains(
+            antwort, f'action="{reverse("votum_setzen", args=[self.objekt.pk])}"'
+        )
+        for wert, _ in Wertung.choices:
+            with self.subTest(wertung=wert):
+                self.assertContains(antwort, f'name="wertung" value="{wert}"')
+
+    def test_das_votum_formular_ist_nicht_abgeschaltet(self):
+        """Ein `disabled` an den Knoepfen liesse das Formular dastehen und
+        nichts tun - das Markup des Zeugen darueber waere unveraendert."""
+        self.assertNotContains(self._seite(self.objekt), "disabled")
+
+    def test_ohne_eigenes_votum_laesst_sich_wirklich_abstimmen(self):
+        """Zeuge 6, zweite Haelfte: bedienbar heisst, es kommt etwas an.
+
+        Das Markup zu pruefen genuegt nicht - eine Ansicht, die den POST
+        abweist, liesse das Formular unveraendert dastehen.
+        """
+        self.client.post(
+            reverse("votum_setzen", args=[self.objekt.pk]),
+            {"wertung": Wertung.DAFUER, "begruendung": "Passt"},
+        )
+        self.assertTrue(
+            Votum.objects.filter(objekt=self.objekt, person=self.person).exists()
+        )
+
+    # --- Zeuge 7 ----------------------------------------------------------
+
+    def test_mit_eigenem_votum_stehen_die_fremden_wertungen_da(self):
+        """Zeuge 7, erste Haelfte - und der Riegel gegen Zeuge 5 im Vakuum.
+
+        Verdeckte die Ansicht die fremden Vota IMMER, waere Zeuge 5 gruen,
+        ohne die Freischaltung zu messen.
+        """
+        self._selbst_abstimmen()
+        eintraege = VotaBlockParser.lesen(self._seite(self.objekt))
+        self.assertEqual(
+            {(e["person"], e["wertung"]) for e in eintraege},
+            {("Anna Beispiel", "anschauen"), ("Bernd Beispiel", "raus")},
+        )
+
+    def test_mit_eigenem_votum_steht_die_fremde_begruendung_da(self):
+        """Zeuge 7, zweite Haelfte - der Riegel gegen den Begruendungs-Zeugen
+        im Vakuum. Er misst dieselbe Zeichenkette an derselben Stelle."""
+        self._selbst_abstimmen()
+        self.assertContains(self._seite(self.objekt), self.BEGRUENDUNG)
+
+    def test_mit_eigenem_votum_steht_der_hinweis_nicht_mehr_da(self):
+        self._selbst_abstimmen()
+        self.assertNotContains(
+            self._seite(self.objekt), "Sichtbar, sobald du selbst abgestimmt hast."
+        )
+
+    def test_das_eigene_votum_steht_nicht_zwischen_den_anderen(self):
+        """Unveraendert aus der Zeit davor: die eigene Wertung steht oben im
+        Formular, nicht ein zweites Mal in der Liste darunter."""
+        self._selbst_abstimmen()
+        eintraege = VotaBlockParser.lesen(self._seite(self.objekt))
+        self.assertNotIn("Ich Selbst", {e["person"] for e in eintraege})
+
+    # --- Zeuge 8 ----------------------------------------------------------
+
+    def test_das_eigene_votum_ist_sichtbar_wenn_sonst_nichts_zu_sehen_ist(self):
+        """Zeuge 8. Das eigene Votum wird NICHT mitverdeckt.
+
+        Gemessen in dem Zustand, in dem eine Person gestimmt hat und es sonst
+        nichts zu sehen gibt: die anderen haben noch nicht gestimmt. Das ist
+        der Zustand, den eine Fassung verliert, die den ganzen Votum-Block an
+        die Vota der anderen haengt - dann waere die eigene Wertung weg,
+        obwohl sie nur von einem selbst kommt.
+
+        Der Zustand ist ausserdem der einzige, in dem sich "eigenes Votum
+        sichtbar" ueberhaupt getrennt messen laesst: das eigene Votum IST die
+        Freischaltung, wer eines hat, ist frei. "Vor der Freischaltung" kann
+        deshalb nur heissen: bevor es etwas freizuschalten gibt.
+
+        Die eigene Wertung muss markiert sein - ohne die Markierung liesse
+        sich nicht erkennen, wie man gestimmt hat, und das ist die
+        Voraussetzung dafuer, es zu aendern.
+        """
+        Votum.objects.filter(objekt=self.objekt).delete()
+        self._selbst_abstimmen(Wertung.RAUS, self.BEGRUENDUNG)
+        antwort = self._seite(self.objekt)
+        self.assertContains(antwort, 'value="raus" aria-pressed="true"')
+        self.assertContains(antwort, self.BEGRUENDUNG)
+
+    def test_die_eigene_begruendung_steht_im_formular_und_nicht_daneben(self):
+        """Sie steht im Textfeld, weil sie von dort aus geaendert wird.
+
+        Stuende sie nur als Text auf der Seite, waere sie zwar sichtbar, aber
+        beim naechsten Speichern weg - das Feld ginge leer ab.
+        """
+        Votum.objects.filter(objekt=self.objekt).delete()
+        self._selbst_abstimmen(Wertung.RAUS, self.BEGRUENDUNG)
+        self.assertContains(
+            self._seite(self.objekt),
+            f'rows="2">{self.BEGRUENDUNG}</textarea>',
+            html=False,
+        )
+
+    # --- Zeuge 9 ----------------------------------------------------------
+
+    def test_nach_dem_abstimmen_ist_im_naechsten_aufruf_alles_frei(self):
+        """Zeuge 9. Der Weg durch die Anwendung, nicht am Modell vorbei.
+
+        Alle Zeugen oben legen ihr Votum mit `Votum.objects.create` an. Dieser
+        hier geht durch `votum_setzen` - faengt die Ansicht die Wertung ab
+        oder schriebe sie an einer anderen Person fest, bliebe die Seite
+        verdeckt, und keiner der anderen Zeugen saehe es.
+        """
+        self.assertNotContains(self._seite(self.objekt), self.BEGRUENDUNG)
+        self.client.post(
+            reverse("votum_setzen", args=[self.objekt.pk]),
+            {"wertung": Wertung.ANSCHAUEN, "begruendung": ""},
+        )
+        self.assertContains(self._seite(self.objekt), self.BEGRUENDUNG)
+
+    def test_nach_dem_abstimmen_ist_auch_die_liste_frei(self):
+        """Dieselbe Zusage fuer die Liste: eine Freischaltung, die nur eine
+        der beiden Seiten erreicht, waere keine."""
+        self.client.post(
+            reverse("votum_setzen", args=[self.objekt.pk]),
+            {"wertung": Wertung.ANSCHAUEN, "begruendung": ""},
+        )
+        self.assertNotIn("abstimmen", self._zelle(self.objekt)["text"])
+
+    # --- Zeuge 10 ---------------------------------------------------------
+
+    def test_ein_geaendertes_votum_haelt_die_freischaltung(self):
+        """Zeuge 10. `votum_setzen` ersetzt das bestehende Votum ueber
+        `update_or_create` - ein Weg, auf dem eine Fassung, die auf das
+        ANLEGEN eines Votums horcht, die Freischaltung verlieren koennte.
+
+        Alle drei Wertungen durchlaufen, damit die Zusage nicht an einer
+        einzelnen haengt.
+        """
+        for wertung, _ in Wertung.choices:
+            with self.subTest(wertung=wertung):
+                self.client.post(
+                    reverse("votum_setzen", args=[self.objekt.pk]),
+                    {"wertung": wertung, "begruendung": "Neue Begründung"},
+                )
+                self.assertContains(self._seite(self.objekt), self.BEGRUENDUNG)
+
+    def test_ein_geaendertes_votum_bleibt_ein_einziges(self):
+        """Riegel gegen einen Zeugen, der die Freischaltung nur deshalb
+        haelt, weil bei jedem Wechsel ein zweites Votum entstanden ist."""
+        for wertung, _ in Wertung.choices:
+            self.client.post(
+                reverse("votum_setzen", args=[self.objekt.pk]),
+                {"wertung": wertung, "begruendung": ""},
+            )
+        self.assertEqual(
+            Votum.objects.filter(objekt=self.objekt, person=self.person).count(), 1
+        )
+
+
+class VerdecktesVotumAbfragelastTests(VerdecktesVotumBasis):
+    """Abschnitt 5: die Abfragezahl der Liste bleibt konstant.
+
+    Die Frage "hat diese Person an diesem Objekt gevotet" wird AUF DER
+    ABFRAGE beantwortet, als `Exists()`-Annotation. Kein Zugriff je Zeile in
+    der Vorlage, keine Schleife in der Ansicht.
+    """
+
+    def _adresse(self):
+        """Mit gesetztem Filter und gesetzter Sortierung, wie bei den
+        Geschwistern in `SortierungTests` und `BesuchsmarkeTests`: beides
+        veraendert den Abfragepfad."""
+        return (
+            "/?" + "&".join(f"status={s.value}" for s in Status) + "&sortierung=-qm_preis"
+        )
+
+    def _gemischt(self, anzahl):
+        """`anzahl` Objekte, abwechselnd mit und ohne eigenes Votum.
+
+        An JEDEM Objekt stimmen drei andere ab. Ohne fremde Vota liefe die
+        Unterabfrage zwar auch, aber eine Fassung, die nur bei vorhandenen
+        Eintraegen nachschlaegt, kaeme ungesehen durch.
+
+        KEINE Zeile kann die Frage aus sich selbst beantworten: an `Objekt`
+        haengt keine Spalte, die "diese Person hat hier gestimmt" wuesste -
+        anders als bei der Besuchsmarke, wo `eingestellt_am` an der Zeile
+        steht und eine naive Schleife darauf kurzschliessen konnte. Die
+        Unterabfrage ist damit nicht wegzukuerzen, und ein Zugriff je Zeile
+        kostet wirklich eine Abfrage je Zeile.
+        """
+        for lauf in range(anzahl):
+            objekt = self._objekt()
+            for person in (self.anna, self.bernd, self.clara):
+                self._votum(objekt, person, Wertung.DAFUER)
+            if lauf % 2 == 0:
+                self._votum(objekt, self.person, Wertung.ANSCHAUEN)
+
+    def test_mehr_objekte_kosten_nicht_mehr_abfragen(self):
+        """Zeuge 11 - der Bauteil dieses Abschnitts.
+
+        Gemessen mit FUENFZIG Objekten und nicht mit fuenf. Eine kleine Menge
+        faengt ein N+1 nicht - das ist in diesem Projekt schon einmal
+        passiert und steht als bekannter Fehler in den Projektnotizen.
+
+        Etwa die Haelfte mit eigenem Votum, die andere ohne. Eine Menge, in
+        der alle Objekte gleich stehen, misst den anderen Zweig nicht: die
+        Vorlage betraete nur einen von beiden, und ein Nachschlagen im
+        anderen bliebe unentdeckt.
+
+        Die erwartete Zahl wird beim ersten Durchgang ERMITTELT und nicht
+        hingeschrieben: Sitzung und Middleware fragen ohnehin mit, und deren
+        Zahl ist nicht die Zusage, die hier gehalten werden soll.
+        """
+        adresse = self._adresse()
+        self.client.get(adresse)  # Aufwaermen, damit der Verbindungsaufbau nicht mitzaehlt.
+        self._gemischt(6)
+        with CaptureQueriesContext(connection) as mit_sechs:
+            self.client.get(adresse)
+        self._gemischt(views.OBJEKTE_JE_SEITE - 6)
+        with self.assertNumQueries(len(mit_sechs)):
+            self.client.get(adresse)
+
+    def test_bei_dieser_messung_stehen_beide_zweige_wirklich_da(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber.
+
+        Betraete die Liste nur einen der beiden Zweige - weil die Annotation
+        fehlt, der Filter die Objekte ausblendet oder alle Objekte gleich
+        stehen -, waere die Abfragezahl selbstverstaendlich konstant und der
+        Zeuge gruen, ohne irgendetwas zu messen.
+
+        Derselbe Aufbau wie dort, in derselben Groesse: ein Riegel, der etwas
+        anderes misst als der Zeuge, den er sichert, sichert ihn nicht.
+        """
+        self._gemischt(views.OBJEKTE_JE_SEITE)
+        texte = [
+            zeile["text"]
+            for zeile in VotumzellenParser.nach_href(
+                self._liste(self._adresse())
+            ).values()
+        ]
+        self.assertEqual(len(texte), views.OBJEKTE_JE_SEITE)
+        self.assertEqual(texte.count("abstimmen"), views.OBJEKTE_JE_SEITE // 2)
+        self.assertEqual(
+            texte.count("3 dafür · 1 anschauen · 1 offen"), views.OBJEKTE_JE_SEITE // 2
+        )
+
+    def test_die_seitengroesse_deckt_die_messung_ab(self):
+        """Der Zeuge oben legt `OBJEKTE_JE_SEITE` Objekte an und misst damit
+        EINE Seite. Waere die Seitengroesse kleiner als fuenfzig, maesse er
+        weniger Zeilen als zugesagt."""
+        self.assertGreaterEqual(views.OBJEKTE_JE_SEITE, 50)
+
+    def test_die_annotation_kommt_aus_der_abfrage_und_nicht_aus_einer_schleife(self):
+        """Die Zusage an der Methode selbst, ohne Ansicht und ohne Vorlage.
+
+        `hat_eigenes_votum` steht nach EINER Abfrage an jedem Objekt. Eine
+        Fassung, die den Wert in der Ansicht nachtraegt, braeuchte hier
+        einundfuenfzig - und dieser Zeuge nennt die Stelle beim Namen,
+        waehrend der Zeuge oben nur "irgendwo mehr Abfragen" sagt.
+        """
+        self._gemischt(10)
+        with self.assertNumQueries(1):
+            werte = {
+                objekt.pk: objekt.hat_eigenes_votum
+                for objekt in Objekt.objects.mit_eigenem_votum(self.person)
+            }
+        self.assertEqual(sorted(werte.values()), [False] * 5 + [True] * 5)
+
+    def test_die_annotation_fragt_nach_dieser_person(self):
+        """Der Riegel gegen einen Filter, der die Person verliert.
+
+        Ohne ihn waere `hat_eigenes_votum` bei jedem Objekt wahr, an dem
+        IRGENDWER gestimmt hat. Der Zeuge darueber faende das nicht: an jedem
+        seiner Objekte stimmen drei andere mit, also waere ueberall `True`
+        herausgekommen - und die Haelfte, die er zaehlt, waere zufaellig
+        richtig gewesen, nur eben aus dem falschen Grund.
+        """
+        objekt = self._objekt()
+        self._votum(objekt, self.anna, Wertung.DAFUER)
+        werte = Objekt.objects.mit_eigenem_votum(self.person)
+        self.assertFalse(werte.get(pk=objekt.pk).hat_eigenes_votum)
+        self.assertTrue(
+            Objekt.objects.mit_eigenem_votum(self.anna)
+            .get(pk=objekt.pk)
+            .hat_eigenes_votum
+        )
+
+    def test_die_annotation_bleibt_am_richtigen_objekt(self):
+        """Riegel gegen eine Unterabfrage ohne `OuterRef` - "hat diese Person
+        irgendwo gestimmt" waere ein globaler Schalter."""
+        mit = self._objekt()
+        ohne = self._objekt()
+        self._votum(mit, self.person, Wertung.DAFUER)
+        werte = {
+            objekt.pk: objekt.hat_eigenes_votum
+            for objekt in Objekt.objects.mit_eigenem_votum(self.person)
+        }
+        self.assertTrue(werte[mit.pk])
+        self.assertFalse(werte[ohne.pk])
+
+    def test_die_votumzaehlung_bleibt_neben_der_annotation_richtig(self):
+        """Der Riegel gegen das Kreuzprodukt.
+
+        Die Liste zieht drei bedingte `Count` ueber `vota`. Waere die
+        Freischaltung als zweites Aggregat ueber dieselbe Relation gebaut,
+        liefe sie ueber denselben JOIN und vervielfachte die Zahlen still.
+        Eine `Exists`-Subquery steht im SELECT und joint nicht.
+
+        Gemessen an der gerenderten Spalte: dort wuerde die Verfaelschung
+        sichtbar.
+        """
+        objekt = self._objekt()
+        for person in (self.anna, self.bernd, self.clara):
+            self._votum(objekt, person, Wertung.DAFUER)
+        self._votum(objekt, self.person, Wertung.ANSCHAUEN)
+        for text in ("erste Notiz", "zweite Notiz"):
+            Notiz.objects.create(objekt=objekt, person=self.person, text=text)
+        self.assertEqual(
+            self._zelle(objekt)["text"], "3 dafür · 1 anschauen · 1 offen"
         )

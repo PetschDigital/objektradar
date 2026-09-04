@@ -171,11 +171,38 @@
   </form>
 
   {% comment %}
-    Alle sehen alle Vota - kein verdecktes Abstimmen. Die eigene Wertung steht
-    oben im Formular und ist dort markiert, die der anderen hier.
+    UMGEDREHT am 04.09. Bis dahin galt: alle sehen alle Vota, kein verdecktes
+    Abstimmen. Jetzt sieht die Vota der anderen nur, wer an DIESEM Objekt
+    selbst gestimmt hat. Der Grund ist der Ankereffekt: wer "3 dafuer" liest,
+    stimmt eher zu, und dann misst das Votum eine Meinung plus vier
+    Bestaetigungen.
+
+    Das eigene Votum steht oben im Formular und ist dort markiert - immer,
+    auch vor der Freischaltung. Es ist die Voraussetzung dafuer, es aendern zu
+    koennen, und es anzuzeigen verraet niemandem etwas, das er nicht selbst
+    geschrieben hat.
+
+    Verdeckt heisst NICHT gerendert: weder Wertung noch Begruendung noch
+    Person stehen im ausgelieferten Markup. Kein `hidden`, keine Klasse, kein
+    Stylesheet - wer den Quelltext ansieht, findet sie nicht.
+
+    Die Ueberschrift bleibt stehen. Sie sagt, was hier steht, sobald
+    freigeschaltet ist, und ohne sie haenge der Hinweis in der Luft.
+
+    Der dritte Zweig ("noch niemand") gehoert AUSDRUECKLICH hinter die
+    Freischaltung: er ist selbst eine Aussage ueber die Vota der anderen -
+    naemlich dass es keine gibt - und stuende er vorn, waere er entweder ein
+    verratener Zaehlstand oder, wenn drei gestimmt haben, schlicht falsch.
+
+    `eigenes_votum` entscheidet, und nur es. Die Ansicht legt `andere_vota`
+    weiter fuer jeden Aufruf in den Kontext: zwei Mechanismen fuer dieselbe
+    Entscheidung verdecken sich gegenseitig, und faellt der eine aus, haelt
+    der andere den Zeugen gruen, waehrend die Zusage schon weg ist.
   {% endcomment %}
   <h3>Vota der anderen</h3>
-  {% if andere_vota %}
+  {% if not eigenes_votum %}
+    <p class="nichts">Sichtbar, sobald du selbst abgestimmt hast.</p>
+  {% elif andere_vota %}
     <ul class="vota">
       {% for votum in andere_vota %}
         <li>

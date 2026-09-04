@@ -450,11 +450,18 @@ class ObjektlisteView(ListView):
         # Anfragen bewusst nicht entsteht - hier kommt zwar keine an, aber der
         # Zugriff soll auch dann nicht umfallen, wenn diese Ansicht einmal
         # ausserhalb der Middleware gerendert wird.
+        # `mit_eigenem_votum()` ist die dritte: die Frage "hat diese Person an
+        # DIESEM Objekt gestimmt" entscheidet je Zeile, ob die Votum-Spalte den
+        # Zaehlstand traegt oder den Aufruf zum Abstimmen. Als `Exists()` im
+        # SELECT kostet sie keine zusaetzliche Abfrage; je Zeile nachgeschlagen
+        # waeren es einundfuenfzig. Siehe die Methode im Modell und
+        # `test_mehr_objekte_kosten_nicht_mehr_abfragen`.
         objekte = mit_votumzaehlung(
             Objekt.objects.mit_qm_preis()
             .mit_preisaenderung()
             .mit_erstem_bild()
             .mit_besuchsmarke(self.request.user, getattr(self.request, "neu_seit", None))
+            .mit_eigenem_votum(self.request.user)
         )
         return self.filterform.filtern(objekte).order_by(*reihenfolge(self.sortierung))
 
@@ -601,6 +608,14 @@ class ObjektView(DetailView):
             "eigenes_votum",
             next((v for v in vota if v.person_id == self.request.user.pk), None),
         )
+        # `eigenes_votum` traegt seit dem 04.09. eine zweite Aufgabe: es ist
+        # die FREISCHALTUNG. Wer an diesem Objekt nicht gestimmt hat, sieht die
+        # Vota der anderen nicht - die Vorlage entscheidet daran, und nur
+        # daran. Hier wird deshalb nicht ein zweites Mal gefiltert: zwei
+        # Mechanismen fuer dieselbe Entscheidung verdecken sich gegenseitig.
+        #
+        # Keine Annotation und keine zusaetzliche Abfrage noetig, anders als in
+        # der Liste: die Vota dieses einen Objekts liegen ohnehin schon da.
         kwargs.setdefault(
             "andere_vota", [v for v in vota if v.person_id != self.request.user.pk]
         )
