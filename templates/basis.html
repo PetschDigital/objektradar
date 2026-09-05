@@ -4,6 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block titel %}Objektradar{% endblock %}</title>
+  {% comment %}
+    Die Schrift wird SELBST ausgeliefert und liegt in `static/`. Kein
+    `<link>` auf einen fremden Server und kein `preconnect` dorthin: das
+    Werkzeug speichert bewusst keine Kontaktdaten, und ein Schriftabruf bei
+    jedem Seitenaufruf uebermittelte bei jedem Aufruf die Adresse des
+    Abrufenden an einen Dritten. Der Entwurf laedt Archivo von Google Fonts -
+    genau das ist die eine Stelle, an der ihm nicht gefolgt wird.
+
+    Es gibt deshalb auch nur DIESE eine Datei im Kopf. Die `@font-face`-Regel
+    steht darin, nicht hier.
+  {% endcomment %}
   <link rel="stylesheet" href="{% static 'objektradar.css' %}">
 </head>
 <body>
@@ -16,23 +27,36 @@
 
     Kein Aufklappmenue: es braeuchte JavaScript oder `<details>`, und fuer
     drei Eintraege bei fuenf Personen steht der Aufwand nicht dafuer.
+
+    Die `huelle` ist seit dem 04.09. dazwischen: die Leiste laeuft ueber die
+    ganze Breite und traegt eine durchgehende Linie, ihr INHALT steht in
+    derselben Spalte wie alles darunter. Ohne das Huellelement muesste die
+    Linie an derselben Stelle enden wie der Text, und die Leiste haenge in der
+    Luft.
+
+    Die Navigation wird unter 48rem NICHT ausgeblendet, anders als im
+    Entwurf. Sie besteht hier aus einem einzigen Verweis, und ein Verweis, den
+    das Stylesheet auf dem Handy wegnimmt, ist fuer den, der dort steht,
+    schlicht nicht vorhanden. Sie bricht stattdessen um.
   {% endcomment %}
   <header>
-    <a class="marke" href="{% url 'objektliste' %}">Objektradar</a>
-    {% if user.is_authenticated %}
-      <nav class="navigation">
-        <a href="{% url 'lesezeichen' %}">Lesezeichen</a>
-      </nav>
-      <div class="konto">
-        {# Der angemeldete Name ist kein Link - er fuehrt nirgendwohin. #}
-        <span class="person">{{ user.anzeigename }}</span>
-        <a href="{% url 'passwort_aendern' %}">Passwort ändern</a>
-        <form method="post" action="{% url 'logout' %}">
-          {% csrf_token %}
-          <button type="submit">abmelden</button>
-        </form>
-      </div>
-    {% endif %}
+    <div class="huelle">
+      <a class="marke" href="{% url 'objektliste' %}">Objekt<span>radar</span></a>
+      {% if user.is_authenticated %}
+        <nav class="navigation">
+          <a href="{% url 'lesezeichen' %}">Lesezeichen</a>
+        </nav>
+        <div class="konto">
+          {# Der angemeldete Name ist kein Link - er fuehrt nirgendwohin. #}
+          <span class="person">{{ user.anzeigename }}</span>
+          <a href="{% url 'passwort_aendern' %}">Passwort ändern</a>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit">abmelden</button>
+          </form>
+        </div>
+      {% endif %}
+    </div>
   </header>
 
   {% if messages %}

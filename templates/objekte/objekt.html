@@ -17,6 +17,18 @@
     zu lesen. Das `title` haelt den vollen Text fuer den Fall bereit, dass die
     Kappung wirklich greift.
   {% endcomment %}
+  {% comment %}
+    Bezeichnung und Zeile darunter stecken seit dem 04.09. in einem gemeinsamen
+    Block, und der traegt die Statusklasse. Damit bekommt die Objektansicht
+    dieselbe FARBKANTE wie die Zeile in der Liste - eines der Bauteile, die
+    aus dem Entwurf uebernommen werden, damit Liste und Ansicht nicht
+    auseinanderlaufen.
+
+    Das Huellelement ist der einzige Eingriff in die Ordnung dieser Seite. Die
+    Reihenfolge der Bloecke bleibt unveraendert: sie ist am 03.09. gebaut
+    worden und stimmt.
+  {% endcomment %}
+  <div class="kopfblock status-{{ objekt.status }}">
   <h1 class="bezeichnung" title="{{ objekt }}">{{ objekt }}</h1>
 
   {% comment %}
@@ -34,6 +46,7 @@
     <span class="statusmarke status-{{ objekt.status }}">{{ objekt.get_status_display }}</span>
     <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
   </p>
+  </div>
 
   {% comment %}
     Zahlen zuerst: der Block, der die Kaufentscheidung traegt. Der Kaufpreis
@@ -49,13 +62,32 @@
     leere Stelle liest sich wie eine Null, und eine Null ist etwas anderes als
     "nicht bekannt".
   {% endcomment %}
-  <div class="zahlen">
+  {% comment %}
+    Der Block heisst `zahlenblock` und nicht `zahlen`: so heisst seit dem
+    04.09. die Zahlenreihe einer LISTENZEILE, und die ist etwas anderes -
+    vier Werte nebeneinander statt eines grossen Preises mit Kennzahlen
+    darunter. Ein Klassenname mit zwei Bedeutungen trifft frueher oder
+    spaeter die falsche Stelle; hier hat er es sofort getan.
+  {% endcomment %}
+  <div class="zahlenblock">
     <p class="kaufpreis">
       {% if objekt.aktueller_preis is not None %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}<span class="fehlt">—</span>{% endif %}
     </p>
+    {% comment %}
+      Dieselbe Bauform und dieselben Klassen wie in der Liste, damit eine
+      Senkung an beiden Stellen gleich aussieht: Pfeil, Betrag, dieselbe
+      Farbe. Die Ansicht hat Platz und zeigt deshalb MEHR als die Liste - den
+      vorherigen Preis, den Prozentwert und das volle Datum. Die Liste kuerzt
+      auf Betrag und Tag; hier ist der Ort, an dem der Vorgang nachlesbar
+      steht.
+
+      Gerechnet wird an beiden Stellen aus DEMSELBEN `preisaenderung()`. Zwei
+      Rechenwege fuer dieselbe Regel driften auseinander.
+    {% endcomment %}
     {% if preisaenderung %}
       <p class="preisaenderung{% if preisaenderung.senkung %} senkung{% endif %}">
-        <s>{{ preisaenderung.vorher|floatformat:0 }} €</s>
+        {% if preisaenderung.senkung %}↓{% else %}↑{% endif %} {{ preisaenderung.betrag|floatformat:0 }} €
+        · <s>{{ preisaenderung.vorher|floatformat:0 }} €</s>
         · {% if preisaenderung.prozent > 0 %}+{% endif %}{{ preisaenderung.prozent|floatformat:"-1" }} %
         · {{ preisaenderung.datum|date:"d.m.Y" }}
       </p>
@@ -159,7 +191,7 @@
     dass die eigene Wertung markiert ist.
   {% endcomment %}
   <h2>Votum</h2>
-  <form method="post" action="{% url 'votum_setzen' objekt.pk %}" class="votum">
+  <form method="post" action="{% url 'votum_setzen' objekt.pk %}" class="votumformular">
     {% csrf_token %}
     <label for="id_begruendung">Begründung</label>
     <textarea name="begruendung" id="id_begruendung" rows="2">{{ eigenes_votum.begruendung|default:"" }}</textarea>

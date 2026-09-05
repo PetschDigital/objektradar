@@ -60,6 +60,28 @@
       <dd>{{ zahl }}</dd>
     {% endfor %}
   </dl>
+
+  {% comment %}
+    Die Vota stehen seit dem 04.09. OHNE Zahl da, und das ist der Punkt.
+
+    Den Zählstand eines Objekts sieht nur, wer an diesem Objekt selbst
+    abgestimmt hat. Diese Seite ist von der Liste zwei Klicks entfernt und
+    verlangt kein Votum — „Vota: 3“ beantwortete hier für jeden die Frage, die
+    dort verdeckt ist. Die Zusage der letzten Runde wäre damit umgehbar
+    gewesen, und es hätte genügt, die Seite einmal aufzurufen.
+
+    Dass die Vota mitgehen, muss trotzdem dastehen: eine Seite, die den
+    schwersten Verlust verschweigt, warnt nicht. Nur die Zahl fehlt.
+
+    Notizen, Preiseinträge und Statusänderungen behalten ihre Zahlen. Sie sind
+    Arbeit, keine Wertung — wer sie zählt, erfährt nichts über die Meinung der
+    anderen.
+  {% endcomment %}
+  <p class="nichts">
+    Die abgegebenen <strong>Vota</strong> gehen ebenfalls mit. Wie viele es
+    sind, steht hier nicht: den Zählstand sieht nur, wer an diesem Objekt
+    selbst abgestimmt hat.
+  </p>
   <p class="nichts">
     Auch die verlinkten Bilder des Objekts verschwinden. Das Inserat beim
     Portal bleibt davon unberührt — gelöscht wird nur der Eintrag hier.

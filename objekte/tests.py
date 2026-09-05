@@ -17,7 +17,7 @@ import textwrap
 from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 from importlib import import_module
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from unittest import mock
 from decimal import Decimal
 
@@ -634,7 +634,17 @@ class SchnellerfassungTests(TestCase):
         """
         antwort = self._einwerfen(follow=True)
         pk = Objekt.objects.get().pk
-        self.assertContains(antwort, f'<a href="/objekt/{pk}/">idealista · 12345</a>')
+        # NACHGEZOGEN am 04.09.: der Verweis traegt jetzt eine Klasse, und
+        # ohne Titel ist es `titel nackt` - solche Objekte sind erkennbar
+        # unfertig und werden gedaempft gesetzt. Gemessen am Element und an
+        # seinen Klassen, nicht an einer `class="…"`-Zeichenkette.
+        verweise = [
+            klassen
+            for klassen in _klassen_von(antwort, "titel")
+            if "nackt" in klassen
+        ]
+        self.assertEqual(len(verweise), 1)
+        self.assertContains(antwort, f'href="/objekt/{pk}/">idealista · 12345</a>')
 
     def test_die_bestaetigung_verlinkt_auf_die_objektansicht(self):
         antwort = self._einwerfen(follow=True)
@@ -2657,48 +2667,10 @@ class BestandsnachtragNeuePortaleTests(TestCase):
         )
 
 
-class SpaltenParser(HTMLParser):
-    """Liest Spaltenkoepfe und `data-spalte` je Zeile aus der Objektliste.
-
-    Von Hand statt mit einer Bibliothek: das Projekt haengt an Django,
-    psycopg und dotenv - eine vierte Abhaengigkeit fuer einen Zeugen waere ein
-    schlechter Tausch.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.kopf = []      # Text je <th> im <thead>
-        self.zellen = []    # Liste der data-spalte-Werte je <tbody>-Zeile
-        self._im_thead = False
-        self._im_th = False
-        self._text = ""
-        self._zeile = None
-
-    def handle_starttag(self, tag, attrs):
-        werte = dict(attrs)
-        if tag == "thead":
-            self._im_thead = True
-        elif tag == "th" and self._im_thead:
-            self._im_th = True
-            self._text = ""
-        elif tag == "tr" and not self._im_thead:
-            self._zeile = []
-        elif tag == "td" and self._zeile is not None:
-            self._zeile.append(werte.get("data-spalte"))
-
-    def handle_endtag(self, tag):
-        if tag == "thead":
-            self._im_thead = False
-        elif tag == "th" and self._im_th:
-            self._im_th = False
-            self.kopf.append(self._text.strip())
-        elif tag == "tr" and self._zeile is not None:
-            self.zellen.append(self._zeile)
-            self._zeile = None
-
-    def handle_data(self, daten):
-        if self._im_th:
-            self._text += daten
+# Der `SpaltenParser` stand hier bis zum 04.09. Er las Spaltenkoepfe und
+# `data-spalte` je Zeile aus der Objektliste. Beides gibt es nicht mehr: die
+# Liste ist keine Tabelle mehr, sondern eine `<ul>` aus Objektzeilen. Ein
+# Parser ohne zu parsende Struktur ist kein Zeuge, sondern ein Rest.
 
 
 class StylesheetTests(TestCase):
@@ -2740,60 +2712,21 @@ class StylesheetTests(TestCase):
         )
 
     # --- Zusage 11 --------------------------------------------------------
-
-    def _geparst(self):
-        Objekt.objects.create(url="https://x/1", titel="Erstes", ort="Palma")
-        Objekt.objects.create(url="https://x/2", titel="Zweites", ort="Sóller")
-        parser = SpaltenParser()
-        parser.feed(self._seite().content.decode())
-        return parser
-
-    def test_die_liste_hat_ueberhaupt_spaltenkoepfe(self):
-        """Riegel gegen einen vakuum-gruenen Zeugen darunter.
-
-        Faende der Parser keinen Kopf, verglichen die Zusage-11-Zeugen zwei
-        leere Listen und blieben gruen - auch wenn kein einziges `data-spalte`
-        im Template steht.
-        """
-        self.assertNotEqual(self._geparst().kopf, [])
-
-    def test_die_liste_hat_ueberhaupt_zeilen(self):
-        self.assertNotEqual(self._geparst().zellen, [])
-
-    def test_jede_zelle_traegt_die_bezeichnung_ihres_spaltenkopfs(self):
-        """Ohne diesen Zeugen faellt eine spaeter ergaenzte Spalte in der
-        Kartenansicht ohne Bezeichnung heraus, und niemand merkt es.
-
-        Verglichen wird gegen den TEXT des Spaltenkopfs, nicht gegen dessen
-        eigenes `data-spalte`: sonst pruefte der Zeuge zwei Attribute
-        gegeneinander, die man gemeinsam falsch setzen kann.
-        """
-        geparst = self._geparst()
-        self.assertEqual(geparst.zellen, [geparst.kopf] * len(geparst.zellen))
-
-    def test_das_stylesheet_nennt_ueberhaupt_benannte_spalten(self):
-        self.assertNotEqual(self._benannte_spalten_aus_dem_stylesheet(), set())
-
-    def test_die_benannten_spalten_des_stylesheets_gibt_es_in_der_liste(self):
-        """Das Stylesheet richtet die Zahlenspalten ueber ihren NAMEN aus.
-
-        `nth-child` waere gegen eine spaeter eingeschobene Spalte blind - der
-        Name ist es nicht. Der Preis dafuer: eine Umbenennung faellt STILL aus,
-        die Regel greift dann einfach nicht mehr und die Zahlen stehen wieder
-        linksbuendig. Dieser Zeuge ist der Riegel dagegen.
-
-        Die Namen werden aus der CSS-Datei GELESEN, nicht hier wiederholt -
-        eine zweite Liste driftet von der ersten weg.
-        """
-        self.assertLessEqual(
-            self._benannte_spalten_aus_dem_stylesheet(), set(self._geparst().kopf)
-        )
-
-    def _benannte_spalten_aus_dem_stylesheet(self):
-        quelle = (settings.BASE_DIR / "static" / "objektradar.css").read_text(
-            encoding="utf-8"
-        )
-        return set(re.findall(r'\[data-spalte="([^"]+)"\]', quelle))
+    #
+    # Hier standen bis zum 04.09. fuenf Zeugen: dass die Liste Spaltenkoepfe
+    # hat, dass sie Zeilen hat, dass jede Zelle die Bezeichnung ihres
+    # Spaltenkopfs traegt, dass das Stylesheet ueberhaupt benannte Spalten
+    # nennt und dass es diese Spalten in der Liste gibt.
+    #
+    # Alle fuenf sind mit der Tabelle gefallen. Sie bewachten EINE Sache: dass
+    # der Umbau der Tabelle in Karten unter 48rem keine Zelle ohne Namen
+    # zuruecklaesst - `data-spalte` war die Bezeichnung, die dort an die
+    # Stelle des Spaltenkopfs trat. Es gibt keine zwei Fassungen mehr, keine
+    # Zellen und keine Spaltenkoepfe; die Angaben stehen jetzt mit ihrem
+    # Etikett am Wert, in jeder Breite dasselbe Markup.
+    #
+    # Was sie NICHT bewachten: dass die Liste irgendetwas Bestimmtes anzeigt.
+    # Das haelt `ObjektlisteTests` und haelt es unveraendert.
 
     # --- Zusage 12 --------------------------------------------------------
 
@@ -2929,55 +2862,70 @@ class StylesheetKorrekturenTests(TestCase):
             else:
                 raise AssertionError("Der Media-Block ist nicht geschlossen.")
 
-    # --- 4.1: die Objektspalte kappen -------------------------------------
+    # --- 4.1: den Titel kappen --------------------------------------------
 
-    def test_die_objektzelle_wird_ab_48rem_gekappt(self):
-        """BLEIBT - als GRENZFALL, und der wird hiermit gemeldet.
+    def test_der_titel_wird_in_beiden_fassungen_gekappt(self):
+        """NACHGEZOGEN am 04.09. auf das neue Markup - und dabei UMGEDREHT.
 
-        Die Zusage ist echt und kann brechen: ohne Titel steht in dieser Zelle
-        die volle URL, und die sprengt die Spalte. Gemessen wird sie aber an
-        vier Schreibweisen und einer Zahl. `max-width: 24rem` waere fuer
-        niemanden ein Unterschied und machte diesen Zeugen rot; umgekehrt
-        koennte die Kappung mit denselben vier Zeilen an einem Element
-        haengen, das gar nicht mehr da ist, und er bliebe gruen.
+        Bis dahin standen hier zwei Zeugen: der Titel wird ab 48rem gekappt,
+        und darunter ausdruecklich NICHT. Der zweite hing an der `<table>`:
+        eine Tabelle wird nie schmaler als ihr Inhalt, und ein einziges Objekt
+        ohne Titel - also mit voller URL an dieser Stelle - zog die ganze
+        Liste in die Breite. Gemessen bei 375px: 725px statt 343px. Deshalb
+        durfte die Karten-Ueberschrift dort umbrechen, auch innerhalb eines
+        Wortes.
 
-        Er bleibt trotzdem stehen: aus der CSS-Datei allein laesst sich nicht
-        mehr ablesen, und ein zu Unrecht entfernter Zeuge faellt niemandem
-        auf. Wer die Zusage wirklich pruefen will, braucht einen Browser -
-        solange es den hier nicht gibt, ist das hier der beste verfuegbare
-        Ersatz, und er ist ausdruecklich nur das.
+        Die Liste ist keine Tabelle mehr. `minmax(0, 1fr)` an der mittleren
+        Rasterspalte und `min-width: 0` an der Titelzeile deckeln die Breite,
+        und die Kappung ist die ruhigere Antwort als ein dreizeilig
+        umbrochener Link.
+
+        Die ZUSAGE bleibt dieselbe und ist die eigentliche: eine Zeile darf
+        die Liste nicht in die Breite ziehen. Sie kann brechen - ein
+        entferntes `overflow: hidden` reicht -, und sie bricht sichtbar auf
+        dem Geraet, auf dem die Liste unterwegs gelesen wird.
+
+        Gemessen wird an der Datei und nicht am Bildschirm; das ist ein Ersatz
+        und kein Beweis. Wer die Zusage wirklich pruefen will, braucht einen
+        Browser.
         """
-        bloecke = self._bloecke_ab_48rem()
-        self.assertNotEqual(bloecke, [], "kein Block ab 48rem gefunden")
-        block = "".join(bloecke)
-        regel = block[block.index('[data-spalte="Objekt"]') :]
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index(".titel {") :]
         regel = regel[: regel.index("}")]
-        for eigenschaft in (
-            "max-width: 22rem",
-            "overflow: hidden",
-            "text-overflow: ellipsis",
-            "white-space: nowrap",
-        ):
+        for eigenschaft in ("overflow: hidden", "text-overflow: ellipsis", "white-space: nowrap"):
             with self.subTest(eigenschaft=eigenschaft):
                 self.assertIn(eigenschaft, regel)
 
-    def test_unter_48rem_bleibt_die_objektzelle_ungekappt(self):
-        """BLEIBT - als GRENZFALL, gemeldet wie der Zeuge darueber.
+    def test_die_kappung_steht_ausserhalb_jedes_media_blocks(self):
+        """Die zweite Haelfte: sie gilt in BEIDEN Fassungen.
 
-        Die Zusage dahinter ist die staerkere von beiden: in der
-        Kartenansicht ist die Objektzelle die UEBERSCHRIFT der Karte und hat
-        die ganze Zeilenbreite. Wuerde sie dort gekappt, verloere jede Karte
-        am Handy ihren Namen - und das Handy ist das Geraet, an dem die Liste
-        unterwegs gelesen wird. Ein echter, sichtbarer Schaden.
-
-        Gemessen wird trotzdem an der Datei und nicht am Bildschirm; auch das
-        ist ein Ersatz und kein Beweis.
+        Stuende die Regel im Block ab 48rem, zoege ein Objekt ohne Titel die
+        Liste am Handy weiterhin in die Breite - genau der Zustand, den die
+        alte Fassung mit `overflow-wrap: anywhere` abfangen musste.
         """
-        quelle = self._quelle()
-        ausserhalb = quelle
+        ausserhalb = self._quelle()
         for block in self._bloecke_ab_48rem():
             ausserhalb = ausserhalb.replace(block, "")
-        self.assertNotIn('[data-spalte="Objekt"]', ausserhalb)
+        # Mit oeffnender Klammer gesucht: der Name allein steht auch in den
+        # Kommentaren der Datei, und ein Zeuge, den ein Kommentar gruen haelt,
+        # misst nichts.
+        self.assertIn(".titel {", re.sub(r"\s+", " ", ausserhalb))
+
+    def test_die_mittlere_spalte_kann_ueberhaupt_schmaler_werden(self):
+        """Der Riegel unter den beiden Zeugen darueber.
+
+        `overflow: hidden` allein kappt nichts, wenn das Element beliebig
+        breit werden darf. In einem Raster ist die Mindestbreite einer Spalte
+        `auto`, also ihre Inhaltsbreite - eine lange URL schoebe die Spalte
+        auf, und die Kappung griffe nie. `minmax(0, 1fr)` an der Zeile und
+        `min-width: 0` an der Titelzeile sind die Voraussetzung dafuer, dass
+        die drei Eigenschaften oben ueberhaupt etwas tun.
+        """
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        zeile = quelle[quelle.index(".objekt {") :]
+        self.assertIn("minmax(0, 1fr)", zeile[: zeile.index("}")])
+        titelzeile = quelle[quelle.index(".titelzeile {") :]
+        self.assertIn("min-width: 0", titelzeile[: titelzeile.index("}")])
 
     # --- 4.2: Fehlerfarbe von der Preissenkung trennen --------------------
 
@@ -3093,7 +3041,14 @@ class KommentarTests(TestCase):
     #: dafuer steht die Zahl hier ausgeschrieben.
     #: Am 04.09. weiter auf elf: das verdeckte Votum hat der Votum-Zelle einen
     #: eigenen Block gegeben.
-    BLOECKE = 11
+    #: Am 04.09. auf FUENFZEHN: die Oberflaechenrunde hat die Vorlage
+    #: vollstaendig neu geschrieben. Dazugekommen sind die Kopfzeile der
+    #: Liste, der aufklappbare Filterblock, die Sortierleiste und die
+    #: Unterzeile; die Statuszelle und die Bezeichnungszelle sind in andere
+    #: Bloecke aufgegangen. Die Zahl steht weiter AUSGESCHRIEBEN da: faellt
+    #: ein Block heraus oder kommt einer dazu, soll das auffallen und nicht
+    #: stillschweigend in die Ableitung wandern.
+    BLOECKE = 15
 
     def setUp(self):
         self.person = Person.objects.create_user(
@@ -4460,12 +4415,108 @@ class SortierungTests(ListenTestBasis):
             with self.subTest(schluessel=schluessel):
                 self.assertIn(schluessel, views.SORTIERBESCHRIFTUNG)
 
-    def test_die_leiste_traegt_jeden_schluessel_in_beide_richtungen(self):
-        antwort = self._seite()
+    def _leiste(self, adresse="/"):
+        """Die Eintraege der Sortierleiste als (Text, Zieladresse)-Paare."""
+        inhalt = self._seite(adresse).content.decode()
+        block = inhalt[inhalt.index('<p class="sortieren">') :]
+        block = block[: block.index("</p>")]
+        return re.findall(r'<a href="([^"]*)"[^>]*>([^<]*)</a>', block)
+
+    def test_die_leiste_traegt_jeden_schluessel_genau_einmal(self):
+        """NACHGEZOGEN am 04.09. - hier stand
+        `test_die_leiste_traegt_jeden_schluessel_in_beide_richtungen`.
+
+        Er verlangte, dass BEIDE Richtungen je Schluessel als Adresse in der
+        Leiste stehen. Genau das ist der Zustand, den diese Runde abschafft:
+        acht gleich laute Pfeile, an denen nicht abzulesen war, welche
+        Sortierung gerade gilt.
+
+        Die ZUSAGE dahinter - beide Richtungen bleiben erreichbar - ist echt
+        und faellt nicht. Sie wird nur anders gehalten und deshalb anders
+        gemessen; siehe die beiden Zeugen darunter.
+        """
+        eintraege = self._leiste()
+        self.assertEqual(len(eintraege), len(views.SORTIERSCHLUESSEL))
         for schluessel in views.SORTIERSCHLUESSEL:
-            for wert in (schluessel, f"-{schluessel}"):
-                with self.subTest(wert=wert):
-                    self.assertContains(antwort, escape(f"sortierung={wert}"))
+            with self.subTest(schluessel=schluessel):
+                # Ueber den GEPARSTEN Wert und nicht als Teilzeichenkette:
+                # `sortierung=-wohnflaeche` enthaelt "sortierung=wohnflaeche"
+                # nicht, und `sortierung=qm_preis` enthielte umgekehrt einen
+                # kuerzeren Schluessel mit, gaebe es einen.
+                treffer = [
+                    z
+                    for z, _ in eintraege
+                    if [
+                        w
+                        for w in parse_qs(urlparse(unquote(z)).query).get("sortierung", [])
+                        if w.lstrip("-") == schluessel
+                    ]
+                ]
+                self.assertEqual(len(treffer), 1)
+
+    def test_beide_richtungen_bleiben_ueber_zwei_klicks_erreichbar(self):
+        """DIE Zusage. Gemessen, indem der Leiste wirklich gefolgt wird.
+
+        Ein Zeuge, der nur die Adressen ANSIEHT, sagt nichts darueber, wohin
+        sie fuehren. Hier wird der Eintrag geklickt und danach derselbe
+        Eintrag noch einmal: das zweite Ziel muss die Gegenrichtung des ersten
+        sein. Damit ist jede Richtung jedes Schluessels in hoechstens zwei
+        Klicks erreichbar - und das war die Zusage, nicht "zwei Pfeile".
+        """
+        for schluessel in views.SORTIERSCHLUESSEL:
+            with self.subTest(schluessel=schluessel):
+                erste = self._ziel(self._leiste(), schluessel)
+                zweite = self._ziel(self._leiste(f"/?sortierung={erste}"), schluessel)
+                self.assertEqual({erste, zweite}, {schluessel, f"-{schluessel}"})
+
+    def _ziel(self, eintraege, schluessel):
+        """Der Sortierwert, auf den der Eintrag dieses Schluessels zeigt."""
+        for adresse, _ in eintraege:
+            werte = parse_qs(urlparse(unquote(adresse)).query).get("sortierung", [])
+            if werte and werte[0].lstrip("-") == schluessel:
+                return werte[0]
+        self.fail(f"kein Eintrag fuer {schluessel} in der Leiste")
+
+    def test_nur_die_geltende_sortierung_ist_abgesetzt(self):
+        """Genau ein Eintrag traegt `aria-current` - der, der gilt.
+
+        Stuenden alle vier gleich laut da, saehe man nie, was gerade gilt:
+        der Zustand, den diese Runde behebt. Stuende `aria-current` an
+        keinem, saehe man es auch nicht.
+        """
+        inhalt = self._seite("/?sortierung=-qm_preis").content.decode()
+        block = inhalt[inhalt.index('<p class="sortieren">') :]
+        block = block[: block.index("</p>")]
+        aktive = re.findall(r'<a [^>]*aria-current="true"[^>]*>([^<]*)</a>', block)
+        self.assertEqual(len(aktive), 1)
+        self.assertIn(views.SORTIERBESCHRIFTUNG["qm_preis"], aktive[0])
+
+    def test_der_geltende_eintrag_traegt_seine_richtung_als_pfeil(self):
+        """Und nur er. Ein Pfeil an einem Eintrag, der nicht gilt, waere eine
+        Ansage ueber eine Sortierung, die gerade nicht in Kraft ist."""
+        for wert, pfeil in (("qm_preis", views.PFEIL_AUF), ("-qm_preis", views.PFEIL_AB)):
+            with self.subTest(sortierung=wert):
+                eintraege = self._leiste(f"/?sortierung={wert}")
+                mit_pfeil = [t for _, t in eintraege if views.PFEIL_AUF in t or views.PFEIL_AB in t]
+                self.assertEqual(len(mit_pfeil), 1)
+                self.assertIn(pfeil, mit_pfeil[0])
+
+    def test_die_erstrichtung_ist_je_schluessel_festgelegt(self):
+        """Ein Eintrag je Schluessel braucht eine erste Richtung.
+
+        Sie ist nicht fuer alle dieselbe: beim Datum will man das Neueste
+        zuerst, beim Preis das Guenstigste. Ein einheitliches "aufsteigend"
+        verlangte bei drei von vier Schluesseln einen zweiten Klick, bevor
+        ueberhaupt etwas Brauchbares dasteht.
+
+        ABGELEITET aus `SORTIERSCHLUESSEL`: ein spaeter ergaenzter Schluessel
+        ohne Erstrichtung liefe beim Bauen der Leiste in einen `KeyError`, und
+        zwar erst beim Rendern.
+        """
+        for schluessel in views.SORTIERSCHLUESSEL:
+            with self.subTest(schluessel=schluessel):
+                self.assertIn(schluessel, views.SORTIERRICHTUNG)
+                self.assertIn(views.SORTIERRICHTUNG[schluessel], ("", "-"))
 
 
 class BlaetternTests(ListenTestBasis):
@@ -4597,7 +4648,11 @@ class BlaetternTests(ListenTestBasis):
 
     def test_ein_sortierlink_traegt_den_filter_mit(self):
         self._viele(2, land=Land.ES)
-        parameter = self._sortierlink("/?land=ES", "-aktueller_preis")
+        # Aufsteigend: das ist die Erstrichtung des Kaufpreises seit dem
+        # 04.09. - beim Preis will man das Guenstigste zuerst. Welche
+        # Richtung, ist fuer diesen Zeugen gleichgueltig; er misst, dass der
+        # Filter mitgeht.
+        parameter = self._sortierlink("/?land=ES", "aktueller_preis")
         self.assertEqual(parameter.get("land"), ["ES"])
 
     def test_ein_sortierlink_setzt_die_seitenzahl_zurueck(self):
@@ -4760,13 +4815,23 @@ class VotumUebersichtTests(ListenTestBasis):
         # "5 offen" saehe aus wie ein Zwischenstand einer laufenden Abstimmung.
         self.assertNotIn("offen", self._uebersicht())
 
-    def test_die_spalte_steht_in_der_liste(self):
-        self._stimmen([Wertung.DAFUER, Wertung.RAUS])
-        antwort = self._seite()
-        self.assertContains(antwort, 'data-spalte="Votum"')
-        self.assertContains(antwort, "1 dafür · 1 raus · 3 offen")
+    def test_der_votum_block_steht_in_jeder_zeile(self):
+        """NACHGEZOGEN am 04.09.: hier stand `test_die_spalte_steht_in_der_liste`
+        und mass `data-spalte="Votum"`. Spalten gibt es nicht mehr.
 
-    # --- der Riegel gegen das Kreuzprodukt --------------------------------
+        Die Zusage ist dieselbe: das Votum steht in JEDER Zeile, nicht nur in
+        denen, an denen jemand gestimmt hat. Gemessen an Elementen mit der
+        Klasse `votum`, nicht an einer Zeichenkette.
+        """
+        self._objekt(titel="Ohne Votum")
+        self._objekt(titel="Auch ohne")
+        antwort = self._seite()
+        # Gegen die Zahl der Zeilen gemessen und nicht gegen eine
+        # hingeschriebene: der Aufbau der Klasse legt selbst schon Objekte an,
+        # und eine feste Zahl hier waere ab dem naechsten davon falsch.
+        zeilen = len(antwort.context["objekte"])
+        self.assertGreater(zeilen, 1)
+        self.assertEqual(len(_klassen_von(antwort, "votum")), zeilen)
 
     def test_notizen_verfaelschen_die_zaehlung_nicht(self):
         """Zwei Aggregate ueber verschiedene Relationen erzeugten ein Kreuzprodukt.
@@ -4814,17 +4879,40 @@ class PreisaenderungTests(ListenTestBasis):
         return objekt
 
     def _preiszelle(self):
-        """Die Kaufpreis-Zelle der EINZIGEN Zeile der Liste.
+        """Die Kaufpreisangabe der EINZIGEN Zeile der Liste.
+
+        NACHGEZOGEN am 04.09.: die Liste ist keine Tabelle mehr, und die
+        Kaufpreis-Zelle ist der `<div class="zahl">`, dessen Etikett
+        "Kaufpreis" lautet. Gesucht wird ueber das ETIKETT und nicht ueber die
+        Stellung im Block: eine dazwischengeschobene Angabe verschoebe jede
+        Positionszahl, das Wort nicht.
 
         Die Laengenpruefung ist der Riegel gegen einen vakuum-gruenen Zeugen:
-        faende der Ausdruck keine Zelle, verglichen die Zeugen unten leere
-        Zeichenketten und blieben gruen - auch wenn die Spalte gar nicht mehr
+        faende der Ausdruck nichts, verglichen die Zeugen unten leere
+        Zeichenketten und blieben gruen - auch wenn die Angabe gar nicht mehr
         da ist.
         """
         inhalt = self._seite().content.decode()
-        zellen = re.findall(r'<td data-spalte="Kaufpreis">(.*?)</td>', inhalt, re.S)
-        self.assertEqual(len(zellen), 1, "erwartet wird genau eine Kaufpreis-Zelle")
+        zellen = [
+            block
+            for block in re.findall(r'<div class="zahl[^"]*">(.*?)</div>', inhalt, re.S)
+            if "Kaufpreis" in block
+        ]
+        self.assertEqual(len(zellen), 1, "erwartet wird genau eine Kaufpreisangabe")
         return zellen[0]
+
+    def _aenderung_der_objektansicht(self, objekt):
+        """Die Preisaenderung, wie die OBJEKTANSICHT sie zeigt.
+
+        Die Liste kuerzt seit dem 04.09. auf Betrag und Tag; der vorherige
+        Preis und der Prozentwert stehen in der Objektansicht. Beide kommen
+        aus DEMSELBEN `preisaenderung()` - deshalb werden sie hier gemessen
+        und nicht doppelt gerechnet.
+        """
+        inhalt = self.client.get(reverse("objekt", args=[objekt.pk])).content.decode()
+        treffer = re.findall(r'<p class="preisaenderung[^"]*">(.*?)</p>', inhalt, re.S)
+        self.assertEqual(len(treffer), 1, "erwartet wird genau eine Preisaenderung")
+        return " ".join(treffer[0].split())
 
     # --- Zusage: Senkung ---------------------------------------------------
 
@@ -4832,14 +4920,46 @@ class PreisaenderungTests(ListenTestBasis):
         self._mit_verlauf("200000", "180000")
         self.assertIn("preisaenderung", self._preiszelle())
 
-    def test_die_markierung_zeigt_den_vorherigen_preis_durchgestrichen(self):
+    def test_die_markierung_zeigt_den_betrag_der_senkung(self):
+        """Zeuge 11 dieser Runde: eine Senkung erscheint MIT BETRAG.
+
+        Die Liste zeigt seit dem 04.09. den Betrag und nicht mehr den
+        durchgestrichenen alten Preis. In der Zahlenspalte steht der aktuelle
+        Preis schon darueber - "von 200.000 auf 180.000" waere dieselbe
+        Auskunft ein zweites Mal, und die Spalte hat dafuer keine Breite.
+        """
         self._mit_verlauf("200000", "180000")
-        self.assertIn("<s>200.000 €</s>", self._preiszelle())
+        self.assertIn("20.000 €", self._preiszelle())
+
+    def test_die_markierung_zeigt_die_richtung_als_pfeil(self):
+        """Ohne ihn stuende dort "20.000 €" und niemand saehe, wohin.
+
+        Der Pfeil und nicht ein Vorzeichen: er ist auch dann noch zu lesen,
+        wenn die Farbe nicht ankommt - und Farbe allein darf keine Bedeutung
+        tragen.
+        """
+        self._mit_verlauf("200000", "180000")
+        self.assertIn("↓", self._preiszelle())
+
+    def test_der_vorherige_preis_steht_in_der_objektansicht(self):
+        """NACHGEZOGEN: die Zusage ist umgezogen, nicht gefallen.
+
+        Der durchgestrichene alte Preis stand bis zum 04.09. in der Liste. Er
+        ist dort weggefallen, weil der Entwurf die Zeile auf Betrag und Tag
+        kuerzt - und er ist nicht verschwunden, sondern steht in der
+        Objektansicht, die Platz hat. Waere er ganz weg, verloere man die
+        Bezugsgroesse: ein Betrag ohne Ausgangspreis sagt nicht, ob 20.000 €
+        viel waren.
+        """
+        objekt = self._mit_verlauf("200000", "180000")
+        self.assertIn("<s>200.000 €</s>", self._aenderung_der_objektansicht(objekt))
 
     def test_die_markierung_zeigt_den_prozentwert(self):
-        # 200.000 auf 180.000 sind genau minus zehn Prozent.
-        self._mit_verlauf("200000", "180000")
-        self.assertIn("-10 %", self._preiszelle())
+        # 200.000 auf 180.000 sind genau minus zehn Prozent. Auch der
+        # Prozentwert steht seit dem 04.09. in der Objektansicht statt in der
+        # Liste - aus demselben Grund wie der vorherige Preis.
+        objekt = self._mit_verlauf("200000", "180000")
+        self.assertIn("-10 %", self._aenderung_der_objektansicht(objekt))
 
     def test_der_prozentwert_stimmt_auch_wenn_er_nicht_glatt_aufgeht(self):
         """Sonst bliebe der Zeuge darueber gruen, auch wenn gerundet wird.
@@ -4848,8 +4968,13 @@ class PreisaenderungTests(ListenTestBasis):
         Prozent zeigte hier "-12 %" und waere um denselben Betrag daneben wie
         eine, die richtig rechnet und falsch rundet.
         """
+        objekt = self._mit_verlauf("249000", "219000")
+        self.assertIn("-12,0 %", self._aenderung_der_objektansicht(objekt))
+
+    def test_der_betrag_stimmt_auch_wenn_er_nicht_glatt_aufgeht(self):
+        """Derselbe Riegel fuer den Betrag, den die Liste zeigt."""
         self._mit_verlauf("249000", "219000")
-        self.assertIn("-12,0 %", self._preiszelle())
+        self.assertIn("30.000 €", self._preiszelle())
 
     def test_der_prozentwert_steht_auch_im_kontext(self):
         """Der genaue Wert, ungerundet - das Template zeigt nur eine Fassung davon."""
@@ -4870,8 +4995,22 @@ class PreisaenderungTests(ListenTestBasis):
             datum=date(2026, 1, 5)
         )
         zelle = self._preiszelle()
+        # Die Liste kuerzt auf Tag und Monat - so steht es im Entwurf.
+        self.assertIn(timezone.localdate().strftime("%d.%m."), zelle)
+        self.assertNotIn("05.01.", zelle)
+
+    def test_das_volle_datum_bleibt_am_element_erreichbar(self):
+        """Der Riegel unter der Kuerzung.
+
+        "seit 03.09." ohne Jahr sagt bei einer Senkung von vor einem Jahr
+        etwas Falsches - sie saehe aus wie eine von gestern. Die Kuerzung
+        kommt aus dem Entwurf und bleibt; das volle Datum steht im `title` am
+        Element und ausserdem in der Objektansicht.
+        """
+        self._mit_verlauf("200000", "180000")
+        zelle = self._preiszelle()
         self.assertIn(timezone.localdate().strftime("%d.%m.%Y"), zelle)
-        self.assertNotIn("05.01.2026", zelle)
+        self.assertIn("title=", zelle)
 
     def test_die_senkung_traegt_die_signalklasse(self):
         self._mit_verlauf("200000", "180000")
@@ -4895,13 +5034,21 @@ class PreisaenderungTests(ListenTestBasis):
         self.assertNotIn("senkung", self._preiszelle())
 
     def test_die_erhoehung_zeigt_den_vorherigen_preis(self):
-        self._mit_verlauf("200000", "216000")
-        self.assertIn("<s>200.000 €</s>", self._preiszelle())
+        objekt = self._mit_verlauf("200000", "216000")
+        self.assertIn("<s>200.000 €</s>", self._aenderung_der_objektansicht(objekt))
 
     def test_die_erhoehung_traegt_ein_vorzeichen(self):
         """Ohne das stuende dort "8 %" und niemand saehe, in welche Richtung."""
+        objekt = self._mit_verlauf("200000", "216000")
+        self.assertIn("+8 %", self._aenderung_der_objektansicht(objekt))
+
+    def test_die_erhoehung_traegt_den_pfeil_nach_oben(self):
+        """Die Richtung in der Liste - dieselbe Auskunft wie das Vorzeichen in
+        der Objektansicht, in der Form, die in eine Zahlenspalte passt."""
         self._mit_verlauf("200000", "216000")
-        self.assertIn("+8 %", self._preiszelle())
+        zelle = self._preiszelle()
+        self.assertIn("↑", zelle)
+        self.assertNotIn("↓", zelle)
 
     # --- Zusage: wo NICHTS steht -------------------------------------------
 
@@ -4964,14 +5111,13 @@ class PreisaenderungTests(ListenTestBasis):
         raise AssertionError("Der Media-Block ist nicht geschlossen.")
 
     def test_die_markierung_gilt_fuer_BEIDE_fassungen(self):
-        """Tabelle ab 48rem UND Karten darunter.
+        """Ab 48rem UND darunter.
 
-        Das Markup ist fuer beide dasselbe - unterschieden wird nur im
-        Stylesheet. Die Zusage ist damit genau die: die Regeln der Markierung
-        stehen NICHT im Media-Block, sondern darueber, und gelten deshalb
-        auch in der Kartenansicht. Stuenden sie drin, waere die Senkung am
-        Handy unmarkiert - und das Handy ist das Geraet, an dem die Liste
-        unterwegs gelesen wird.
+        Das Markup ist seit dem 04.09. ohnehin nur noch eines. Die Zusage ist
+        damit genau die: die Regeln der Markierung stehen NICHT im
+        Media-Block, sondern darueber, und gelten deshalb in jeder Breite.
+        Stuenden sie drin, waere die Senkung am Handy unmarkiert - und das
+        Handy ist das Geraet, an dem die Liste unterwegs gelesen wird.
         """
         ausserhalb = self._stylesheet().replace(self._ab_48rem(), "")
         # Mit oeffnender Klammer gesucht: der Name allein steht auch in den
@@ -5009,9 +5155,9 @@ class PreisaenderungTests(ListenTestBasis):
 class BildParser(HTMLParser):
     """Sammelt jedes `<img>` einer Seite mit allen seinen Attributen.
 
-    Von Hand statt mit einer Bibliothek, aus demselben Grund wie beim
-    `SpaltenParser` daueber: das Projekt haengt an Django, psycopg und dotenv,
-    und eine vierte Abhaengigkeit fuer einen Zeugen waere ein schlechter Tausch.
+    Von Hand statt mit einer Bibliothek: das Projekt haengt an Django, psycopg
+    und dotenv, und eine vierte Abhaengigkeit fuer einen Zeugen waere ein
+    schlechter Tausch.
     """
 
     def __init__(self):
@@ -5027,6 +5173,34 @@ def bilder_auf(antwort):
     parser = BildParser()
     parser.feed(antwort.content.decode())
     return parser.bilder
+
+
+class KlassenParser(HTMLParser):
+    """Der vollstaendige `class`-Wert jedes Elements, das eine gesuchte Klasse traegt.
+
+    Nachgetragen am 04.09. In der Votum-Runde war ein Zeuge blind, weil er
+    eine ZEICHENKETTE (`class="…"`) suchte statt eines Elements: ein
+    erweiterter Klassenname lief an ihm vorbei. Diese Fehlerart ist beim Bau
+    der Zeugen dieser Runde ausdruecklich zu vermeiden - also wird auf
+    Elemente geprueft.
+    """
+
+    def __init__(self, gesucht):
+        super().__init__()
+        self.gesucht = gesucht
+        self.gefunden = []
+
+    def handle_starttag(self, tag, attrs):
+        klassen = (dict(attrs).get("class") or "").split()
+        if self.gesucht in klassen:
+            self.gefunden.append(klassen)
+
+
+def _klassen_von(antwort, gesucht):
+    """Die Klassenlisten aller Elemente, die `gesucht` unter ihren Klassen fuehren."""
+    parser = KlassenParser(gesucht)
+    parser.feed(antwort.content.decode())
+    return parser.gefunden
 
 
 class ObjektansichtBezeichnungTests(TestCase):
@@ -5306,17 +5480,34 @@ class BilderInDerListeTests(ListenTestBasis):
     def test_ohne_bild_steht_stattdessen_die_ruhige_flaeche(self):
         """Sie haelt die Zeilenhoehe gleich. Eine Liste, in der jede zweite
         Zeile eine andere Hoehe hat, ist unlesbar - und der Zahlenvergleich,
-        um den es in der Tabelle geht, ist dahin."""
-        Objekt.objects.create(url="https://beispiel.de/ohne")
-        self.assertContains(self.client.get("/"), 'class="platzhalter"')
+        um den es in der Liste geht, ist dahin.
 
-    def test_die_bildspalte_traegt_einen_spaltenkopf(self):
-        """Unter 48rem ist die Tabelle eine Kartenliste; `thead` steht dort nur
-        noch fuer Screenreader. Ohne Kopf haette die Zelle dort keinen Namen -
-        und `test_jede_zelle_traegt_die_bezeichnung_ihres_spaltenkopfs` faenge
-        es nicht ab, weil er beide Seiten gegeneinander vergleicht."""
+        NACHGEZOGEN am 04.09.: die Flaeche traegt jetzt `bild platzhalter`.
+        Gemessen am ELEMENT und an seinen Klassen, nicht an der Zeichenkette
+        `class="platzhalter"` - genau daran ist in der Votum-Runde schon
+        einmal ein Zeuge blind vorbeigelaufen, weil ein erweiterter
+        Klassenname ihn nicht mehr traf.
+
+        `bild` muss mit dabei sein: daran haengen die Masse, und eine Flaeche
+        ohne Masse haelt keine Zeilenhoehe.
+        """
         Objekt.objects.create(url="https://beispiel.de/ohne")
-        self.assertContains(self.client.get("/"), '<th data-spalte="Bild">Bild</th>')
+        klassen = _klassen_von(self.client.get("/"), "platzhalter")
+        self.assertEqual(len(klassen), 1)
+        self.assertIn("bild", klassen[0])
+
+    def test_die_flaeche_ohne_bild_wird_nicht_vorgelesen(self):
+        """Sie ist Platz, kein Bild und erst recht kein Hinweis.
+
+        Frueher war sie eine Tabellenzelle mit Spaltenbezeichnung; ein
+        Screenreader las dort "Bild" und danach nichts. Jetzt steht sie als
+        leeres Element in der Zeile, und `aria-hidden` sagt, dass sie
+        uebergangen gehoert.
+        """
+        Objekt.objects.create(url="https://beispiel.de/ohne")
+        inhalt = self.client.get("/").content.decode()
+        stelle = inhalt.index("platzhalter")
+        self.assertIn("aria-hidden", inhalt[stelle - 60 : stelle + 60])
 
 
 class AbfragezahlMitBildernTests(TestCase):
@@ -5654,8 +5845,13 @@ class LoeschenTests(TestCase):
         antwort = self.client.get(self._adresse())
         return dict(antwort.context["anhang"])
 
-    def test_die_seite_nennt_die_zahl_der_vota(self):
-        self.assertEqual(self._anhangzahlen()["Vota"], 2)
+    # `test_die_seite_nennt_die_zahl_der_vota` stand hier bis zum 04.09. Er ist
+    # nicht gefallen, weil er stoerte, sondern weil die Zusage, die er mass,
+    # ZURUECKGENOMMEN worden ist: `05` dieser Runde nennt die Zahl auf dieser
+    # Seite ein Leck. Der Zaehlstand ist verdeckt, solange man nicht selbst
+    # abgestimmt hat - und diese Seite ist von der Liste zwei Klicks entfernt
+    # und verlangt kein Votum. An seine Stelle treten die drei Zeugen unter
+    # "Zeuge 9".
 
     def test_die_seite_nennt_die_zahl_der_notizen(self):
         self.assertEqual(self._anhangzahlen()["Notizen"], 1)
@@ -5667,15 +5863,102 @@ class LoeschenTests(TestCase):
     def test_die_seite_nennt_die_zahl_der_statusaenderungen(self):
         self.assertEqual(self._anhangzahlen()["Statusänderungen"], 1)
 
-    def test_keine_der_vier_zahlen_ist_null(self):
+    def test_keine_der_drei_zahlen_ist_null(self):
         """Die Zusage aus Abschnitt 1.5: die TATSAECHLICHEN Zahlen, nicht null.
 
-        Der Riegel gegen eine Seite, die vier Nullen ausweist, weil die
-        Zaehlung am falschen Objekt oder gar nicht laeuft. Er misst das
-        Gegenteil der Zeugen darueber und faellt auch dann, wenn jemand die
-        vier Zeilen durch feste Werte ersetzt.
+        Der Riegel gegen eine Seite, die Nullen ausweist, weil die Zaehlung am
+        falschen Objekt oder gar nicht laeuft. Er misst das Gegenteil der
+        Zeugen darueber und faellt auch dann, wenn jemand die Zeilen durch
+        feste Werte ersetzt.
+
+        DREI seit dem 04.09., nicht mehr vier: die Vota sind aus der Liste
+        heraus.
         """
         self.assertNotIn(0, dict(self._anhangzahlen()).values())
+
+    # --- Zeuge 9: die Seite nennt keine Votum-Zahl ------------------------
+
+    def _sichtbarer_text(self, antwort):
+        """Der Text aus `<main>`, ohne Markup.
+
+        Attributwerte zaehlen nicht: die Adresse des Loeschformulars traegt
+        die Nummer des Objekts, und eine Zahl in einer Adresse ist keine
+        Angabe an den Leser. Wer den Quelltext ansieht, findet sie - und
+        erfaehrt daraus nichts ueber die Vota.
+        """
+        return " ".join(re.sub(r"<[^>]*>", " ", self._hauptteil(antwort)).split())
+
+    def _viele_vota(self, anzahl):
+        """`anzahl` Vota an diesem Objekt, jedes von einer eigenen Person.
+
+        Eine Zahl, die auf der Seite sonst nirgends vorkommen kann: die
+        uebrigen Zahlen sind einstellig, die Objekt-ID ebenfalls. Ein Zeuge,
+        der auf "2" prueft, faende die zwei Preiseintraege und waere rot, ohne
+        dass etwas verraten waere.
+        """
+        Votum.objects.filter(objekt=self.objekt).delete()
+        for nummer in range(anzahl):
+            Votum.objects.create(
+                objekt=self.objekt,
+                person=Person.objects.create_user(f"stimme{nummer}"),
+                wertung=Wertung.DAFUER,
+            )
+
+    def test_die_seite_nennt_keine_votum_zahl(self):
+        """Zeuge 9 - und die Zusage, die diese Runde herstellt.
+
+        Der Zaehlstand ist verdeckt, solange man an diesem Objekt nicht selbst
+        abgestimmt hat. Diese Seite ist von der Liste zwei Klicks entfernt und
+        verlangt kein Votum; stuende die Zahl hier, waere die Verdeckung
+        umgehbar, und es genuegte, die Seite einmal aufzurufen.
+
+        Gemessen am SEITENINHALT und nicht am Kontext: die Ansicht koennte die
+        Zahl weiterhin berechnen, ohne sie auszugeben - das waere zwar
+        ueberfluessig, aber keine Verletzung. Umgekehrt gilt das nicht.
+
+        Siebzehn ist im sichtbaren Text sonst nirgends zu finden; die drei
+        uebrigen Zahlen sind einstellig.
+
+        Gemessen am SICHTBAREN Text und nicht am Markup: die Adresse des
+        Loeschformulars traegt die Nummer des Objekts, und die kann jede sein.
+        Genau daran ist dieser Zeuge im vollstaendigen Testlauf einmal rot
+        geworden, waehrend er allein gruen blieb - das Objekt hatte dort die
+        Nummer 17.
+        """
+        self._viele_vota(17)
+        self.assertNotIn("17", self._sichtbarer_text(self.client.get(self._adresse())))
+
+    def test_die_votumzahl_steht_auch_nicht_im_kontext(self):
+        """Zweite Haelfte, an der anderen Stelle gemessen.
+
+        Der Zeuge darueber faende eine Zahl nicht, die im Kontext steht und
+        von der Vorlage gerade nicht ausgegeben wird - bis jemand die Vorlage
+        anfasst. Der Anhang fuehrt die Vota deshalb gar nicht mehr.
+        """
+        self._viele_vota(17)
+        self.assertNotIn("Vota", dict(self._anhangzahlen()))
+
+    def test_die_seite_sagt_trotzdem_dass_die_vota_mitgehen(self):
+        """Der Riegel gegen die naheliegende Uebertreibung.
+
+        Die Vota ganz zu verschweigen waere kein Datenschutz, sondern eine
+        Seite, die den schwersten Verlust nicht nennt: sie sind die Arbeit
+        von fuenf Leuten an genau diesem Objekt. Nur die ZAHL faellt weg.
+        """
+        inhalt = self._hauptteil(self.client.get(self._adresse()))
+        self.assertIn("Vota", inhalt)
+
+    def test_die_uebrigen_zahlen_stehen_weiterhin_da(self):
+        """Notizen, Preiseintraege und Statusaenderungen sind keine Wertung.
+
+        Wer sie zaehlt, erfaehrt nichts ueber die Meinung der anderen. Sie
+        pauschal mit wegzunehmen waere die bequeme Loesung und naehme der
+        Seite genau das, wofuer sie da ist.
+        """
+        zahlen = self._anhangzahlen()
+        self.assertEqual(
+            sorted(zahlen), ["Einträge im Preisverlauf", "Notizen", "Statusänderungen"]
+        )
 
     def test_die_zahlen_stehen_auch_wirklich_auf_der_seite(self):
         """Der Kontext allein sagt nichts - die Vorlage muss ihn ausgeben."""
@@ -5693,8 +5976,12 @@ class LoeschenTests(TestCase):
         Bauarten.
         """
         Notiz.objects.create(objekt=self.objekt, person=self.person, text="Zweite.")
-        self.assertEqual(self._anhangzahlen()["Vota"], 2)
+        # Zwei Notizen und zwei Preiseintraege: ein Kreuzprodukt ueber beide
+        # Beziehungen ergaebe vier statt zwei, und erst damit trennen die
+        # Zahlen die beiden Bauarten. (Bis zum 04.09. lief derselbe Nachweis
+        # ueber Vota und Notizen; die Vota stehen nicht mehr auf der Seite.)
         self.assertEqual(self._anhangzahlen()["Notizen"], 2)
+        self.assertEqual(self._anhangzahlen()["Einträge im Preisverlauf"], 2)
 
     # --- Zeuge: POST loescht das Objekt -----------------------------------
 
@@ -6203,26 +6490,28 @@ class FilterblockNachbesserungTests(TestCase):
 
     # --- Punkt 2: das Suchfeld wird begrenzt ------------------------------
 
-    def test_das_suchfeld_hat_dieselbe_rasterbreite_wie_die_anderen(self):
-        """Keine zweite Klasse mehr an der Feldeinheit der Suche.
-
-        Sie war doppelt so breit wie jedes andere Feld des Blocks; bei drei
-        Spalten nahm sie zwei Drittel der Zeile.
-        """
-        quelle = (settings.BASE_DIR / "templates" / "objekte" / "objektliste.html").read_text(
-            encoding="utf-8"
-        )
-        zeile = next(z for z in quelle.splitlines() if "filterform.suche" in z)
-        self.assertNotIn("breit", zeile)
+    # `test_das_suchfeld_hat_dieselbe_rasterbreite_wie_die_anderen` stand hier
+    # bis zum 04.09. Er las die Vorlagenzeile mit `filterform.suche` und
+    # pruefte, dass darin nicht "breit" vorkommt. Das ist die Schreibweise
+    # EINER Zeile einer Datei und nicht die Zusage; sein Geschwister darunter
+    # misst dieselbe Sache am gerenderten HTML und ueberlebt jede Umstellung
+    # der Vorlage. Zwei Zeugen auf eine Zusage, von denen einer schlechter
+    # misst - der schlechtere faellt.
+    #
+    # `test_das_stylesheet_fuehrt_keine_sonderbreite_mehr` stand hier
+    # ebenfalls und pruefte, dass `.filter .breit` NICHT im Stylesheet steht.
+    # Er bewachte keine Zusage an irgendjemanden, sondern die Abwesenheit
+    # einer Regel - Aufraeumen von gestern, festgehalten fuer immer. Die
+    # Regel ist seit dem 03.09. weg und der ganze Filterblock seit heute neu
+    # geschrieben.
 
     def test_die_gerenderte_feldeinheit_der_suche_traegt_nur_die_grundklasse(self):
-        """Am gerenderten HTML gemessen, nicht nur an der Vorlage."""
-        self.assertNotContains(self._seite(), 'class="feld breit"')
+        """Am gerenderten HTML gemessen, nicht an der Vorlage.
 
-    def test_das_stylesheet_fuehrt_keine_sonderbreite_mehr(self):
-        """Eine Regel ohne Traeger sieht in einem halben Jahr wie eine
-        Anforderung aus."""
-        self.assertNotIn(".filter .breit", self._stylesheet())
+        Die Suche war einmal doppelt so breit wie jedes andere Feld des
+        Blocks; bei drei Spalten nahm sie zwei Drittel der Zeile.
+        """
+        self.assertNotContains(self._seite(), 'class="feld breit"')
 
     def test_die_feldeinheit_gibt_es_ueberhaupt_noch(self):
         """Riegel gegen die drei Zeugen darueber im Vakuum."""
@@ -6233,6 +6522,11 @@ class FilterblockNachbesserungTests(TestCase):
     def _statusfilterregel(self):
         quelle = re.sub(r"\s+", " ", self._stylesheet())
         regel = quelle[quelle.index(".statusfilter {") :]
+        return regel[: regel.index("}")]
+
+    def _markenregel(self):
+        quelle = re.sub(r"\s+", " ", self._stylesheet())
+        regel = quelle[quelle.index(".kaestchen label {") :]
         return regel[: regel.index("}")]
 
     def test_der_statusblock_ist_sichtbar_abgesetzt(self):
@@ -6252,8 +6546,50 @@ class FilterblockNachbesserungTests(TestCase):
         self.assertIn("padding:", self._statusfilterregel())
 
     def test_der_statusblock_bleibt_eine_volle_zeile(self):
-        """Sechs Kaestchen passen in keine Rasterspalte - das bleibt so."""
+        """Sechs Marken passen in keine Rasterspalte - das bleibt so."""
         self.assertIn("grid-column: 1 / -1", self._statusfilterregel())
+
+    # --- Neu am 04.09.: der Status ist eine Reihe von Marken --------------
+
+    def test_der_status_ist_eine_reihe_von_marken(self):
+        """`02` von heute: eine Reihe von Marken, keine Kaestchenliste.
+
+        Gemessen an dem, was eine Marke ausmacht und eine Kaestchenzeile
+        nicht hat: ein eigener Rand um jedes Wort. Ohne ihn stehen sechs
+        Kaestchen mit Woertern nebeneinander, und das ist genau der Zustand
+        davor.
+        """
+        regel = self._markenregel()
+        self.assertIn("border:", regel)
+        self.assertIn("border-radius:", regel)
+
+    def test_die_angehakte_marke_ist_farblich_abgesetzt(self):
+        """Und zwar am ANGEHAKTEN Zustand, nicht an einer zweiten Klasse.
+
+        Eine Klasse muesste die Vorlage setzen, und sie kaeme aus derselben
+        Auswahl, die das Kaestchen ohnehin traegt - zwei Traeger fuer
+        denselben Zustand. `:has(input:checked)` liest ihn dort, wo er steht.
+        """
+        quelle = re.sub(r"\s+", " ", self._stylesheet())
+        self.assertIn(".kaestchen label:has(input:checked) {", quelle)
+        regel = quelle[quelle.index(".kaestchen label:has(input:checked) {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("background:", regel)
+
+    def test_das_kaestchen_bleibt_in_der_marke_sichtbar(self):
+        """Der Riegel unter dem Zeugen darueber.
+
+        Die farbliche Absetzung haengt an `:has()`. Faellt das aus - ein
+        aelterer Browser, eine strengere Umgebung -, ist der Stand nur noch am
+        Kaestchen abzulesen. Ein `display: none` darauf machte den Filter zu
+        einem, dessen Stand man raten muss.
+        """
+        quelle = re.sub(r"\s+", " ", self._stylesheet())
+        for treffer in re.finditer(r"([^{}]*input\[type=\"checkbox\"\][^{}]*)\{([^{}]*)\}", quelle):
+            with self.subTest(selektor=treffer.group(1).strip()):
+                gedraengt = treffer.group(2).replace(" ", "")
+                self.assertNotIn("display:none", gedraengt)
+                self.assertNotIn("visibility:hidden", gedraengt)
 
     # --- Was unveraendert bleibt ------------------------------------------
 
@@ -6276,32 +6612,63 @@ class FilterblockNachbesserungTests(TestCase):
             ],
         )
 
-    def test_die_reihenfolge_in_der_vorlage_ist_unveraendert(self):
-        quelle = (settings.BASE_DIR / "templates" / "objekte" / "objektliste.html").read_text(
-            encoding="utf-8"
-        )
-        gefunden = re.findall(r"filterform\.(\w+)", quelle)
-        self.assertEqual(
-            gefunden,
-            [
-                "suche",
-                "status",
-                "status",
-                "status",
-                "land",
-                "portal",
-                "objekttyp",
-                "zustand",
-                "preis_von",
-                "preis_bis",
-                "flaeche_von",
-                "flaeche_bis",
-                "region",
-            ],
-        )
+    def test_jedes_feld_des_formulars_steht_auch_auf_der_seite(self):
+        """NACHGEZOGEN am 04.09. und dabei besser gemacht.
 
-    def test_die_klasse_des_formulars_ist_unveraendert(self):
-        self.assertContains(self._seite(), '<form method="get" class="filter">')
+        Hier stand `test_die_reihenfolge_in_der_vorlage_ist_unveraendert`: er
+        las die Vorkommen von `filterform.<name>` aus der Vorlage und
+        verglich sie mit einer abgeschriebenen Liste, Reihenfolge inklusive.
+        Der Entwurf stellt die Reihenfolge um - der Status steht jetzt vorn,
+        die Region vor den Zahlenpaaren -, und der Zeuge waere allein deshalb
+        rot gewesen, ohne dass jemandem etwas fehlte.
+
+        Die Zusage dahinter ist eine echte und bleibt: JEDES Feld der
+        Formklasse ist auf der Seite auch bedienbar. Ein Feld, das aus der
+        Vorlage faellt, aber in der Klasse stehen bleibt, filtert nur noch
+        ueber die Adresse - `test_die_feldnamen_sind_unveraendert` faende das
+        nicht, er misst die Klasse.
+
+        Gemessen am gerenderten HTML und am Namen des Eingabefeldes, nicht an
+        der Vorlage: welche Datei die Zeile enthaelt, ist keine Zusage. Die
+        Reihenfolge wird ausdruecklich NICHT mehr gemessen - sie ist eine
+        Gestaltungsfrage, und ein Zeuge schreibt nicht vor, wie ein Block
+        gegliedert ist.
+        """
+        antwort = self._seite()
+        for name in antwort.context["filterform"].fields:
+            with self.subTest(feld=name):
+                self.assertContains(antwort, f'name="{name}"')
+
+    def test_der_filter_bleibt_ein_GET_formular(self):
+        """NACHGEZOGEN: die Klasse hat gewechselt, die Zusage nicht.
+
+        Hier stand `test_die_klasse_des_formulars_ist_unveraendert` und mass
+        `<form method="get" class="filter">` als ganze Zeichenkette. Die
+        Klasse `filter` sitzt jetzt am `<details>`, das Formular darin heisst
+        `filterfelder`. Ein Klassenname ist keine Zusage.
+
+        Die Methode ist eine: `method="get"` ist der Grund, warum ein
+        gefilterter Stand eine Adresse hat und sich weitergeben laesst. Ein
+        POST-Formular filterte genauso und waere nicht teilbar - und niemand
+        merkte es, bis jemand einen Link schicken will.
+        """
+        inhalt = self._seite().content.decode()
+        block = inhalt[inhalt.index('<details class="filter"') :]
+        block = block[: block.index("</details>")]
+        self.assertIn('method="get"', block)
+        self.assertNotIn('method="post"', block)
+
+    def test_der_filterblock_klappt_ohne_skript(self):
+        """Kein JavaScript in der Oberflaeche - der Block ist ein `<details>`.
+
+        Ein nachgebauter Umschalter braeuchte ein Skript, und mit ihm die
+        Tastaturbedienung und die Ansage fuer Screenreader, die `<details>`
+        mitbringt. Gemessen an der ganzen Seite: ein `<script>` irgendwo
+        darauf ist der Anfang.
+        """
+        inhalt = self._seite().content.decode()
+        self.assertIn("<details", inhalt)
+        self.assertNotIn("<script", inhalt)
 
 
 class BekannteDomainTests(SimpleTestCase):
@@ -6719,59 +7086,74 @@ class WarnstufeTests(TestCase):
 
 
 class ListenzeilenParser(HTMLParser):
-    """Je Zeile im `<tbody>` der Liste: Verweise, Zellen und Besuchsmarken.
+    """Je Zeile der Objektliste: Verweise, Besuchsmarken und deren Umgebung.
 
-    Eingegrenzt auf den TABELLENKOERPER und nicht auf die ganze Antwort. In
-    diesem Projekt haben zwei Zeugen ihre Zeichenkette schon einmal im
-    Basis-Template gefunden und dort gemessen, wo die Zusage gar nicht steht.
-    Eine Marke wird deshalb nur gezaehlt, wenn sie IN einer Listenzeile sitzt -
-    und es steht fest, in welcher.
+    NACHGEZOGEN am 04.09. auf das neue Markup. Bis dahin las er `<tbody>`,
+    `<tr>` und `data-spalte`; die Liste ist jetzt eine `<ul class="liste">`
+    aus `<li class="objekt">`.
 
-    `marke_in` haelt die Spaltenbezeichnung der Zelle fest, in der die Marke
-    steht. Daran haengt die Zusage, dass der Punkt keine eigene Spalte kostet.
+    Eingegrenzt auf die LISTE und nicht auf die ganze Antwort. In diesem
+    Projekt haben zwei Zeugen ihre Zeichenkette schon einmal im Basis-Template
+    gefunden und dort gemessen, wo die Zusage gar nicht steht. Eine Marke wird
+    deshalb nur gezaehlt, wenn sie IN einer Listenzeile sitzt.
+
+    `marke_in` haelt fest, in welchem umgebenden Block die Marke steht. Daran
+    haengt die Zusage, dass der Punkt keine eigene Stelle in der Zeile kostet,
+    sondern in der Titelzeile vor dem Titel sitzt.
+
+    Geprueft wird auf ELEMENTE und auf die Klassenliste, nicht auf
+    `class="…"`-Zeichenketten: ein erweiterter Klassenname lief in der
+    Votum-Runde schon einmal an einem Zeugen vorbei.
     """
 
     def __init__(self):
         super().__init__()
         self.zeilen = []
-        self.kopfzellen = []
-        self._tiefe_tbody = 0
-        self._in_thead = False
+        self._in_liste = 0
         self._zeile = None
+        self._bloecke = []
+
+    @staticmethod
+    def _klassen(attrs):
+        return (attrs.get("class") or "").split()
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag == "thead":
-            self._in_thead = True
-        elif tag == "th" and self._in_thead:
-            self.kopfzellen.append(attrs.get("data-spalte"))
-        elif tag == "tbody":
-            self._tiefe_tbody += 1
-        elif not self._tiefe_tbody:
+        klassen = self._klassen(attrs)
+        if tag == "ul" and "liste" in klassen:
+            self._in_liste += 1
             return
-        elif tag == "tr":
-            self._zeile = {"verweise": [], "marken": [], "zellen": [], "marke_in": []}
+        if not self._in_liste:
+            return
+        if tag == "li" and "objekt" in klassen:
+            self._zeile = {
+                "verweise": [], "marken": [], "marke_in": [], "klassen": klassen,
+            }
             self.zeilen.append(self._zeile)
-        elif self._zeile is None:
+            self._bloecke = ["objekt"]
             return
-        elif tag == "td":
-            self._zeile["zellen"].append(attrs.get("data-spalte"))
-        elif tag == "a" and attrs.get("href"):
+        if self._zeile is None:
+            return
+        # Leere Elemente schliessen sich in HTML nicht; nur die, die wirklich
+        # einen Block aufmachen, kommen auf den Stapel.
+        if tag not in ("img", "input", "br"):
+            self._bloecke.append(klassen[0] if klassen else tag)
+        if tag == "a" and attrs.get("href"):
             self._zeile["verweise"].append(attrs["href"])
-        elif "besuchsmarke" in (attrs.get("class") or "").split():
+        elif "besuchsmarke" in klassen:
             self._zeile["marken"].append(attrs.get("title"))
-            self._zeile["marke_in"].append(
-                self._zeile["zellen"][-1] if self._zeile["zellen"] else None
-            )
+            # Der umgebende Block, nicht das Element selbst.
+            self._zeile["marke_in"].append(self._bloecke[-2] if len(self._bloecke) > 1 else None)
 
     def handle_endtag(self, tag):
-        if tag == "thead":
-            self._in_thead = False
-        elif tag == "tbody":
-            self._tiefe_tbody = max(0, self._tiefe_tbody - 1)
+        if tag == "ul":
+            self._in_liste = max(0, self._in_liste - 1)
             self._zeile = None
-        elif tag == "tr":
+        elif tag == "li":
             self._zeile = None
+            self._bloecke = []
+        elif self._zeile is not None and tag not in ("img", "input", "br") and self._bloecke:
+            self._bloecke.pop()
 
     @classmethod
     def lesen(cls, antwort):
@@ -6903,18 +7285,18 @@ class BesuchsmarkeTests(TestCase):
         self.assertEqual(self._markiert(), set())
 
     def test_die_marke_wird_nicht_ausserhalb_der_liste_gefunden(self):
-        """Zeuge 12, als Riegel formuliert.
+        """Der Riegel auf den Parser selbst.
 
-        Der Parser zaehlt nur, was IN einer Listenzeile steht. Eine Marke im
-        Rahmen der Seite - Kopfzeile, Navigation, Basis-Template - darf nicht
-        durchschlagen. Gemessen an einer Zeile, die es gar nicht gibt: ohne
-        Objekt hat die Liste keinen Tabellenkoerper, und trotzdem enthaelt die
-        Antwort eine vollstaendige Seite.
+        Er zaehlt nur, was IN einer Listenzeile steht. Eine Marke im Rahmen
+        der Seite - Kopfzeile, Navigation, Basis-Template - darf nicht
+        durchschlagen. Gemessen an einer Zeile ohne Marke, vor der eine steht.
         """
         parser = ListenzeilenParser()
         parser.feed(
             '<span class="besuchsmarke" title="seit deinem letzten Besuch"></span>'
-            "<table><tbody><tr><td>ohne Marke</td></tr></tbody></table>"
+            '<ul class="liste"><li class="objekt"><div class="mitte">'
+            '<div class="titelzeile"><a href="/objekt/1/">ohne Marke</a></div>'
+            "</div></li></ul>"
         )
         self.assertEqual([z["marken"] for z in parser.zeilen], [[]])
 
@@ -7181,14 +7563,23 @@ class BesuchsmarkeTests(TestCase):
         stelle = inhalt.index('class="besuchsmarke"')
         self.assertRegex(inhalt[stelle:], r'^class="besuchsmarke" title="[^"]+"></span>')
 
-    def test_die_marke_kostet_keine_spalte(self):
-        """Sie sitzt IN der Bezeichnungszelle. Eine zwoelfte Spalte kostete
-        Breite in jeder Zeile, auch in den neunundvierzig ohne Marke."""
+    def test_die_marke_sitzt_in_der_titelzeile(self):
+        """NACHGEZOGEN am 04.09. - hier stand `test_die_marke_kostet_keine_spalte`.
+
+        Er mass zweierlei: dass die Marke in der Zelle "Objekt" sitzt, und
+        dass die Zeile genau so viele Zellen hat wie die Tabelle
+        Spaltenkoepfe. Die zweite Haelfte ist mit der Tabelle gefallen - es
+        gibt keine Spalten mehr, also auch keine zwoelfte.
+
+        Die ZUSAGE ist dieselbe geblieben und in der neuen Bauform sogar
+        schaerfer: die Marke steht in der Titelzeile, vor dem Titel. Sie ist
+        damit kein eigenes Feld der Zeile, das in jeder Zeile Platz kostete -
+        auch in den neunundvierzig ohne Marke.
+        """
         objekt = self._objekt()
         self._votum(objekt, self.andere, self._nachher())
         parser = ListenzeilenParser.lesen(self._antwort())
-        self.assertEqual(parser.zeilen[0]["marke_in"], ["Objekt"])
-        self.assertEqual(len(parser.zeilen[0]["zellen"]), len(parser.kopfzellen))
+        self.assertEqual(parser.zeilen[0]["marke_in"], ["titelzeile"])
 
     def test_eine_zeile_ohne_bewegung_bekommt_keinen_platzhalter(self):
         """Kein leerer Punkt, kein leeres Element - nichts. Ein Platzhalter
@@ -7219,17 +7610,27 @@ class BesuchsmarkeTests(TestCase):
             )
         ]
 
-    def test_das_markup_der_marke_ist_fuer_beide_fassungen_dasselbe(self):
-        """Zeuge 11, erste Haelfte.
+    def test_die_titelzeile_steht_in_jeder_breite(self):
+        """Zeuge 11, erste Haelfte - NACHGEZOGEN.
 
-        Karte und Tabelle sind EIN Markup; unter 48rem bricht das Stylesheet
-        die Tabelle in Karten auf. Die Marke sitzt in der Bezeichnungszelle,
-        und die ist ab 48rem eine Tabellenzelle und darunter die Ueberschrift
-        der Karte. Damit steht sie in beiden Fassungen.
+        Hier stand `test_das_markup_der_marke_ist_fuer_beide_fassungen_
+        dasselbe`. Es gibt seit dem 04.09. nur noch EIN Markup, also ist der
+        Satz von selbst wahr - und ein Zeuge, der etwas misst, das gar nicht
+        mehr falsch sein kann, misst nichts.
+
+        Gemessen wird stattdessen die Stelle, an der die Zusage jetzt brechen
+        koennte: die Titelzeile, in der die Marke sitzt, darf in keiner
+        Fassung ausgeblendet werden. Sie ist der Traeger - waere sie in einer
+        Breite weg, waere es die Marke mit ihr, und die zweite und dritte
+        Haelfte des Zeugen (Aussehen ausserhalb des Media-Blocks, kein
+        `display: none` an der Marke selbst) faenden das nicht.
         """
-        objekt = self._objekt()
-        self._votum(objekt, self.andere, self._nachher())
-        self.assertEqual(ListenzeilenParser.lesen(self._antwort()).zeilen[0]["marke_in"], ["Objekt"])
+        quelle = self._stylesheet()
+        for treffer in re.finditer(r"([^{}]*\.titelzeile[^{}]*)\{([^{}]*)\}", quelle):
+            with self.subTest(selektor=treffer.group(1).strip()):
+                gedraengt = treffer.group(2).replace(" ", "").replace("\n", "")
+                self.assertNotIn("display:none", gedraengt)
+                self.assertNotIn("visibility:hidden", gedraengt)
 
     def test_die_marke_bekommt_ihr_aussehen_ausserhalb_jedes_media_blocks(self):
         """Zeuge 11, zweite Haelfte.
@@ -7489,70 +7890,104 @@ class ErfassungszeitpunktMigrationTests(TestCase):
 
 
 class VotumzellenParser(HTMLParser):
-    """Je Zeile im `<tbody>` der Liste: die Votum-Zelle mit Text und Verweisen.
+    """Je Zeile der Objektliste: der Votum-Block mit Text, Verweisen und Punkten.
 
-    Eingegrenzt auf den TABELLENKOERPER und auf die Zelle mit
-    `data-spalte="Votum"`. In diesem Projekt haben Zeugen ihre Zeichenkette
-    schon einmal im Basis-Template gefunden und dort gemessen, wo die Zusage
-    gar nicht steht - eine Angabe zaehlt deshalb nur, wenn sie IN der
-    Votum-Zelle EINER Listenzeile sitzt.
+    NACHGEZOGEN am 04.09. auf das neue Markup. Bis dahin las er `<tbody>` und
+    die Zelle mit `data-spalte="Votum"`; die Liste ist jetzt eine
+    `<ul class="liste">` und der Block ein `<div class="votum">` in der Zeile.
 
-    Die Zeile wird ueber den Verweis in ihrer Bezeichnungszelle
-    wiedererkannt (`objekt_href`). Ueber die Reihenfolge ginge es auch, aber
-    dann haenge Zeuge 4 - zwei Objekte, eines frei, eines verdeckt - an der
-    Sortierung der Liste statt an der Zusage.
+    Eingegrenzt auf die LISTE und auf den Votum-Block EINER Zeile. In diesem
+    Projekt haben Zeugen ihre Zeichenkette schon einmal im Basis-Template
+    gefunden und dort gemessen, wo die Zusage gar nicht steht.
+
+    `punkte` ist am 04.09. dazugekommen. Die Punktreihe IST der Zaehlstand in
+    anderer Form: fuenf Punkte, von denen zwei gefuellt sind, sagen dasselbe
+    wie "2 dafür · 3 offen". Eine Verdeckung, die den Satz weglaesst und die
+    Punkte stehen liesse, waere keine - und ohne diesen Zaehler faende das
+    kein Zeuge.
+
+    Die Zeile wird ueber den Verweis in ihrer Titelzeile wiedererkannt
+    (`objekt_href`). Ueber die Reihenfolge ginge es auch, aber dann haenge
+    Zeuge 4 - zwei Objekte, eines frei, eines verdeckt - an der Sortierung der
+    Liste statt an der Zusage.
+
+    Geprueft wird auf ELEMENTE und Klassenlisten, nicht auf
+    `class="…"`-Zeichenketten: ein erweiterter Klassenname lief in der
+    Votum-Runde schon einmal an einem Zeugen vorbei.
     """
 
     def __init__(self):
         super().__init__()
         self.zeilen = []
-        self._tiefe_tbody = 0
+        self._in_liste = 0
         self._zeile = None
-        self._in_zelle = False
+        self._tiefe_votum = 0
+        self._in_stimme = False
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag == "tbody":
-            self._tiefe_tbody += 1
-        elif not self._tiefe_tbody:
+        klassen = (attrs.get("class") or "").split()
+        if tag == "ul" and "liste" in klassen:
+            self._in_liste += 1
             return
-        elif tag == "tr":
-            self._zeile = {"objekt_href": None, "text": "", "verweise": []}
+        if not self._in_liste:
+            return
+        if tag == "li" and "objekt" in klassen:
+            self._zeile = {"objekt_href": None, "text": "", "verweise": [], "punkte": []}
             self.zeilen.append(self._zeile)
-        elif self._zeile is None:
+            self._tiefe_votum = 0
             return
-        elif tag == "td":
-            self._in_zelle = attrs.get("data-spalte") == "Votum"
-        elif tag == "a" and attrs.get("href"):
-            if self._in_zelle:
+        if self._zeile is None:
+            return
+        if "votum" in klassen:
+            self._tiefe_votum = 1
+        elif self._tiefe_votum:
+            self._tiefe_votum += 1
+        if self._tiefe_votum:
+            if "stimme" in klassen:
+                # Die Art der Stimme, nicht die Klassenliste: `dafuer`,
+                # `anschauen`, `raus`, `offen`.
+                self._zeile["punkte"].append(
+                    next((k for k in klassen if k != "stimme"), None)
+                )
+                # Das Zeichen IM Punkt ("+", "−", "?") ist kein Text des
+                # Blocks. Zaehlte es mit, truege `text` bei freigeschaltetem
+                # Stand ein Praefix aus Zeichen, und jeder Zeuge auf den
+                # Zaehlstand muesste es wegrechnen.
+                self._in_stimme = True
+            if tag == "a" and attrs.get("href"):
                 self._zeile["verweise"].append(attrs["href"])
-            elif self._zeile["objekt_href"] is None:
-                self._zeile["objekt_href"] = attrs["href"]
+        elif tag == "a" and attrs.get("href") and self._zeile["objekt_href"] is None:
+            self._zeile["objekt_href"] = attrs["href"]
 
     def handle_data(self, daten):
-        if self._in_zelle and self._zeile is not None:
+        if self._tiefe_votum and self._zeile is not None and not self._in_stimme:
             self._zeile["text"] += daten
 
     def handle_endtag(self, tag):
-        if tag == "tbody":
-            self._tiefe_tbody = max(0, self._tiefe_tbody - 1)
+        if tag == "ul":
+            self._in_liste = max(0, self._in_liste - 1)
             self._zeile = None
-            self._in_zelle = False
-        elif tag == "tr":
+            self._tiefe_votum = 0
+            self._in_stimme = False
+        elif tag == "li":
             self._zeile = None
-            self._in_zelle = False
-        elif tag == "td":
-            self._in_zelle = False
+            self._tiefe_votum = 0
+            self._in_stimme = False
+        elif self._tiefe_votum:
+            self._tiefe_votum -= 1
+            self._in_stimme = False
 
     @classmethod
     def nach_href(cls, antwort):
-        """`{Adresse der Objektansicht: {"text", "verweise"}}` fuer jede Zeile."""
+        """`{Adresse der Objektansicht: {"text", "verweise", "punkte"}}` je Zeile."""
         parser = cls()
         parser.feed(antwort.content.decode())
         return {
             zeile["objekt_href"]: {
                 "text": " ".join(zeile["text"].split()),
                 "verweise": zeile["verweise"],
+                "punkte": zeile["punkte"],
             }
             for zeile in parser.zeilen
         }
@@ -7699,10 +8134,15 @@ class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
         for person in (self.anna, self.bernd, self.clara):
             self._votum(self.objekt, person, Wertung.DAFUER)
 
-    #: Was in der Spalte staende, wenn die Verdeckung ausfiele.
+    #: Was in der Zeile staende, wenn die Verdeckung ausfiele.
     VERDECKT = "3 dafür · 2 offen"
     #: Was dort steht, sobald selbst abgestimmt wurde.
     FREI = "3 dafür · 1 anschauen · 1 offen"
+    #: Was im verdeckten Zustand dasteht: der Aufruf und ein kurzer Hinweis.
+    #: Der Hinweis ist am 04.09. dazugekommen - `02` von heute verlangt ihn:
+    #: eine Zeile, in der nur "abstimmen" steht, sagt nicht, WARUM dort kein
+    #: Stand steht, und sieht deshalb aus wie ein Anzeigefehler.
+    AUFRUF = "abstimmen — die Vota der anderen erscheinen danach"
 
     def _selbst_abstimmen(self):
         self._votum(self.objekt, self.person, Wertung.ANSCHAUEN)
@@ -7742,11 +8182,35 @@ class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
     def test_ohne_eigenes_votum_steht_der_aufruf_zum_abstimmen_da(self):
         """Zeuge 2. Wortlaut "abstimmen" - nicht "keine Angabe", nicht leer.
 
-        Eine leere Zelle saehe aus wie ein Anzeigefehler, und die Spalte
-        traegt hier ihre einzige verbliebene Aufgabe: den Weg zur eigenen
+        Eine leere Zeile saehe aus wie ein Anzeigefehler, und der Block
+        traegt hier seine einzige verbliebene Aufgabe: den Weg zur eigenen
         Stimme.
+
+        Der Hinweis daneben gehoert dazu und ist keine Zugabe: ohne ihn bleibt
+        offen, ob niemand abgestimmt hat oder ob der Stand verdeckt ist.
         """
-        self.assertEqual(self._zelle(self.objekt)["text"], "abstimmen")
+        self.assertEqual(self._zelle(self.objekt)["text"], self.AUFRUF)
+
+    def test_der_hinweis_verraet_nicht_ob_ueberhaupt_jemand_gestimmt_hat(self):
+        """Der Riegel am Hinweis selbst.
+
+        Drei andere haben an diesem Objekt gestimmt. Der Hinweis darf davon
+        nichts sagen - weder eine Zahl noch "es gibt welche" noch "es gibt
+        keine". Er sagt nur, wann etwas zu sehen sein wird.
+        """
+        text = self._zelle(self.objekt)["text"]
+        self.assertNotRegex(text, r"\d")
+        self.assertNotIn(views.KEIN_VOTUM, text)
+
+    def test_ohne_eigenes_votum_steht_kein_einziger_punkt_da(self):
+        """Die Punktreihe IST der Zaehlstand, nur in anderer Form.
+
+        Fuenf Punkte, von denen drei gefuellt sind, sagen "3 von 5 haben
+        gestimmt" - genau die Auskunft, die verdeckt sein soll. Ein Zeuge, der
+        nur den Satz misst, faende diese Luecke nicht: der Satz kann fehlen,
+        waehrend die Punkte dastehen.
+        """
+        self.assertEqual(self._zelle(self.objekt)["punkte"], [])
 
     def test_der_aufruf_verlinkt_auf_die_objektansicht(self):
         """Getrennt vom Zeugen darueber: dass das Wort dasteht, sagt noch
@@ -7817,7 +8281,12 @@ class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
             zeilen[reverse("objekt", args=[self.objekt.pk])]["text"], self.FREI
         )
         self.assertEqual(
-            zeilen[reverse("objekt", args=[zweites.pk])]["text"], "abstimmen"
+            zeilen[reverse("objekt", args=[zweites.pk])]["text"], self.AUFRUF
+        )
+        # Und die Punktreihe steht nur an dem Objekt, das freigeschaltet ist.
+        self.assertEqual(zeilen[reverse("objekt", args=[zweites.pk])]["punkte"], [])
+        self.assertEqual(
+            len(zeilen[reverse("objekt", args=[self.objekt.pk])]["punkte"]), 5
         )
 
     def test_ein_votum_an_einem_objekt_laesst_das_andere_verdeckt(self):
@@ -7840,18 +8309,18 @@ class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
     # --- Zeuge 12 ---------------------------------------------------------
 
     def test_die_zusage_gilt_in_beiden_fassungen(self):
-        """Zeuge 12, erste Haelfte.
+        """Zeuge 12, erste Haelfte - NACHGEZOGEN.
 
-        Karte und Tabelle sind EIN Markup; unter 48rem bricht das Stylesheet
-        die Tabelle in Karten auf. Der Aufruf steht in der Votum-Zelle, und
-        die ist ab 48rem eine Tabellenzelle und darunter eine Zeile der Karte.
-        Damit steht er in beiden Fassungen - und der Zaehlstand fehlt in
-        beiden, denn er fehlt im gemeinsamen Markup.
+        Es gibt seit dem 04.09. nur noch EIN Markup; die Frage "steht der
+        Aufruf auch in der anderen Fassung" beantwortet sich damit von
+        selbst. Gemessen wird stattdessen, dass der Block ueberhaupt da ist
+        und nicht etwa erst ab einer Breite gerendert wird: `data-spalte`
+        gibt es nicht mehr, der Traeger heisst jetzt `.votum`.
         """
-        self.assertEqual(self._zelle(self.objekt)["text"], "abstimmen")
-        self.assertContains(self._liste(), 'data-spalte="Votum"')
+        self.assertEqual(self._zelle(self.objekt)["text"], self.AUFRUF)
+        self.assertEqual(len(_klassen_von(self._liste(), "votum")), 1)
 
-    def test_das_stylesheet_verdeckt_die_votum_spalte_in_keiner_fassung(self):
+    def test_das_stylesheet_verdeckt_den_votum_block_in_keiner_fassung(self):
         """Zeuge 12, zweite Haelfte - und der, den die Sabotage trifft.
 
         Verlegte jemand die Verdeckung ins Stylesheet, staende der Zaehlstand
@@ -7860,22 +8329,26 @@ class VerdecktesVotumInDerListeTests(VerdecktesVotumBasis):
         je nachdem, ob die Regel im Media-Block steht oder darueber, traefe
         sie nur EINE der beiden Fassungen.
 
-        Geprueft an jeder Regel, deren Selektor die Votum-Spalte nennt.
-        Kommentare heraus: sie nennen die Spalte ebenfalls, und ein Zeuge,
-        der einen Kommentar misst, misst gar nichts.
+        Geprueft an jeder Regel, deren Selektor den Votum-Block oder die
+        Punktreihe nennt - beide tragen den Stand. Kommentare heraus: sie
+        nennen die Klassen ebenfalls, und ein Zeuge, der einen Kommentar
+        misst, misst gar nichts.
         """
         quelle = (settings.BASE_DIR / "static" / "objektradar.css").read_text(
             encoding="utf-8"
         )
         ohne_kommentare = re.sub(r"/\*.*?\*/", "", quelle, flags=re.S)
-        regeln = re.findall(
-            r"([^{}]*\[data-spalte=\"Votum\"\][^{}]*)\{([^{}]*)\}", ohne_kommentare
-        )
-        for selektor, rumpf in regeln:
-            with self.subTest(selektor=selektor.strip()):
-                gedraengt = rumpf.replace(" ", "").replace("\n", "")
-                self.assertNotIn("display:none", gedraengt)
-                self.assertNotIn("visibility:hidden", gedraengt)
+        gefunden = 0
+        for name in (r"\.votum\b", r"\.stimmen\b", r"\.stimme\b", r"\.votum-text\b"):
+            for treffer in re.finditer(rf"([^{{}}]*{name}[^{{}}]*)\{{([^{{}}]*)\}}", ohne_kommentare):
+                gefunden += 1
+                with self.subTest(selektor=treffer.group(1).strip()):
+                    gedraengt = treffer.group(2).replace(" ", "").replace("\n", "")
+                    self.assertNotIn("display:none", gedraengt)
+                    self.assertNotIn("visibility:hidden", gedraengt)
+        # Riegel gegen einen Zeugen im Vakuum: faende der Ausdruck gar keine
+        # Regel, liefe die Schleife leer und bliebe gruen.
+        self.assertGreater(gefunden, 0, "keine Regel zum Votum-Block im Stylesheet")
 
 
 class VerdecktesVotumInDerObjektansichtTests(VerdecktesVotumBasis):
@@ -8218,7 +8691,10 @@ class VerdecktesVotumAbfragelastTests(VerdecktesVotumBasis):
             ).values()
         ]
         self.assertEqual(len(texte), views.OBJEKTE_JE_SEITE)
-        self.assertEqual(texte.count("abstimmen"), views.OBJEKTE_JE_SEITE // 2)
+        self.assertEqual(
+            texte.count("abstimmen — die Vota der anderen erscheinen danach"),
+            views.OBJEKTE_JE_SEITE // 2,
+        )
         self.assertEqual(
             texte.count("3 dafür · 1 anschauen · 1 offen"), views.OBJEKTE_JE_SEITE // 2
         )
@@ -8297,3 +8773,970 @@ class VerdecktesVotumAbfragelastTests(VerdecktesVotumBasis):
         self.assertEqual(
             self._zelle(objekt)["text"], "3 dafür · 1 anschauen · 1 offen"
         )
+
+
+# =========================================================================
+# Oberflaeche neu - die Zeugen der Runde vom 04.09.
+# =========================================================================
+
+
+class UnterzeilenParser(HTMLParser):
+    """Die Teile der Unterzeile je Listenzeile, ohne die Statusmarke.
+
+    Gemessen wird an ELEMENTEN und nicht an Zeichenketten: die Zusage lautet,
+    dass fuer ein leeres Feld KEIN Element und kein Gedankenstrich entsteht,
+    und "kein Element" laesst sich nur an Elementen pruefen. In der
+    Votum-Runde ist ein Zeuge daran vorbeigelaufen, dass er eine
+    `class="…"`-Zeichenkette suchte.
+
+    Die Statusmarke wird ausgelassen: sie steht in JEDER Zeile und ist keine
+    der Angaben, um die es hier geht.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.zeilen = []
+        self._in_liste = 0
+        self._zeile = None
+        self._in_unterzeile = 0
+        self._teil = None
+
+    def handle_starttag(self, tag, attrs):
+        klassen = (dict(attrs).get("class") or "").split()
+        if tag == "ul" and "liste" in klassen:
+            self._in_liste += 1
+            return
+        if not self._in_liste:
+            return
+        if tag == "li" and "objekt" in klassen:
+            self._zeile = []
+            self.zeilen.append(self._zeile)
+            self._in_unterzeile = 0
+            return
+        if self._zeile is None:
+            return
+        if "unterzeile" in klassen:
+            self._in_unterzeile = 1
+        elif self._in_unterzeile:
+            self._in_unterzeile += 1
+            if self._in_unterzeile == 2 and "statusmarke" not in klassen:
+                # Nur die unmittelbaren Kinder der Unterzeile sind Teile.
+                self._teil = ""
+                self._zeile.append(None)
+
+    def handle_data(self, daten):
+        if self._teil is not None:
+            self._teil += daten
+
+    def handle_endtag(self, tag):
+        if tag == "ul":
+            self._in_liste = max(0, self._in_liste - 1)
+            self._zeile = None
+            self._in_unterzeile = 0
+        elif tag == "li":
+            self._zeile = None
+            self._in_unterzeile = 0
+        elif self._in_unterzeile:
+            if self._teil is not None and self._in_unterzeile == 2:
+                self._zeile[-1] = " ".join(self._teil.split())
+                self._teil = None
+            self._in_unterzeile -= 1
+
+    @classmethod
+    def lesen(cls, antwort):
+        parser = cls()
+        parser.feed(antwort.content.decode())
+        return parser.zeilen
+
+
+class UnterzeileTests(TestCase):
+    """Zeugen 6 und 7: was leer ist, faellt weg - einzeln.
+
+    Die Liste fuehrte bis zum 04.09. eigene Spalten fuer Ort, Region/Land und
+    Zustand. Eine Spalte muss in JEDER Zeile etwas enthalten, also stand dort
+    ein Gedankenstrich, sobald ein Feld leer war - und leer sind sie fast
+    alle, solange nur eine URL eingeworfen wurde. Die Zusage aus `02` ("leere
+    Felder zeigt die Objektansicht, die Liste nicht") war damit nie gehalten.
+
+    Jetzt stehen die drei als Unterzeile beim Titel und fallen einzeln weg.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _teile(self):
+        zeilen = UnterzeilenParser.lesen(self.client.get("/"))
+        self.assertEqual(len(zeilen), 1, "erwartet wird genau eine Listenzeile")
+        return zeilen[0]
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_der_parser_findet_ueberhaupt_teile(self):
+        """Ohne ihn waere jedes `assertEqual(..., [])` unten auch dann gruen,
+        wenn der Parser grundsaetzlich nichts findet."""
+        Objekt.objects.create(url="https://x/1", ort="Ronda")
+        self.assertEqual(self._teile(), ["Ronda"])
+
+    def test_der_parser_zaehlt_die_statusmarke_nicht_mit(self):
+        """Sie steht in jeder Zeile und ist keine der Angaben, um die es geht.
+
+        Zaehlte er sie mit, waere die leere Unterzeile nie leer und Zeuge 6
+        koennte gar nicht mehr fallen.
+        """
+        Objekt.objects.create(url="https://x/1")
+        self.assertNotIn("neu", self._teile())
+
+    # --- Zeuge 6 ----------------------------------------------------------
+
+    def test_ohne_ort_region_und_zustand_steht_in_der_unterzeile_nichts(self):
+        """Zeuge 6 - der Kern.
+
+        Kein leeres Element, kein Gedankenstrich. Ein Objekt direkt nach dem
+        Einwurf traegt keines der drei Felder; das ist der Normalfall und
+        nicht der Sonderfall.
+        """
+        Objekt.objects.create(url="https://x/1")
+        self.assertEqual(self._teile(), [])
+
+    def test_in_der_zeile_ohne_angaben_steht_auch_kein_gedankenstrich(self):
+        """Am Text der ganzen Zeile gemessen, nicht nur an den Teilen.
+
+        Der Zeuge darueber faende einen Strich nicht, der ausserhalb eines
+        Elements steht - direkt zwischen zwei Marken zum Beispiel. Der
+        Gedankenstrich der ZAHLEN bleibt ausdruecklich erlaubt: dort haelt er
+        die Spalten auseinander, und dafuer ist er da.
+        """
+        Objekt.objects.create(url="https://x/1")
+        inhalt = self.client.get("/").content.decode()
+        block = inhalt[inhalt.index('<div class="unterzeile">') :]
+        block = block[: block.index("</div>")]
+        self.assertNotIn("—", block)
+
+    def test_der_zustand_unklar_gilt_als_leer(self):
+        """`unklar` ist die Vorbelegung des Feldes und keine Aussage.
+
+        Stuende er da, truege ihn fast jede Zeile - und die Angabe verloere
+        genau dort ihren Wert, wo sie einen haette. Die Objektansicht zeigt
+        ihn weiterhin; dort ist ein leeres Feld die Aufforderung, es zu
+        fuellen.
+        """
+        objekt = Objekt.objects.create(url="https://x/1")
+        self.assertEqual(objekt.zustand, Zustand.UNKLAR)
+        self.assertEqual(self._teile(), [])
+
+    def test_ein_leeres_feld_zieht_die_gefuellten_nicht_mit(self):
+        """Einzeln, nicht als Gruppe. Ohne diesen Zeugen koennte die
+        Unterzeile ganz wegfallen, sobald EIN Feld leer ist - und Zeuge 6
+        bliebe gruen."""
+        Objekt.objects.create(url="https://x/1", ort="Ronda", zustand=Zustand.MITTEL)
+        self.assertEqual(self._teile(), ["Ronda", "mittel"])
+
+    # --- Zeuge 7 ----------------------------------------------------------
+
+    def test_ein_objekt_mit_ort_rendert_ihn(self):
+        """Zeuge 7 - der Riegel gegen eine Unterzeile, die immer leer ist.
+
+        Ohne ihn waere Zeuge 6 gruen, indem die Liste die Unterzeile
+        ueberhaupt nicht mehr ausgibt.
+        """
+        Objekt.objects.create(url="https://x/1", ort="Ronda")
+        self.assertIn("Ronda", self._teile())
+
+    def test_region_und_land_stehen_als_EIN_teil(self):
+        """Sie beantworten gemeinsam die Frage "wo".
+
+        Als zwei Teile bekaemen sie einen Trennpunkt zwischen sich und
+        saehen aus wie zwei Angaben; "Málaga · ES" liest sich als Ort und
+        Land, "Málaga, ES" als eine Herkunft.
+        """
+        Objekt.objects.create(url="https://x/1", region="Málaga", land=Land.ES)
+        self.assertEqual(self._teile(), ["Málaga, Spanien"])
+
+    def test_die_region_allein_steht_ohne_komma(self):
+        """Ein Komma ohne zweiten Teil waere ein abgeschnittener Satz."""
+        Objekt.objects.create(url="https://x/1", region="Málaga")
+        self.assertEqual(self._teile(), ["Málaga"])
+
+    def test_das_land_allein_steht_ohne_komma(self):
+        Objekt.objects.create(url="https://x/1", land=Land.ES)
+        self.assertEqual(self._teile(), ["Spanien"])
+
+    def test_alle_drei_stehen_in_der_reihenfolge_des_entwurfs(self):
+        """Ort, dann Herkunft, dann Zustand - vom Engsten zum Weitesten und
+        dann zur Beschaffenheit."""
+        Objekt.objects.create(
+            url="https://x/1",
+            ort="Álora",
+            region="Málaga",
+            land=Land.ES,
+            zustand=Zustand.KERNSANIERUNG,
+        )
+        self.assertEqual(self._teile(), ["Álora", "Málaga, Spanien", "Kernsanierung"])
+
+    def test_die_trennpunkte_kommen_aus_dem_stylesheet(self):
+        """Und nicht aus der Vorlage.
+
+        Dort muessten sie an jedem Teil ausser dem ersten stehen, und "ausser
+        dem ersten" ist in der Template-Sprache eine Zaehlung - die dann fuer
+        jede weggefallene Angabe wieder stimmen muesste. Im Stylesheet ist es
+        ein Selektor, und ein weggefallener Teil nimmt seinen Punkt von selbst
+        mit.
+        """
+        quelle = re.sub(r"\s+", " ", (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8"))
+        self.assertIn(".unterzeile >", quelle)
+        self.assertIn('content: " ·"', quelle)
+
+    def test_der_trennpunkt_haengt_hinten_am_teil(self):
+        """Und nicht vorn am naechsten.
+
+        Vorn stand er bis zur Sichtpruefung. Am Handy bricht die Unterzeile
+        um, und dann fing die naechste Zeile mit "· Kernsanierung" an - eine
+        Aufzaehlung, der der Anfang fehlt. Hinten angehaengt bleibt der Punkt
+        bei dem Wort, zu dem er gehoert.
+        """
+        quelle = re.sub(r"\s+", " ", (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8"))
+        self.assertIn("::after {", quelle[quelle.index(".unterzeile >") :][:200])
+        self.assertNotIn(".unterzeile > * + *::before", quelle)
+
+
+class FilterblockOffenTests(TestCase):
+    """Zeuge 8: der Block steht offen, wenn er etwas verbirgt - und sonst zu."""
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _offen(self, adresse="/"):
+        """Ob das `<details>` des Filterblocks `open` traegt.
+
+        Am ELEMENT gemessen und nicht an der Zeichenkette `open` irgendwo in
+        der Antwort: das Wort steht auch in Fliesstext und Attributwerten.
+        """
+        inhalt = self.client.get(adresse).content.decode()
+        stelle = inhalt.index("<details")
+        return " open>" in inhalt[stelle : inhalt.index(">", stelle) + 1]
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_es_gibt_ueberhaupt_einen_aufklappbaren_block(self):
+        self.assertContains(self.client.get("/"), "<details")
+
+    def test_die_ableitung_erkennt_ein_offenes_element(self):
+        """Der Riegel auf `_offen` selbst: an einer Adresse mit gesetztem
+        Filter muss sie wahr liefern, sonst misst jeder `assertFalse` unten
+        nichts."""
+        self.assertTrue(self._offen("/?land=ES"))
+
+    # --- zu, wenn nichts abweicht -----------------------------------------
+
+    def test_ohne_parameter_ist_der_block_zu(self):
+        self.assertFalse(self._offen("/"))
+
+    def test_der_vorbelegte_statusfilter_klappt_ihn_nicht_auf(self):
+        """DER Fall, an dem sich "abweichend" von "gesetzt" unterscheidet.
+
+        Jeder Blaetter- und Sortierlink traegt den Statusfilter vollstaendig
+        mit. Danach steht `status` viermal in der Adresse - und es ist
+        trotzdem genau die Vorbelegung. Ein Block, der darauf aufklappte,
+        waere nach dem ersten Klick nie wieder zu.
+        """
+        adresse = "/?" + "&".join(f"status={s.value}" for s in STATUS_VORBELEGUNG)
+        self.assertFalse(self._offen(adresse))
+
+    def test_die_reihenfolge_der_statuswerte_ist_dabei_gleichgueltig(self):
+        """Die Adresse traegt sie in der Reihenfolge, in der die Kaestchen
+        abgesendet wurden; die Vorbelegung in der der Auswahlliste. Verglichen
+        werden MENGEN."""
+        adresse = "/?" + "&".join(
+            f"status={s.value}" for s in reversed(STATUS_VORBELEGUNG)
+        )
+        self.assertFalse(self._offen(adresse))
+
+    def test_ein_leerer_parameter_klappt_ihn_nicht_auf(self):
+        """`?suche=` steht in der Adresse und schraenkt nichts ein."""
+        self.assertFalse(self._offen("/?suche="))
+
+    def test_sortierung_und_seitenzahl_klappen_ihn_nicht_auf(self):
+        for adresse in ("/?sortierung=qm_preis", "/?seite=1"):
+            with self.subTest(adresse=adresse):
+                self.assertFalse(self._offen(adresse))
+
+    # --- offen, sobald etwas abweicht -------------------------------------
+
+    def test_ein_gesetzter_landfilter_klappt_ihn_auf(self):
+        self.assertTrue(self._offen("/?land=ES"))
+
+    def test_eine_freitextsuche_klappt_ihn_auf(self):
+        self.assertTrue(self._offen("/?suche=Ronda"))
+
+    def test_eine_abweichende_statusauswahl_klappt_ihn_auf(self):
+        """Weniger als die Vorbelegung - hier wird wirklich etwas verborgen."""
+        self.assertTrue(self._offen("/?status=neu"))
+
+    def test_eine_erweiterte_statusauswahl_klappt_ihn_ebenfalls_auf(self):
+        """MEHR als die Vorbelegung ist auch eine Abweichung.
+
+        Wer `raus` dazugeschaltet hat, sieht Objekte, die sonst nicht
+        dastuenden - und soll am Block ablesen koennen, warum.
+        """
+        adresse = "/?" + "&".join(f"status={s.value}" for s in Status)
+        self.assertTrue(self._offen(adresse))
+
+    def test_der_leere_statusfilter_klappt_ihn_auf(self):
+        """`?status=` heisst "keiner" und liefert null Treffer. Bliebe der
+        Block zu, staende die leere Liste ohne jede Erklaerung da."""
+        self.assertTrue(self._offen("/?status="))
+
+    def test_eine_preisuntergrenze_von_null_klappt_ihn_auf(self):
+        """Eine 0 ist ein gesetzter Filter, kein leeres Feld.
+
+        Derselbe Unterschied wie in `filtern()`, und er wird an genau einer
+        Stelle getroffen - `_gesetzt()`.
+        """
+        self.assertTrue(self._offen("/?preis_von=0"))
+
+    # --- die Kopfzeile sagt, was gilt -------------------------------------
+
+    def test_die_kopfzeile_nennt_die_zahl_der_status(self):
+        self.assertContains(self.client.get("/"), "4 Status")
+
+    def test_die_kopfzeile_sagt_dass_sonst_nichts_eingeschraenkt_ist(self):
+        self.assertContains(self.client.get("/"), forms.SONST_ALLE)
+
+    def test_die_kopfzeile_nennt_den_gesetzten_filter(self):
+        antwort = self.client.get("/?land=ES")
+        self.assertContains(antwort, "Land")
+        self.assertNotContains(antwort, forms.SONST_ALLE)
+
+    def test_die_kopfzeile_nennt_den_WERT_des_filters_nicht(self):
+        """Eine Freitextsuche kann beliebig lang sein, und die Kopfzeile soll
+        eine Zeile bleiben. Was gesucht wird, steht im Feld darunter."""
+        inhalt = self.client.get("/?suche=Zisterne").content.decode()
+        kopf = inhalt[inhalt.index("<summary") : inhalt.index("</summary>")]
+        self.assertIn("Suche", kopf)
+        self.assertNotIn("Zisterne", kopf)
+
+    # --- die Marken zeigen, was wirklich gilt -----------------------------
+
+    def test_die_vorbelegten_status_stehen_angehakt_da(self):
+        """Sonst widerspricht sich der Block: die Kopfzeile nennt vier, und
+        keine Marke ist abgesetzt.
+
+        Der Fehlstand ist aelter als diese Runde - ein gebundenes Formular
+        rendert aus den Daten, und in der Adresse stand nichts. Sichtbar wird
+        er erst, seit die Kopfzeile die Zahl nennt.
+        """
+        inhalt = self.client.get("/").content.decode()
+        block = inhalt[inhalt.index('<div class="kaestchen">') :]
+        block = block[: block.index("</div>")]
+        self.assertEqual(block.count("checked"), len(STATUS_VORBELEGUNG))
+
+    def test_die_angehakten_marken_sind_die_der_vorbelegung(self):
+        """Nicht irgendwelche vier."""
+        inhalt = self.client.get("/").content.decode()
+        block = inhalt[inhalt.index('<div class="kaestchen">') :]
+        block = block[: block.index("</div>")]
+        angehakt = {
+            treffer
+            for treffer in re.findall(r'value="([^"]+)"[^>]*checked', block)
+        }
+        self.assertEqual(angehakt, {s.value for s in STATUS_VORBELEGUNG})
+
+    def test_eine_gesetzte_auswahl_schlaegt_die_vorbelegung(self):
+        inhalt = self.client.get("/?status=raus").content.decode()
+        block = inhalt[inhalt.index('<div class="kaestchen">') :]
+        block = block[: block.index("</div>")]
+        self.assertEqual(re.findall(r'value="([^"]+)"[^>]*checked', block), ["raus"])
+
+    def test_der_leere_statusfilter_hakt_nichts_an(self):
+        """`?status=` heisst "keiner" - und sieht dann auch so aus."""
+        inhalt = self.client.get("/?status=").content.decode()
+        block = inhalt[inhalt.index('<div class="kaestchen">') :]
+        block = block[: block.index("</div>")]
+        self.assertNotIn("checked", block)
+
+    def test_die_marken_aendern_nichts_an_der_trefferanzeige(self):
+        """Riegel: geaendert wird ausschliesslich, was DASTEHT.
+
+        `ist_gefiltert()` liest weiterhin, was wirklich in der Adresse stand.
+        Liefe es kuenftig ueber die angezeigte Auswahl, truege die
+        ungefilterte Liste eine Trefferanzeige.
+        """
+        self.assertFalse(self.client.get("/").context["ist_gefiltert"])
+
+
+class KantenfarbeTests(TestCase):
+    """Zeuge 10: die Statusfarbe steht als Kante an der Zeile, je Status verschieden.
+
+    Die Kante loest den gemeldeten Punkt, dass fuenf der sechs alten
+    Flaechentoene zu dicht am Papierton lagen. Sie steht AUF dem Papier statt
+    darin.
+
+    Gemessen an drei Stellen, weil die Zusage an drei Stellen brechen kann:
+    die Zeile traegt die Klasse, die Klasse setzt eine eigene Farbe, und die
+    Kante liest sie.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _alle_sichtbar(self):
+        return self.client.get(
+            reverse("objektliste"), {"status": [s.value for s in Status]}
+        )
+
+    def test_jede_zeile_traegt_ihre_statusklasse(self):
+        """Am ELEMENT gemessen und ueber die MENGE der Zeilen.
+
+        Ueber die Menge, damit auch auffaellt, wenn alle Zeilen dieselbe
+        Klasse tragen - der Fall, den eine fest hineingeschriebene Klasse
+        erzeugte.
+        """
+        for status in Status:
+            Objekt.objects.create(url=f"https://x/{status}", titel=str(status), status=status)
+        zeilen = _klassen_von(self._alle_sichtbar(), "objekt")
+        self.assertEqual(
+            sorted(sorted(k) for k in zeilen),
+            sorted(sorted(["objekt", f"status-{s.value}"]) for s in Status),
+        )
+
+    def test_die_zeile_traegt_keine_stilangabe_mit_der_farbe(self):
+        """Der Entwurf setzt die Farbe als `style="--kante:…"` an der Zeile.
+
+        Das waere eine zweite Zuordnung zwischen Status und Farbe, diesmal in
+        der Vorlage, neben der im Stylesheet - und zwei Tabellen fuer dieselbe
+        Regel driften. Genau diese Falle hat das Projekt bei der Statusmarke
+        schon einmal umgangen.
+        """
+        Objekt.objects.create(url="https://x/1", status=Status.HEISSE_SPUR)
+        self.assertNotContains(self.client.get("/"), "style=")
+
+    def test_die_kante_liest_die_statusfarbe(self):
+        """Die Regel, die die Kante zeichnet, greift auf `--status` zu.
+
+        Ohne sie truege die Zeile ihre Klasse und saehe trotzdem aus wie jede
+        andere.
+        """
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index(".objekt::before {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--status", regel)
+        self.assertIn("background", regel)
+
+    def test_die_kante_hat_ueberhaupt_eine_breite(self):
+        """Eine Kante ohne Breite ist keine. Sie ist ein Pseudo-Element ohne
+        Inhalt; ohne `width` waere sie null Pixel breit und unsichtbar."""
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index(".objekt::before {") :]
+        regel = regel[: regel.index("}")]
+        self.assertRegex(regel, r"width:\s*[1-9]")
+
+    def test_die_kante_steht_ausserhalb_jedes_media_blocks(self):
+        """Sie gilt in beiden Fassungen. Stuende sie nur ab 48rem, faehle am
+        Handy genau die Unterscheidung, die diese Runde herstellt - und das
+        Handy ist das Geraet, an dem die Liste unterwegs gelesen wird."""
+        quelle = self._quelle()
+        start = quelle.index("@media (min-width: 48rem)")
+        offen = quelle.index("{", start)
+        tiefe = 0
+        for stelle in range(offen, len(quelle)):
+            if quelle[stelle] == "{":
+                tiefe += 1
+            elif quelle[stelle] == "}":
+                tiefe -= 1
+                if tiefe == 0:
+                    block = quelle[offen : stelle + 1]
+                    break
+        else:
+            raise AssertionError("Der Media-Block ist nicht geschlossen.")
+        self.assertIn(".objekt::before {", re.sub(r"\s+", " ", quelle.replace(block, "")))
+
+    def test_je_status_eine_andere_kante(self):
+        """Sechs Klassen auf dieselbe Farbe waeren sechs gleiche Kanten.
+
+        Die Werte werden aus der Datei GELESEN, nicht hier wiederholt - eine
+        zweite Liste driftet von der ersten weg.
+        """
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        variablen = dict(
+            re.findall(r"(--status-[a-z_]+):\s*(#[0-9A-Fa-f]{6})", self._quelle())
+        )
+        gesetzt = []
+        for status in Status:
+            regel = quelle[quelle.index(f".status-{status.value} {{") :]
+            regel = regel[: regel.index("}")]
+            treffer = re.search(r"--status:\s*var\((--status-[a-z_]+)\)", regel)
+            self.assertIsNotNone(treffer, f"{status.value} setzt keine Kantenfarbe")
+            gesetzt.append(variablen[treffer.group(1)].lower())
+        self.assertEqual(len(set(gesetzt)), len(Status.choices))
+
+    def test_die_pille_liest_dieselbe_farbe(self):
+        """Eine Farbe, zwei Traeger. Zwei getrennte Angaben koennten
+        auseinanderlaufen, und dann truege eine Zeile eine gruene Kante und
+        eine blaue Pille."""
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index(".statusmarke {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--status", regel)
+
+    def test_die_objektansicht_traegt_dieselbe_kante(self):
+        """`04`: die Ansicht uebernimmt die Bausteine, damit Liste und Ansicht
+        nicht auseinanderlaufen."""
+        objekt = Objekt.objects.create(url="https://x/1", status=Status.BESICHTIGUNG)
+        klassen = _klassen_von(
+            self.client.get(reverse("objekt", args=[objekt.pk])), "kopfblock"
+        )
+        self.assertEqual(klassen, [["kopfblock", "status-besichtigung"]])
+
+
+class SchriftTests(TestCase):
+    """Zeuge 12: die Schrift kommt aus `static/`, nicht von einem fremden Server.
+
+    Das Projekt speichert bewusst keine Kontaktdaten und haelt sich
+    datenschutzrechtlich zurueck. Ein Schriftabruf bei jedem Seitenaufruf
+    uebermittelte bei jedem Aufruf die Adresse des Abrufenden an einen
+    Dritten - genau das, was hier nicht stattfinden soll. Der Entwurf laedt
+    Archivo von Google Fonts; das ist die eine Stelle, an der ihm
+    ausdruecklich nicht gefolgt wird.
+
+    Gemessen an drei Seiten: die Datei ist wirklich da, das Stylesheet nennt
+    nur sie, und keine Vorlage verweist nach draussen.
+    """
+
+    #: Wo die Datei liegt. Ausgeschrieben und nicht aus dem Stylesheet
+    #: abgeleitet: der Zeuge soll melden, wenn sie umzieht, und nicht
+    #: stillschweigend mitwandern.
+    DATEI = "schriften/archivo-variabel.woff2"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _font_face(self):
+        quelle = re.sub(r"/\*.*?\*/", "", self._quelle(), flags=re.S)
+        bloecke = re.findall(r"@font-face\s*\{([^{}]*)\}", quelle)
+        self.assertNotEqual(bloecke, [], "keine @font-face-Regel im Stylesheet")
+        return bloecke
+
+    # --- die Datei ist da -------------------------------------------------
+
+    def test_die_schriftdatei_ist_ueber_die_static_konfiguration_auffindbar(self):
+        """Der eigentliche Zeuge. Eine Pruefung auf die Zeichenkette im
+        Stylesheet bliebe gruen, wenn die Datei fehlte - die Seite faellt dann
+        stumm auf den Systemstack zurueck, und niemandem meldet sich etwas."""
+        self.assertIsNotNone(finders.find(self.DATEI))
+
+    def test_die_datei_ist_wirklich_eine_woff2(self):
+        """Riegel gegen eine leere oder falsch benannte Datei.
+
+        `woff2` beginnt mit der Signatur `wOF2`. Eine `ttf` unter diesem Namen
+        laedt der Browser nicht, und die Seite faellt wieder stumm zurueck.
+        """
+        with open(finders.find(self.DATEI), "rb") as datei:
+            self.assertEqual(datei.read(4), b"wOF2")
+
+    def test_das_stylesheet_verweist_auf_genau_diese_datei(self):
+        self.assertIn(self.DATEI, "".join(self._font_face()))
+
+    # --- kein fremder Server ---------------------------------------------
+
+    def test_keine_schriftquelle_zeigt_auf_eine_fremde_domain(self):
+        """Zeuge 12, Kern. Gemessen an JEDER `url()` des Stylesheets, nicht
+        nur an denen in `@font-face`: ein Hintergrundbild von einem fremden
+        Server waere derselbe Vorgang."""
+        quelle = re.sub(r"/\*.*?\*/", "", self._quelle(), flags=re.S)
+        for ziel in re.findall(r"url\(\s*['\"]?([^'\")]+)", quelle):
+            with self.subTest(ziel=ziel):
+                self.assertFalse(ziel.startswith(("http:", "https:", "//")), ziel)
+
+    def test_das_stylesheet_importiert_nichts(self):
+        """`@import` ist der zweite Weg, von dem aus ein fremder Server
+        nachgeladen wird - und der leisere."""
+        self.assertNotIn("@import", re.sub(r"/\*.*?\*/", "", self._quelle(), flags=re.S))
+
+    def test_keine_vorlage_verweist_auf_einen_fremden_server(self):
+        """`<link>` und `preconnect` im Kopf, wie der Entwurf sie hat.
+
+        Geprueft werden ALLE Vorlagen des Projekts, nicht nur `basis.html`:
+        eine einzelne Seite koennte sich ihren eigenen Kopf bauen.
+        """
+        for vorlage in (settings.BASE_DIR / "templates").rglob("*.html"):
+            with self.subTest(vorlage=vorlage.name):
+                # Kommentare heraus: sie nennen den Entwurf und das, was
+                # bewusst NICHT gebaut wurde - `preconnect` und Google Fonts
+                # stehen namentlich darin. Ein Zeuge, der einen Kommentar
+                # misst, misst gar nichts.
+                inhalt = re.sub(
+                    r"{% comment %}.*?{% endcomment %}", "", vorlage.read_text(encoding="utf-8"), flags=re.S
+                )
+                inhalt = re.sub(r"{#.*?#}", "", inhalt)
+                for tag in re.findall(r"<link[^>]*>", inhalt):
+                    self.assertNotRegex(tag, r'href="(https?:)?//')
+                    self.assertNotIn("preconnect", tag)
+
+    def test_die_ausgelieferte_seite_traegt_keinen_fremden_verweis(self):
+        """Am gerenderten HTML gemessen, nicht nur an den Dateien."""
+        inhalt = self.client.get("/").content.decode()
+        for tag in re.findall(r"<link[^>]*>", inhalt):
+            with self.subTest(tag=tag):
+                self.assertNotRegex(tag, r'href="(https?:)?//')
+
+    def test_es_gibt_ueberhaupt_einen_link_im_kopf(self):
+        """Riegel gegen den Zeugen darueber im Vakuum: faende er gar kein
+        `<link>`, bliebe er gruen, auch wenn das Stylesheet fehlte."""
+        self.assertRegex(self.client.get("/").content.decode(), r"<link[^>]*stylesheet")
+
+    # --- was die Schrift leisten muss ------------------------------------
+
+    def test_die_datei_deckt_die_vier_schnitte_ab(self):
+        """400, 500, 600, 700 - aus EINER variablen Datei.
+
+        Der Bereich in `font-weight` ist die Zusage: klemmte ihn jemand auf
+        `400`, faenden die drei anderen Schnitte nicht mehr statt, und die
+        Oberflaeche saehe ueberall gleich schwer aus.
+        """
+        block = "".join(self._font_face())
+        treffer = re.search(r"font-weight:\s*(\d+)\s+(\d+)", block)
+        self.assertIsNotNone(treffer, f"kein Gewichtsbereich in: {block}")
+        von, bis = int(treffer.group(1)), int(treffer.group(2))
+        for gewicht in (400, 500, 600, 700):
+            with self.subTest(gewicht=gewicht):
+                self.assertLessEqual(von, gewicht)
+                self.assertGreaterEqual(bis, gewicht)
+
+    def test_die_schrift_faellt_auf_den_systemstack_zurueck(self):
+        """Faellt die Datei aus, sieht die Oberflaeche anders aus und
+        funktioniert unveraendert. Ohne Rueckfall staende sie in der
+        Standardschrift des Browsers - und die traegt keine Tabellenziffern."""
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index("body {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("Archivo", regel)
+        self.assertIn("system-ui", regel)
+
+    def test_das_nachladen_blockiert_die_seite_nicht(self):
+        """`font-display: swap`. Ohne ihn zeigt der Browser bis zu drei
+        Sekunden lang gar keinen Text - am Handy im Zug eine leere Seite."""
+        self.assertIn("font-display: swap", "".join(self._font_face()))
+
+    def test_die_ziffern_stehen_untereinander(self):
+        """Tabellenziffern auf dem ganzen Dokument.
+
+        Ohne sie stehen 750.000 und 89.500 nicht untereinander, und genau das
+        Untereinander ist der Zweck des Werkzeugs. Am `body` und nicht an der
+        Liste: die Zahlen stehen inzwischen an vier Stellen, und eine spaeter
+        dazukommende waere sonst wieder vergessen.
+        """
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        regel = quelle[quelle.index("body {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("font-variant-numeric: tabular-nums", regel)
+
+    # Hier sollte ein Zeuge stehen, der prueft, dass die Schriftdatei das
+    # Merkmal `tnum` WIRKLICH fuehrt. `font-variant-numeric: tabular-nums` ist
+    # nur eine Bitte an die Schrift; fuehrt die Datei das Merkmal nicht, steht
+    # die Regel da und die Ziffern stehen trotzdem nicht untereinander.
+    #
+    # Er ist nicht baubar, ohne eine Abhaengigkeit dazuzunehmen. In einer
+    # `woff2` sind auch die Tabellenverzeichnisse brotli-gepackt; die
+    # Merkmalskennungen stehen nirgends im Klartext. Sie zu lesen braucht
+    # einen Brotli-Entpacker und einen Schriftparser - zwei Abhaengigkeiten
+    # fuer einen Zeugen, und das Projekt haengt bislang an dreien insgesamt.
+    #
+    # Geprueft wurde es EINMAL, beim Beschaffen der Datei, mit `fontTools` in
+    # einer weggeworfenen Umgebung: die Achse `wght` laeuft von 100 bis 900,
+    # die Merkmalsliste enthaelt `tnum`, und alle Zeichen der spanischen und
+    # deutschen Ortsnamen sind belegt. Das steht im Bericht und bleibt
+    # unbewacht - wer die Datei austauscht, muss es erneut pruefen.
+
+
+class ZahlenblockTests(TestCase):
+    """Was ueber die Zahlen der Zeile festgelegt ist.
+
+    Kein Test misst Abstand, Kontrast oder Rhythmus - diese hier halten die
+    Festlegungen, die sich still zuruecknehmen liessen.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        Objekt.objects.create(
+            url="https://x/1",
+            titel="Finca",
+            aktueller_preis=Decimal("199000"),
+            wohnflaeche=Decimal("100"),
+        )
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+
+    def _regel(self, waehler):
+        quelle = re.sub(r"\s+", " ", self._quelle())
+        self.assertIn(f"{waehler} {{", quelle, f"{waehler} fehlt im Stylesheet")
+        rest = quelle[quelle.index(f"{waehler} {{") :]
+        return rest[: rest.index("}")]
+
+    def _angaben(self):
+        """`{Etikett: Klassenliste}` fuer jede Angabe der EINZIGEN Listenzeile.
+
+        Ueber das ETIKETT geschluesselt und nicht ueber die Stellung im Block:
+        eine dazwischengeschobene Angabe verschoebe jede Positionszahl, das
+        Wort nicht. Und ueber die Klassenliste des Elements, nicht ueber eine
+        `class="…"`-Zeichenkette - ein erweiterter Klassenname lief in diesem
+        Projekt schon einmal an einem Zeugen vorbei.
+        """
+        inhalt = self.client.get("/").content.decode()
+        gefunden = {}
+        for klassen, block in re.findall(
+            r'<div class="(zahl[^"]*)">(.*?)</div>', inhalt, re.S
+        ):
+            etikett = re.search(r'<span class="etikett">([^<]*)</span>', block)
+            self.assertIsNotNone(etikett, f"Angabe ohne Etikett: {block}")
+            gefunden[etikett.group(1)] = klassen.split()
+        return gefunden
+
+    def test_der_parser_findet_ueberhaupt_alle_vier_angaben(self):
+        """Riegel gegen die Zeugen darunter im Vakuum.
+
+        Faende die Ableitung nichts, waere `assertNotIn("haupt", ...)` von
+        selbst gruen - ein Zeuge, der eine leere Liste durchsucht, misst
+        nichts.
+        """
+        self.assertEqual(
+            sorted(self._angaben()), ["Grundstück", "Kaufpreis", "Wohnfläche", "je m²"]
+        )
+
+    def test_der_kaufpreis_ist_die_groesste_zahl_der_zeile(self):
+        """UMGEDREHT am 05.09., und das ist eine ausdrueckliche Entscheidung.
+
+        Bis dahin trug "je m²" die Hauptgroesse: so setzt es der Entwurf, und
+        bei Widerspruch zwischen Beschreibung und Datei galt die Datei. Die
+        Entscheidung ist anders gefallen - der Kaufpreis ist die Zahl, an der
+        eine Zeile haengenbleibt.
+
+        Die Liste ist damit ausserdem mit der Objektansicht einig: dort steht
+        der Kaufpreis schon immer groesser als alles andere auf der Seite.
+
+        Die Reihenfolge der vier Angaben bleibt unveraendert; nur die
+        Gewichtung wandert.
+        """
+        self.assertIn("haupt", self._angaben()["Kaufpreis"])
+
+    def test_der_quadratmeterpreis_steht_daneben_in_normaler_groesse(self):
+        """Die Gegenrichtung, und sie braucht einen eigenen Zeugen.
+
+        Der Zeuge darueber faellt zwar auch, wenn die Hauptgroesse zurueck auf
+        "je m²" wandert - aber nicht, wenn sie versehentlich an BEIDEN
+        Angaben steht. Dann gaebe es zwei gleich grosse Zahlen und keine
+        Hierarchie mehr.
+        """
+        self.assertNotIn("haupt", self._angaben()["je m²"])
+
+    def test_genau_eine_angabe_traegt_die_hauptgroesse(self):
+        """Zwei Hauptzahlen sind keine Hierarchie, null sind auch keine."""
+        haupt = [name for name, klassen in self._angaben().items() if "haupt" in klassen]
+        self.assertEqual(haupt, ["Kaufpreis"])
+
+    def test_die_hauptzahl_ist_wirklich_groesser_gesetzt(self):
+        """Die Klasse allein macht nichts groesser."""
+        regel = self._regel(".zahl.haupt .wert")
+        treffer = re.search(r"font-size:\s*([\d.]+)rem", regel)
+        self.assertIsNotNone(treffer, regel)
+        gross = float(treffer.group(1))
+        normal = re.search(r"font-size:\s*([\d.]+)rem", self._regel(".zahl .wert"))
+        self.assertIsNotNone(normal, "keine Groesse an `.zahl .wert`")
+        self.assertGreater(gross, float(normal.group(1)))
+
+    def test_kein_geldbetrag_bricht_um(self):
+        """Weder zwischen Zahl und Waehrungszeichen noch innerhalb der Zahl.
+
+        Gehalten von `white-space: nowrap` und nicht von geschuetzten
+        Leerzeichen im Markup: die stuenden als unsichtbare Zeichen in jedem
+        gespeicherten Auszug und in jedem Zeugen.
+
+        An der ANGABE gemessen und nicht am Block. Der Block muss umbrechen
+        duerfen: stand `nowrap` an ihm, lief die Reihe am Handy aus ihrer
+        Spalte heraus, und der Preis je m² - die groesste Zahl der Zeile -
+        war rechts abgeschnitten. Aufgefallen ist das bei der Sichtpruefung
+        im Browser; ein Zeuge auf den Block haette es festgeschrieben.
+
+        An `.zahl` UND an `.wert`: die aeussere Angabe allein genuegte,
+        solange nichts darin sie ueberschreibt - und genau das kann passieren.
+        """
+        for waehler in (".zahl", ".zahl .wert", ".preisaenderung"):
+            with self.subTest(waehler=waehler):
+                self.assertIn("white-space: nowrap", self._regel(waehler))
+
+    def test_eine_fehlende_zahl_steht_als_gedankenstrich(self):
+        """Nicht als Luecke - sonst rutschen die Werte gegeneinander, und eine
+        leere Stelle liest sich ausserdem wie eine Null."""
+        Objekt.objects.all().delete()
+        Objekt.objects.create(url="https://x/2", titel="Ohne Zahlen")
+        inhalt = self.client.get("/").content.decode()
+        block = inhalt[inhalt.index('<div class="zahlen">') :]
+        # Vier Angaben, vier Striche.
+        self.assertEqual(block[: block.index('<div class="votum">')].count("—"), 4)
+
+    def test_der_gedankenstrich_ist_gedaempft(self):
+        """Man muss SEHEN, dass nichts da ist - und nicht, dass dort etwas
+        steht."""
+        Objekt.objects.all().delete()
+        Objekt.objects.create(url="https://x/2", titel="Ohne Zahlen")
+        klassen = _klassen_von(self.client.get("/"), "fehlt")
+        self.assertEqual(len(klassen), 4)
+        self.assertIn("var(--linie-stark)", self._regel(".zahl .wert.fehlt"))
+
+
+class TitelOhneTitelTests(TestCase):
+    """Objekte ohne Titel zeigen die gekuerzte URL - gedaempft, nicht fett.
+
+    Sie sind erkennbar unfertig, und ein fett gesetzter Link auf eine Adresse
+    sieht aus wie eine Angabe.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _titelklassen(self):
+        return _klassen_von(self.client.get("/"), "titel")
+
+    def test_ohne_titel_traegt_der_verweis_die_nackte_form(self):
+        Objekt.objects.create(url="https://x/nur-ein-link")
+        self.assertEqual(self._titelklassen(), [["titel", "nackt"]])
+
+    def test_mit_titel_traegt_er_sie_nicht(self):
+        """Riegel: sonst saehe jede Zeile unfertig aus."""
+        Objekt.objects.create(url="https://x/1", titel="Finca bei Ronda")
+        self.assertEqual(self._titelklassen(), [["titel"]])
+
+    def test_die_nackte_form_ist_gedaempft_und_ungefettet(self):
+        quelle = re.sub(r"\s+", " ", (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8"))
+        regel = quelle[quelle.index(".titel.nackt {") :]
+        regel = regel[: regel.index("}")]
+        self.assertIn("var(--gedaempft)", regel)
+        self.assertIn("font-weight: 400", regel)
+
+    def test_der_titel_ist_sonst_gefettet(self):
+        """Riegel unter dem Zeugen darueber: waere der Titel ohnehin nicht
+        gefettet, saegte die nackte Form nichts aus."""
+        quelle = re.sub(r"\s+", " ", (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8"))
+        regel = quelle[quelle.index(".titel {") :]
+        regel = regel[: regel.index("}")]
+        treffer = re.search(r"font-weight:\s*(\d+)", regel)
+        self.assertIsNotNone(treffer, regel)
+        self.assertGreater(int(treffer.group(1)), 400)
+
+    def test_die_url_steht_unveraendert_da(self):
+        """Gekuerzt wird im Stylesheet und nicht im Markup.
+
+        Der Entwurf zeigt "immowelt.de/expose/ecd16e27-fa4b-…" - ohne Schema
+        und mit Auslassungszeichen. Das Auslassungszeichen kommt aus
+        `text-overflow`; das Schema wegzuschneiden waere eine zweite Formel
+        neben `__str__`, und zwei Formeln fuer eine Regel driften.
+        """
+        Objekt.objects.create(url="https://x/nur-ein-link")
+        self.assertContains(self.client.get("/"), ">https://x/nur-ein-link</a>")
+
+
+class VotumpunkteTests(ListenTestBasis):
+    """Die Punktreihe: eine je Person, plus der bisherige Text.
+
+    Sie steht nur, wo der Zaehlstand ohnehin steht - sie IST der Zaehlstand in
+    anderer Form. Das haelt `VerdecktesVotumInDerListeTests`; hier geht es
+    darum, dass sie richtig ist.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.andere = [
+            Person.objects.create_user(f"person{n}", first_name=f"P{n}") for n in range(4)
+        ]
+        self.objekt = self._objekt(titel="Zur Abstimmung")
+
+    def _punkte(self):
+        zeilen = VotumzellenParser.nach_href(self.client.get("/"))
+        return zeilen[reverse("objekt", args=[self.objekt.pk])]["punkte"]
+
+    def _votum(self, person, wertung):
+        Votum.objects.update_or_create(
+            objekt=self.objekt, person=person, defaults={"wertung": wertung}
+        )
+
+    def test_ein_punkt_je_person(self):
+        """Fuenf aktive Personen, fuenf Punkte - auch wenn nur einer gestimmt hat."""
+        self._votum(self.person, Wertung.DAFUER)
+        self.assertEqual(len(self._punkte()), Person.objects.filter(is_active=True).count())
+
+    def test_die_abgegebenen_stimmen_stehen_vorn(self):
+        self._votum(self.person, Wertung.DAFUER)
+        self._votum(self.andere[0], Wertung.RAUS)
+        self.assertEqual(self._punkte(), ["dafuer", "raus", "offen", "offen", "offen"])
+
+    def test_die_reihenfolge_verraet_nicht_wer_wann_gestimmt_hat(self):
+        """Die Punkte stehen nach WERTUNG sortiert, nicht nach Zeitpunkt.
+
+        Eine zeitliche Reihenfolge waere eine Angabe ueber Personen: wer
+        zuerst gestimmt hat, liesse sich bei fuenf Leuten aus zwei Aufrufen
+        ablesen. Wer wie gestimmt hat, steht in der Objektansicht - und dort
+        erst nach der Freischaltung.
+        """
+        self._votum(self.person, Wertung.RAUS)
+        self._votum(self.andere[0], Wertung.DAFUER)
+        # Zuerst "raus", dann "dafür" - die Reihe zeigt trotzdem "dafür" vorn.
+        self.assertEqual(self._punkte()[:2], ["dafuer", "raus"])
+
+    def test_die_punkte_stimmen_mit_dem_text_ueberein(self):
+        """Zwei Traeger derselben Auskunft. Liefen sie auseinander, saehe man
+        drei Punkte und laese "2 dafür"."""
+        for person, wertung in (
+            (self.person, Wertung.DAFUER),
+            (self.andere[0], Wertung.DAFUER),
+            (self.andere[1], Wertung.ANSCHAUEN),
+        ):
+            self._votum(person, wertung)
+        zeile = VotumzellenParser.nach_href(self.client.get("/"))[
+            reverse("objekt", args=[self.objekt.pk])
+        ]
+        self.assertEqual(zeile["text"], "2 dafür · 1 anschauen · 2 offen")
+        self.assertEqual(
+            zeile["punkte"], ["dafuer", "dafuer", "anschauen", "offen", "offen"]
+        )
+
+    def test_mehr_stimmen_als_aktive_personen_ergeben_keine_negativen_punkte(self):
+        """Wer nach seinem Votum stillgelegt wurde, zaehlt nicht mehr zu den
+        aktiven Personen - sein Votum steht aber weiter da."""
+        for person in [self.person, *self.andere]:
+            self._votum(person, Wertung.DAFUER)
+        Person.objects.filter(pk=self.andere[0].pk).update(is_active=False)
+        self.assertEqual(self._punkte(), ["dafuer"] * 5)
+
+    def test_jeder_punkt_traegt_ein_zeichen(self):
+        """Farbe allein traegt keine Bedeutung.
+
+        Wer die Toene nicht unterscheidet, saehe fuenf gleiche Kreise. Der
+        offene Punkt traegt ausdruecklich KEINES - ein leerer Kreis ist die
+        Aussage.
+        """
+        self._votum(self.person, Wertung.DAFUER)
+        inhalt = self.client.get("/").content.decode()
+        block = inhalt[inhalt.index('<span class="stimmen">') :]
+        block = block[: block.index("</span></span>") + len("</span></span>")]
+        for name, _wertung, _wort, zeichen in views.VOTUM_ZAEHLUNGEN:
+            with self.subTest(name=name):
+                self.assertNotEqual(zeichen, "")
+
+    def test_jeder_punkt_traegt_seine_beschriftung_im_title(self):
+        """Das Zeichen allein sagt nicht, was es heisst."""
+        self._votum(self.person, Wertung.DAFUER)
+        inhalt = self.client.get("/").content.decode()
+        self.assertIn('title="dafür"', inhalt)
+        self.assertIn('title="offen"', inhalt)

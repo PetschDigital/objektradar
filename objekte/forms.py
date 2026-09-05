@@ -141,6 +141,37 @@ SUCHSPALTEN = ("titel", "ort", "region", "beschreibung")
 #: aus - wer nur blaettert oder sortiert, filtert nicht.
 KEINE_FILTER = frozenset({"sortierung", "seite"})
 
+#: Was in der Kopfzeile des Filterblocks hinter dem Status steht, wenn sonst
+#: nichts eingeschraenkt ist. Nicht leer: eine Kopfzeile, die nur "4 Status"
+#: sagt, laesst offen, ob dahinter noch etwas kommt.
+SONST_ALLE = "sonst alle"
+
+
+class StatusFeldbindung(forms.BoundField):
+    """Die Marken zeigen die WIRKSAME Auswahl, nicht die aus der Adresse gelesene.
+
+    Nachgetragen am 04.09., und der Fehlstand war aelter als diese Runde.
+
+    Ohne `?status=` in der Adresse filtert die Liste auf die Vorbelegung -
+    vier der sechs Status. Das Formular ist aber GEBUNDEN, und ein gebundenes
+    Feld rendert aus den Daten und nicht aus `initial`. In der Adresse steht
+    nichts, also stand kein Haken. Die Liste blendete "raus" und "vom Markt"
+    aus, und der Filterblock zeigte sechs leere Kaestchen dazu.
+
+    Das fiel nicht auf, solange es sechs Kaestchen unter fuenf Textfeldern
+    waren. Seit die Kopfzeile "4 Status" sagt und die angehakten Marken
+    farblich abgesetzt sind, widerspricht sich der Block sichtbar: die Zeile
+    nennt vier, keine Marke ist abgesetzt.
+
+    Geaendert wird ausschliesslich, was DASTEHT. `data` bleibt unangetastet -
+    daran haengen `ist_gefiltert()` und die Frage, ob der Block aufklappt, und
+    beide sollen weiterhin lesen, was wirklich in der Adresse stand. Gefiltert
+    wird unveraendert nach `statusauswahl()`; genau die wird hier gezeigt.
+    """
+
+    def value(self):
+        return self.form.statusauswahl()
+
 
 class StatusAuswahlfeld(forms.MultipleChoiceField):
     """Wie `MultipleChoiceField`, aber leere Eintraege fallen heraus.
@@ -154,6 +185,14 @@ class StatusAuswahlfeld(forms.MultipleChoiceField):
 
     def to_python(self, value):
         return [wert for wert in super().to_python(value) if wert != ""]
+
+    def get_bound_field(self, form, field_name):
+        """Der vorgesehene Weg, ein Feld anders binden zu lassen als die anderen.
+
+        Kein Eingriff in die Formklasse und keine zweite Feldliste: das Feld
+        bringt seine Bindung selbst mit, und wer es benutzt, bekommt sie.
+        """
+        return StatusFeldbindung(form, self, field_name)
 
 
 class ObjektFilterForm(forms.Form):
@@ -268,3 +307,68 @@ class ObjektFilterForm(forms.Form):
         sonst stuende die leere Liste ohne Erklaerung da.
         """
         return any(name not in KEINE_FILTER for name in self.data)
+
+    # --- was der zugeklappte Filterblock ueber sich sagt -------------------
+
+    def _gesetzt(self, name):
+        """Ob dieses Feld einen Wert traegt. Eine 0 ist einer.
+
+        Nicht `if not wert`: `preis_von=0` ist ein gesetzter Filter, und ein
+        leerer Text ist keiner. Dieselbe Unterscheidung wie in `filtern()` -
+        und aus demselben Grund an EINER Stelle, nicht an zweien.
+        """
+        wert = getattr(self, "cleaned_data", {}).get(name)
+        return wert is not None and wert != "" and wert != []
+
+    def weicht_ab(self):
+        """Ob ein Filter von der VORBELEGUNG abweicht.
+
+        Nicht dasselbe wie `ist_gefiltert()`, und beide werden gebraucht.
+        `ist_gefiltert()` fragt, ob ueberhaupt ein Parameter in der Adresse
+        steht - daran haengt die Trefferanzeige. Hier geht es um die Frage,
+        ob gerade etwas VERBORGEN wird; daran haengt, ob der Filterblock
+        aufgeklappt dasteht.
+
+        Der Unterschied ist nicht theoretisch. Ein Blaetterlink traegt den
+        vorbelegten Statusfilter vollstaendig mit; danach steht `status`
+        viermal in der Adresse, `ist_gefiltert()` ist wahr - und trotzdem ist
+        nichts eingeschraenkt, was nicht ohnehin eingeschraenkt waere. Der
+        Block bliebe zu, und das ist richtig so: eine zugeklappte Kopfzeile
+        ueber einer Voreinstellung verschweigt nichts.
+
+        Umgekehrt ist `?suche=` ein anwesender, aber leerer Parameter. Er
+        schraenkt nicht ein und klappt den Block deshalb nicht auf.
+
+        Der Status wird als MENGE verglichen und nicht der Reihe nach: die
+        Vorbelegung kommt in der Reihenfolge der Auswahlliste, die Adresse in
+        der Reihenfolge, in der die Kaestchen abgesendet wurden.
+        """
+        self.is_valid()  # fuellt `cleaned_data`; wiederholte Aufrufe kosten nichts
+        if set(self.statusauswahl()) != set(STATUS_VORBELEGUNG):
+            return True
+        return any(self._gesetzt(name) for name in self.fields if name != "status")
+
+    def zusammenfassung(self):
+        """Was gerade gilt, als eine kurze Zeile fuer die Kopfzeile des Blocks.
+
+        Der Block ist zugeklappt. Ohne diese Zeile muesste man ihn oeffnen, um
+        ueberhaupt zu sehen, ob eingeschraenkt ist - und dann waere das
+        Zuklappen ein Verlust statt einer Ordnung.
+
+        Der Status steht IMMER da, auch in der Vorbelegung: er blendet dort
+        zwei der sechs Werte aus, und das ist eine Einschraenkung, nur eine
+        erwartete. Die uebrigen Felder stehen mit ihrer BESCHRIFTUNG und nicht
+        mit ihrem Wert - eine Freitextsuche kann beliebig lang sein, und die
+        Zeile soll eine Zeile bleiben.
+
+        ABGELEITET aus den Feldern des Formulars. Eine abgeschriebene Liste
+        driftete weg, und ein spaeter ergaenztes Feld fehlte still.
+        """
+        self.is_valid()
+        teile = [f"{len(self.statusauswahl())} Status"]
+        weitere = [
+            str(self.fields[name].label)
+            for name in self.fields
+            if name != "status" and self._gesetzt(name)
+        ]
+        return " · ".join(teile + (weitere or [SONST_ALLE]))

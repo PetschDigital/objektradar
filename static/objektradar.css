@@ -1,26 +1,67 @@
 /* Objektradar - handgeschrieben, mobil zuerst.
-   Kein Framework, kein Build-Schritt, keine Webfonts. Webfonts fallen
-   zusaetzlich aus, weil ein Nachladen von fremden Servern eine
-   Datenschutzfrage aufwirft, die dieses Werkzeug nicht braucht.
+   Kein Framework, kein Build-Schritt.
+
+   EINE Webschrift seit dem 04.09., und sie liegt in `static/`. Nachgeladen
+   wird nichts von fremden Servern - die Datenschutzfrage, die das aufwuerfe,
+   braucht dieses Werkzeug nicht, und sie war der Grund, warum es bis hierher
+   gar keine Schrift gab. Selbst ausgeliefert stellt sie sich nicht.
 
    Ein Arbeitsgeraet fuer fuenf Personen, die Zahlen nebeneinanderlegen. Es
    soll ruhig sein und Zahlen lesbar machen. Alles, was Farbe traegt, traegt
    Bedeutung. */
 
+/* --- Die Schrift ---------------------------------------------------------
+   Archivo, variabel, in EINER Datei. Die Achse `wght` laeuft von 100 bis 900;
+   gebraucht werden 400, 500, 600 und 700, und alle vier kommen aus derselben
+   Datei. Vier feste Schnitte waeren vier Dateien und vier Abrufe gewesen.
+
+   `font-display: swap`: bis die Datei da ist, steht der Text im Systemstack.
+   Sichtbar bleibt er also von der ersten Zehntelsekunde an - eine Liste, die
+   erst nach dem Schriftabruf Buchstaben zeigt, ist am Handy im Zug eine
+   leere Seite.
+
+   Der Systemstack steht dahinter und bleibt der Rueckfall. Faellt die Datei
+   aus, sieht die Oberflaeche anders aus und funktioniert unveraendert.
+
+   `format("woff2-variations")` gibt es nicht mehr; `woff2` mit einem
+   `font-weight`-BEREICH ist die geltende Schreibweise fuer eine variable
+   Datei. Der Bereich ist der der Achse und nicht der der gebrauchten
+   Schnitte: eine engere Angabe klemmte die Achse ab. */
+@font-face {
+  font-family: "Archivo";
+  src: url("schriften/archivo-variabel.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --papier:    #FBFBF9;  /* Seitengrund */
-  --flaeche:   #FFFFFF;  /* Karten, Tabellenzeilen */
-  --linie:     #DEDCD5;  /* Rahmen, Trenner */
-  --text:      #22262B;  /* Fliesstext */
-  --gedaempft: #6B7178;  /* Nebenangaben, Spaltenkoepfe, "—" */
-  --akzent:    #2F5D62;  /* Links, Fokus, aktive Bedienelemente */
+  /* Die Grundtoene kommen aus dem Entwurf vom 04.09. Sie sind waermer als die
+     vorigen: der Grund ist gebrochen statt weiss, die Flaeche darauf eine
+     Toenung statt reinem Weiss. Weisse Karten auf fast weissem Grund
+     unterschieden sich um anderthalb Prozent Helligkeit - das war keine
+     Gliederung, sondern eine Behauptung. */
+  --papier:      #FBFAF8;  /* Seitengrund */
+  --flaeche:     #F2F0EA;  /* abgesetzte Bloecke, Zeile unter dem Zeiger */
+  --linie:       #E4E0D8;  /* Rahmen, Trenner */
+  --linie-stark: #C9C4B8;  /* Feldraender, Trennpunkte - sichtbar, nicht laut */
+  --text:        #1B1A17;  /* Fliesstext */
+  --gedaempft:   #6E695E;  /* Nebenangaben, Etiketten, "—" */
+  --akzent:      #1F4A42;  /* Links, Fokus, aktive Bedienelemente */
+  --akzent-hell: #E6EDEB;  /* Grund einer aktiven Marke */
 
   /* Die einzige laute Farbe. Reserviert fuer Preissenkungen - das wichtigste
-     Kaufsignal - und seit dem 02.09. an GENAU EINER Stelle verwendet:
+     Kaufsignal - und an GENAU EINER Stelle verwendet:
      `.preisaenderung.senkung`. Der Zeuge
      `test_die_signalfarbe_traegt_nur_die_preissenkung` haelt sie dort fest.
      Kaeme sie irgendwo sonst dazu, stumpfte sie genau das Signal ab, auf das
-     die Liste hinarbeitet. */
+     die Liste hinarbeitet.
+
+     UNVERAENDERT gegenueber dem Entwurf, der hier #B0402A vorschlaegt. Der
+     Unterschied waere fuer niemanden einer, der Abstand zu `--warnung` und
+     `--fehler` ist dagegen ausgerechnet und bezeugt. Eine Farbe zu
+     verschieben, deren Abstaende Zeugen halten, kostet mehr, als sie
+     einbrachte. */
   --signal:    #B4531F;
 
   /* Fehlermeldungen. Eigene Farbe, weil ein Tippfehler im Formular nicht
@@ -36,9 +77,9 @@
 
      GEDECKT, und die Aufmerksamkeit kommt aus der Buntheit statt aus der
      Lautstaerke: dieselbe Helligkeitsklasse wie der neutrale Balken (L* 48
-     gegen 47), aber die zehnfache Buntheit (C* 49 gegen 5). Der Balken wiegt
-     damit genau so viel wie der neutrale - er ist nur farbig, nicht dicker
-     und nicht dunkler.
+     gegen 44), aber ein Vielfaches der Buntheit (C* 49 gegen 7). Der Balken
+     wiegt damit genau so viel wie der neutrale - er ist nur farbig, nicht
+     dicker und nicht dunkler.
 
      Ein gedecktes Senfgelb und ausdruecklich KEIN Orange. Von `--signal`
      liegt es 35 dE entfernt, von `--fehler` 49; beide behalten ihre Bedeutung
@@ -48,15 +89,37 @@
   --warnung:   #8B7016;
 
   /* --- Die sechs Statusfarben -------------------------------------------
-     Sechs Status standen bis zum 03.09. alle in derselben Schrift. Sie werden
-     GESUCHT, nicht gelesen - dafuer braucht es Farbe.
+     UMGESTELLT am 04.09. Bis dahin waren es blasse Flaechen mit dunkler
+     Schrift darauf. Fuenf der sechs lagen damit so dicht am Papierton, dass
+     sie sich beim Ueberfliegen nicht mehr unterschieden - der gemeldete
+     Punkt, den diese Runde loest.
 
-     Gedeckte Hintergrundflaechen, keine grellen Toene: die Liste ist ein
-     Arbeitswerkzeug, kein Warnsystem. Die Schrift darauf bleibt `--text`;
-     jede der sechs Flaechen traegt sie mit mindestens 9,4:1 und damit weit
-     ueber der Schwelle. Ein blasser Text auf blasser Flaeche waere schlechter
-     als gar keine Farbe - deshalb liegt die Unterscheidung im GRUND und nicht
-     in der Schriftfarbe.
+     Jetzt sind es gesaettigte Flaechen mit WEISSER Schrift, und sie stehen an
+     zwei Stellen der Zeile: als Pille in der Unterzeile und als Kante links.
+     Die Kante ist der eigentliche Fortschritt: sie steht AUF dem Papier und
+     nicht darin, und drei Millimeter Farbe am Zeilenanfang sind auch aus
+     einem Meter Abstand noch zu unterscheiden.
+
+     Die Toene kommen aus dem Entwurf. VIER sind nachgerechnet worden und
+     weichen ab; jede Abweichung hat ihren Grund:
+
+     - `vom_markt` stand im Entwurf auf #9A958A. Weisse Schrift darauf traegt
+       2,98:1 und ist damit unter jeder Schwelle - die Pille waere unlesbar
+       gewesen. Jetzt #7C7362, weisse Schrift 4,68:1.
+     - `raus` stand auf #7A7368 und lag damit fast auf `vom_markt`. Es ist
+       jetzt das KUEHLE Grau, `vom_markt` das warme - die beiden zurueck-
+       genommenen Status unterscheiden sich in der Buntheit, nicht in der
+       Helligkeit. Anders geht es nicht: weisse Schrift verlangt bei beiden
+       eine Helligkeit unter L* 52, und darin liegt kein Platz fuer zwei
+       Stufen.
+     - `heisse_spur` stand auf #A85A16 und lag damit 9 dE von `--signal`. Das
+       ist derselbe Ton: die Pille "heisse Spur" haette in jeder Zeile
+       ausgesehen wie eine Preissenkung, und das Signal, auf das die Liste
+       hinarbeitet, waere stumpf geworden. Jetzt #8B5E22, ein tiefes Bronze -
+       24,8 dE von `--signal`, und weiterhin die einzige warme der sechs.
+     - `in_pruefung` stand auf #6B5B8A und lag 15 dE von `neu`. Jetzt #6B4E96,
+       25,6 dE - zwei benachbarte Stufen derselben Reihe muessen sich
+       unterscheiden lassen.
 
      KEIN ROT fuer "raus". Rot ist hier zweifach belegt - `--signal` fuer die
      Preissenkung, `--fehler` fuer Fehler. Ein rotes "raus" konkurrierte mit
@@ -65,31 +128,28 @@
 
      Die Reihe folgt dem Sinn und nicht der Helligkeit: neutral (neu) - leicht
      aktiv (in Pruefung) - deutlicher aktiv (Besichtigung) - am waermsten
-     (heisse Spur) - ausgegraut (raus) - fast neutral (vom Markt). Die
-     Aktivitaet waechst durch die Akzentfamilie, "heisse Spur" bricht als
-     einzige ins Warme aus. Sie ist ein Ocker und liegt von `--signal` mehr
-     als 55 dE entfernt - sie kann nicht mit ihm verwechselt werden.
+     (heisse Spur) - ausgegraut (raus) - fast neutral (vom Markt).
 
      Die Namen tragen den GESPEICHERTEN Schluessel, samt Unterstrich
      (`in_pruefung`, nicht `in-pruefung`). Das ist Absicht: die Vorlagen bauen
      ihre Klasse als `status-{{ objekt.status }}` und es gibt damit keine
      zweite Zuordnungstabelle zwischen Status und Farbe, die driften koennte. */
-  --status-neu:          #E4E8EE;  /* neutral, noch keine Aussage */
-  --status-in_pruefung:  #D5E6E3;  /* leicht aktiv */
-  --status-besichtigung: #B2D3CE;  /* deutlicher aktiv */
-  --status-heisse_spur:  #F0DBAF;  /* die waermste der sechs - NICHT --signal */
-  --status-raus:         #DAD9D2;  /* zurueckgenommen, ausgegraut */
-  --status-vom_markt:    #F3F2EC;  /* noch schwaecher als raus, fast neutral */
+  --status-neu:          #3E5C8A;  /* ruhiges Blau, noch keine Aussage */
+  --status-in_pruefung:  #6B4E96;  /* Violett - die Stufe daneben */
+  --status-besichtigung: #2F6B57;  /* Gruen, deutlicher aktiv */
+  --status-heisse_spur:  #8B5E22;  /* die waermste der sechs - NICHT --signal */
+  --status-raus:         #6A6E73;  /* kuehles Grau, zurueckgenommen */
+  --status-vom_markt:    #7C7362;  /* warmes Grau, die zweite zurueckgenommene */
 
   /* --- Abstandsskala ----------------------------------------------------
      Vier Stufen, jede die Verdopplung der vorigen. Abstaende werden
      AUSSCHLIESSLICH hieraus genommen. Die klaffenden Luecken im Filterblock
      kamen von Margins ohne System - eine handverlesene Zahl je Stelle
      ergibt keinen Rhythmus, sondern Zufall. Vier Stufen reichen fuer eine
-     Oberflaeche aus Leisten, Feldern und einer Tabelle; eine fuenfte waere
+     Oberflaeche aus Leisten, Feldern und einer Liste; eine fuenfte waere
      schon wieder eine Ausrede.
 
-     --eng    innerhalb einer Zeile: Beschriftung zu Feld, Pfeil zu Wort
+     --eng    innerhalb einer Zeile: Beschriftung zu Feld, Punkt zu Wort
      --knapp  zwischen Geschwistern, die zusammengehoeren (von/bis)
      --mittel zwischen Feldern eines Rasters, Innenabstand von Bloecken
      --weit   zwischen Bloecken, die getrennt gelesen werden */
@@ -102,26 +162,50 @@
      sicher zu treffen ist. Steht hier, damit sie nicht an vier Stellen
      einzeln gepflegt wird. */
   --griff:  2.75rem;
+
+  /* Die Eckenrundung des Entwurfs. Klein und ueberall gleich: eine
+     Oberflaeche mit drei verschiedenen Radien sieht zusammengesucht aus. */
+  --radius: 3px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
 
+/* Archivo mit dem Systemstack dahinter. Der Rueckfall ist kein Schmuck: bis
+   die Datei da ist (`font-display: swap`) und falls sie ausbleibt, traegt er
+   die ganze Oberflaeche.
+
+   TABELLENZIFFERN auf dem ganzen Dokument und nicht mehr nur auf der Liste.
+   Ohne sie stehen 750.000 und 89.500 nicht untereinander, und genau das
+   Untereinander ist der Zweck des Werkzeugs. Auf `body` gesetzt, weil die
+   Zahlen inzwischen an vier Stellen stehen - Liste, Objektansicht,
+   Preisverlauf, Loeschbestaetigung - und eine spaeter dazukommende Stelle
+   sonst wieder vergessen wuerde. Buchstaben aendern sich dadurch nicht.
+
+   `font-feature-settings` zusaetzlich zu `font-variant-numeric`: die
+   Kurzform allein greift in aelteren Fassungen nicht. */
 body {
   margin: 0;
   background: var(--papier);
   color: var(--text);
-  /* Systemstack. Kein Webfont, also auch kein Nachladen von fremden Servern. */
-  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 1rem/1.5 Archivo, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
 }
 
 /* Inhaltsrahmen. Die Objektliste darf breiter laufen als der Fliesstext einer
-   Objektansicht - deshalb 78rem und nicht die uebliche Lesebreite. */
-header,
+   Objektansicht - deshalb 70rem und nicht die uebliche Lesebreite. Der
+   Entwurf setzt 1120px; das ist dieselbe Spalte in anderer Einheit, und `rem`
+   waechst mit der eingestellten Schriftgroesse mit.
+
+   Die Kopfleiste steht seit dem 04.09. NICHT mehr in dieser Reihe: sie laeuft
+   ueber die volle Breite und traegt eine durchgehende Linie. Ihr Inhalt sitzt
+   in `.huelle` und damit in derselben Spalte wie alles darunter. */
+.huelle,
 .meldungen,
 main {
-  max-width: 78rem;
+  max-width: 70rem;
   margin-inline: auto;
   padding-inline: var(--mittel);
 }
@@ -145,43 +229,49 @@ hr { border: 0; border-top: 1px solid var(--linie); margin: var(--weit) 0 var(--
    Navigationspunkt, und solange beide gleich aussehen, liest man ihn als
    einen.
 
-   Mobil zuerst: der Werkzeugname nimmt die erste Zeile allein
-   (`flex: 0 0 100%`), Navigation und Konto stehen darunter. Ab 48rem stehen
-   alle drei nebeneinander - siehe den Media-Block am Ende. */
+   Die Leiste traegt ihre Linie ueber die volle Breite und ist ab 48rem am
+   oberen Rand FESTGEHEFTET. Unter 48rem nicht: dort bricht sie auf zwei
+   Zeilen um, und zwei festgeheftete Zeilen naehmen am Handy ein Sechstel der
+   Hoehe weg - auf dem Geraet, auf dem die Liste unterwegs gelesen wird. */
 header {
+  border-bottom: 1px solid var(--linie);
+  background: var(--papier);
+}
+
+header .huelle {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--knapp) var(--mittel);
   padding-block: var(--knapp);
-  border-bottom: 1px solid var(--linie);
 }
 
-header .marke { flex: 0 0 100%; }
+/* Der Werkzeugname ist das einzige Fette im Kopf. Die zweite Silbe traegt den
+   Akzent - kein Bild, keine Marke, nur eine Farbe an der Stelle, an der das
+   Wort ohnehin kippt. */
+header .marke {
+  flex: 0 0 100%;
+  font-weight: 700;
+  font-size: 1.0625rem;
+  letter-spacing: -.015em;
+  text-decoration: none;
+  color: var(--text);
+}
+header .marke span { color: var(--akzent); }
 
 header .navigation { display: flex; flex-wrap: wrap; gap: var(--mittel); }
+header .navigation a { font-size: .875rem; }
 
 /* Die Kontogruppe ist der Navigation UNTERGEORDNET: kleinere Schrift,
-   `--gedaempft`, und abgesetzt durch Abstand und eine senkrechte Linie.
-   Kein Mittelpunkt als Trenner - Gruppen trennt Raum, kein Satzzeichen.
-
-   `flex: 1 1 0` mit `min-width: 0`: die Gruppe nimmt den Rest der Zeile
-   neben der Navigation und bricht INNEN um. Mit `flex-basis: auto` waere
-   ihre Ausgangsbreite die ihres Inhalts - die passt neben "Lesezeichen"
-   nicht mehr in 375px, und die ganze Gruppe fiele in eine dritte Zeile.
-   Abgeschnitten wird dabei nichts, und die Leiste schiebt die Seite nicht
-   in die Breite. */
+   gedaempfte Farbe, eine Linie davor. Sie steht nicht in derselben Reihe wie
+   die Navigation, weil sie nicht dieselbe Sache ist. */
 header .konto {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  flex: 1 1 0;
-  min-width: 0;
   gap: var(--eng) var(--knapp);
-  padding-left: var(--knapp);
-  border-left: 1px solid var(--linie);
-  font-size: .875rem;
-  color: var(--gedaempft);
+  margin-left: auto;
+  font-size: .8125rem;
 }
 header .konto a { color: var(--gedaempft); }
 
@@ -191,15 +281,17 @@ header .person { color: var(--gedaempft); }
 header form { margin: 0; flex: 0 0 auto; }
 
 /* Im Kopf ist der Knopf Navigation, kein Bedienelement des Inhalts - deshalb
-   ruhig statt gefuellt. Die gefuellte Form gilt fuer `main` (siehe unten).
-   Er steht in der Kontogruppe und traegt deren Farbe und Groesse. */
+   sieht er aus wie ein Link und nicht wie ein Knopf. Ein gefuellter
+   "abmelden"-Knopf waere das lauteste Element der Seite und die seltenste
+   Handlung. */
 header button {
-  min-height: var(--griff);
+  font: inherit;
+  font-size: .8125rem;
+  min-height: 0;
   padding: 0;
   border: 0;
   background: none;
   color: var(--gedaempft);
-  font: inherit;
   text-decoration: underline;
   cursor: pointer;
 }
@@ -347,33 +439,94 @@ main input[type="url"] + button { margin-top: var(--knapp); }
    in diesem Werkzeug Bedeutung, und "hier tippt man zuerst" ist keine. */
 .einwurf input[type="url"] { font-size: 1.125rem; }
 
+/* --- Kopfzeile der Liste -------------------------------------------------
+   Ueberschrift und Trefferzahl in einer Zeile, an der Grundlinie
+   ausgerichtet. Die Zahl ist eine Nebenangabe und traegt deshalb weder die
+   Groesse noch die Farbe der Ueberschrift. */
+.zeile-oben {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--knapp) var(--mittel);
+  margin-bottom: var(--mittel);
+}
+.zeile-oben h1 { margin: 0; }
+
 /* --- Filter, Sortierung, Blaettern ---------------------------------------
-   Drei Leisten ueber und unter der Liste. Sie sind Bedienung, nicht Inhalt -
-   sie bleiben deshalb ruhig und treten hinter die Zahlen zurueck. */
+   Zwei Leisten ueber der Liste. Sie sind Bedienung, nicht Inhalt - sie
+   bleiben deshalb ruhig und treten hinter die Zahlen zurueck. */
+
+/* Der Filterblock klappt ueber `<details>`. Kein Skript: die Oberflaeche
+   kommt ohne aus, und `<details>` bringt Tastaturbedienung und die richtige
+   Ansage fuer Screenreader von sich aus mit.
+
+   Der Block ist gegen die Ergebnisliste abgesetzt, und zwar ueber die
+   FLAECHE. Eine Linie zusaetzlich waere die zweite Ansage fuer dieselbe
+   Sache; eines von beidem reicht. */
+.filter {
+  margin: 0 0 var(--mittel);
+  border: 1px solid var(--linie);
+  border-radius: var(--radius);
+  background: var(--flaeche);
+}
+
+/* Die Kopfzeile. `list-style: none` samt der WebKit-Sonderform nimmt das
+   Standarddreieck weg; an seine Stelle tritt der Winkel rechts, der sich beim
+   Aufklappen dreht. Rechts, weil dort Platz ist und die Kopfzeile links
+   anfaengt zu lesen ist.
+
+   Der Winkel ist ein gedrehtes Quadrat aus zwei Raendern und kein Zeichen:
+   ein Schriftzeichen haenge an der Schrift, und die kann ausfallen. */
+.filter summary {
+  display: flex;
+  align-items: center;
+  gap: var(--knapp);
+  padding: var(--knapp) var(--mittel);
+  min-height: var(--griff);
+  font-weight: 500;
+  font-size: .875rem;
+  cursor: pointer;
+  list-style: none;
+}
+.filter summary::-webkit-details-marker { display: none; }
+.filter summary::after {
+  content: "";
+  width: .4375rem;
+  height: .4375rem;
+  margin-left: auto;
+  border-right: 1.5px solid var(--gedaempft);
+  border-bottom: 1.5px solid var(--gedaempft);
+  transform: rotate(45deg) translateY(-2px);
+}
+.filter[open] summary::after { transform: rotate(-135deg) translateY(-2px); }
+
+/* Was gerade gilt, steht neben dem Wort "Filter" und ist eine Nebenangabe:
+   ungefettet und gedaempft. Ohne sie muesste man den Block oeffnen, um
+   ueberhaupt zu sehen, ob eingeschraenkt ist. */
+.filter .lage { font-weight: 400; color: var(--gedaempft); }
 
 /* Ein Raster, keine gestapelten Zeilen. Mobil eine Spalte, ab 48rem mehrere
    Spalten fester Mindestbreite - siehe Media-Block.
 
-   Der Block ist gegen die Ergebnisliste abgesetzt, und zwar ueber die
-   FLAECHE. Eine Linie zusaetzlich waere die zweite Ansage fuer dieselbe
-   Sache; eines von beidem reicht.
-
-   Der Abstand nach unten (`--weit`) ist groesser als der zwischen zwei
-   Feldern (`--mittel`). Genau daran liest man den Block als EIN Ding. */
-.filter {
+   Die Trennlinie nach oben gehoert zum Aufgeklappten und nicht zur
+   Kopfzeile: sie steht nur da, wenn darunter auch etwas steht. */
+.filterfelder {
   display: grid;
   grid-template-columns: 1fr;
   gap: var(--mittel);
-  margin: 0 0 var(--weit);
   padding: var(--mittel);
-  border-radius: 4px;
-  background: var(--flaeche);
+  border-top: 1px solid var(--linie);
 }
-.filter input,
-.filter select { max-width: none; }
+.filterfelder input,
+.filterfelder select { max-width: none; }
 
 /* Von/bis gehoert zusammen und sitzt als EIN Rasterfeld. Der Abstand darin
-   ist enger als der des Rasters - so liest sich das Paar als Paar. */
+   ist enger als der des Rasters - so liest sich das Paar als Paar.
+
+   Der Entwurf gibt jedem Feld eine eigene Rasterzelle. Hier bleibt es beim
+   Paar: bei `auto-fit` koennten "Preis ab" und "Preis bis" sonst in zwei
+   verschiedenen Zeilen landen, und dann sieht eine Spanne nicht mehr wie eine
+   aus. */
 .feldpaar {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -381,45 +534,55 @@ main input[type="url"] + button { margin-top: var(--knapp); }
   min-width: 0;
 }
 
-/* Die Statusauswahl ist kein Feld wie die anderen: sechs Kaestchen passen in
-   keine Rasterspalte. Eigene Zeile ueber die volle Breite. Der `<fieldset>`
-   bringt Rahmen und Innenabstand mit, die hier beide stoeren - die Gruppe
-   traegt ihre Zusammengehoerigkeit schon durch Legende und Zeile. */
+/* Die Statusauswahl ist kein Feld wie die anderen: sechs Marken passen in
+   keine Rasterspalte. Eigene Zeile ueber die volle Breite, und sie steht
+   VORN - es ist der Filter, den man am haeufigsten anfasst.
+
+   Der `<fieldset>` bringt Rahmen und Innenabstand mit, die hier beide stoeren.
+   Die Abgrenzung nach unten bleibt: darunter faengt das Raster der Felder an,
+   und ohne Linie liest sich der Block als eine Kette gleicher Dinge. */
 .statusfilter {
   grid-column: 1 / -1;
   min-width: 0;
   margin: 0;
   border: 0;
-
-  /* Sichtbar abgesetzt seit dem 03.09. Der Block stand als volle Zeile
-     zwischen Suche und Land und sah aus wie alles andere - eine Kette
-     gleicher Dinge, in der die Statuszeile untergeht, obwohl sie der Filter
-     ist, den man am haeufigsten anfasst.
-
-     Zwei Linien und NICHT ein eigener Flaechenton: der Filterblock traegt
-     schon `--flaeche`, und der einzige Ton, der sich davon absetzte, waere
-     `--papier` - ein Unterschied von anderthalb Prozent Helligkeit, also
-     keiner. Eine Linie ist hier die staerkere der beiden angebotenen
-     Moeglichkeiten. Zwei statt einer, weil der Block oben UND unten Nachbarn
-     hat; eine einzelne Linie ordnete ihn dem zu, auf dessen Seite sie steht. */
-  padding: var(--mittel) 0;
-  border-top: 1px solid var(--linie);
+  padding: 0 0 var(--mittel);
   border-bottom: 1px solid var(--linie);
 }
-.statusfilter legend { padding: 0; margin-bottom: var(--eng); color: var(--gedaempft); }
+.statusfilter legend { padding: 0; margin-bottom: var(--knapp); color: var(--gedaempft); }
 
-.kaestchen { display: flex; flex-wrap: wrap; gap: var(--eng) var(--mittel); }
+.kaestchen { display: flex; flex-wrap: wrap; gap: var(--knapp); }
 
-/* Jedes `<input>` steckt in seinem `<label>`. Ohne `inline-flex` erbte das
-   Label die Stapelung der Feldeinheit und jedes Kaestchen bekaeme eine
-   eigene Zeile. Die Wortfarbe ist `--text` und nicht `--gedaempft`: hier ist
-   das Wort der anklickbare Wert, keine Beschriftung ueber einem Feld. */
+/* Jedes `<input>` steckt in seinem `<label>`, und dieses Label IST die Marke.
+   Ohne `inline-flex` erbte es die Stapelung der Feldeinheit und jede Marke
+   bekaeme eine eigene Zeile.
+
+   Das Kaestchen bleibt SICHTBAR darin. Die farbliche Absetzung der
+   angehakten Marke haengt an `:has()`; faellt das aus, ist der Stand am
+   Kaestchen immer noch abzulesen. Eine Marke, deren einziger Traeger eine
+   Selektorenneuheit ist, waere ein Filter, dessen Stand man raten muss. */
 .kaestchen label {
   display: inline-flex;
   align-items: center;
+  gap: var(--eng);
   margin: 0;
+  padding: var(--eng) var(--knapp);
+  border: 1px solid var(--linie-stark);
+  border-radius: 100px;
+  background: var(--papier);
   color: var(--text);
+  font-size: .8125rem;
   cursor: pointer;
+}
+
+/* Angehakt heisst: abgesetzt. Der Akzentton als Flaeche, der Akzent als Rand,
+   und eine halbe Stufe mehr Gewicht. Keine der sechs Statusfarben - die
+   Marke sagt hier "danach wird gefiltert" und nicht "so sieht dieser Status
+   aus"; das sind zwei verschiedene Aussagen. */
+.kaestchen label:has(input:checked) {
+  background: var(--akzent-hell);
+  border-color: var(--akzent);
+  font-weight: 500;
 }
 
 /* Ohne diese Ausnahme erbte das Kaestchen `display: block` und volle Breite
@@ -428,121 +591,156 @@ main input[type="checkbox"] {
   display: inline-block;
   width: auto;
   min-height: 0;
-  margin-right: var(--eng);
+  margin: 0;
+  accent-color: var(--akzent);
 }
 
 /* Die Aktionen stehen unten im Block: mobil ueber die volle Breite, ab 48rem
    rechtsbuendig (siehe Media-Block). */
-.filter .aktionen { grid-column: 1 / -1; }
-.filter .aktionen button { flex: 1 1 100%; }
+.filterfelder .aktionen { grid-column: 1 / -1; margin: 0; }
+.filterfelder .aktionen button { flex: 1 1 100%; }
 
 .treffer,
-.sortierung,
+.sortieren,
 .blaettern { color: var(--gedaempft); font-size: .875rem; }
 
 .treffer { margin: 0; }
 
 /* --- Sortierleiste ------------------------------------------------------
-   Sie bleibt eine eigene Leiste und wandert NICHT in die Tabellenkopfzeile:
-   unter 48rem gibt es keine Tabelle, sondern Karten, und die Sortierung
-   braeuchte dort einen zweiten Mechanismus.
+   EIN Eintrag je Schluessel. Bis zum 04.09. standen hier acht gleich laute
+   Pfeile, zwei je Schluessel, und welche Sortierung gerade galt, war daran
+   nicht abzulesen - genau das, wofuer die Leiste da ist.
 
-   Der Abstand nach unten ist deutlich kleiner als der nach oben. Naehe ist
-   die Zuordnung - daran liest man, dass die Leiste zur Liste gehoert und
-   nicht zum Filterblock darueber. */
-.sortierung {
+   Sie bleibt eine eigene Leiste und wandert nicht in Spaltenkoepfe: die
+   Liste hat keine mehr.
+
+   Der Abstand nach unten ist kleiner als der nach oben. Naehe ist die
+   Zuordnung - daran liest man, dass die Leiste zur Liste gehoert und nicht
+   zum Filterblock darueber. */
+.sortieren {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--eng) var(--mittel);
-  margin: var(--weit) 0 var(--knapp);
+  align-items: center;
+  gap: var(--eng);
+  margin: var(--mittel) 0 0;
+  padding-bottom: var(--knapp);
+  border-bottom: 1px solid var(--linie-stark);
 }
 
-.sortierung .titel { color: var(--gedaempft); }
+/* Die Beschriftung der Leiste. Sie heisst NICHT `.titel`: so heisst der
+   Verweis auf das Objekt in jeder Listenzeile, und zwei Bedeutungen unter
+   einem Klassennamen sind der Anfang davon, dass eine Regel die falsche
+   Stelle trifft. */
+.sortieren .beschriftung { color: var(--gedaempft); margin-right: var(--eng); }
 
-/* Die beiden Pfeile gehoeren zum Wort davor und duerfen nicht davon abreissen. */
-.sortierung .schluessel { white-space: nowrap; color: var(--gedaempft); }
+.sortieren a {
+  text-decoration: none;
+  color: var(--gedaempft);
+  padding: var(--eng) var(--knapp);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.sortieren a:hover { background: var(--flaeche); color: var(--text); }
 
-/* Welche Sortierung GILT, muss man sehen koennen. Der aktive Schluessel
-   traegt `--text` und Fettung, alles Uebrige bleibt gedaempft - auch die
-   Pfeile. Beide Richtungen bleiben je Schluessel erreichbar; erkennbar ist
-   nur eine. Stuenden alle acht Pfeile gleich laut da, saehe man nie, was
-   gerade gilt - genau der Zustand, den diese Runde behebt. */
-.sortierung .schluessel.aktiv { color: var(--text); font-weight: bold; }
-
-.sortierung a { margin-left: var(--eng); text-decoration: none; color: var(--gedaempft); }
-.sortierung a[aria-current] { color: var(--text); font-weight: bold; }
+/* Welche Sortierung GILT, muss man sehen koennen - und zwar deutlich. Der
+   geltende Eintrag ist gefuellt und traegt seine Richtung als Pfeil; er
+   verweist auf die Gegenrichtung, ein zweiter Klick dreht um. */
+.sortieren a[aria-current] {
+  background: var(--akzent);
+  color: #fff;
+  font-weight: 500;
+}
 
 .blaettern {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: var(--weit);
-  margin-top: var(--weit);
+  padding-block: var(--mittel);
 }
 
-/* --- Liste unter 48rem: Karten ------------------------------------------
-   Das Markup bleibt eine `<table>`; nur die Darstellung wird aufgebrochen.
-   Bewusst auf `.tabelle` eingegrenzt: die Preisverlaufstabelle der
-   Objektansicht traegt kein `data-spalte` und bekaeme sonst Karten ohne
-   Bezeichnungen. */
-.tabelle table { width: 100%; border-collapse: collapse; }
+/* --- Die Liste ----------------------------------------------------------
+   EIN Markup fuer beide Fassungen. Bis zum 04.09. war die Liste eine
+   `<table>`, die das Stylesheet unter 48rem in Karten aufbrach - mit
+   Spaltenbezeichnungen aus `data-spalte`, versteckten Tabellenkoepfen und
+   elf Spalten, von denen die Haelfte in den meisten Zeilen einen
+   Gedankenstrich trug.
 
-/* NICHT `display: none` - das naehme Screenreadern die Spaltenkoepfe. */
-.tabelle thead { position: absolute; clip-path: inset(50%); }
+   Jetzt ist jede Zeile ein Raster aus drei Feldern: Bild, Mitte, Zahlen. Das
+   Votum liegt darunter ueber die Breite von Mitte und Zahlen. Unter 48rem
+   rutschen die Zahlen unter die Mitte - mehr Unterschied gibt es zwischen den
+   beiden Fassungen nicht mehr.
 
-.tabelle tbody tr {
+   Eine `<ul>` und keine `<table>`: die Liste ist eine Folge von Objekten und
+   keine Kreuztabelle. Was zu einem Objekt gehoert, steht bei ihm. */
+.liste { list-style: none; margin: 0; padding: 0; }
+
+.objekt {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0 var(--mittel);
+  padding: var(--knapp) var(--knapp) var(--knapp) var(--mittel);
+  border-bottom: 1px solid var(--linie);
+}
+
+/* Die Statusfarbe als Kante. Sie loest den gemeldeten Punkt, dass die alten
+   Flaechentoene zu dicht am Papierton lagen: eine Kante steht AUF dem Papier
+   und nicht darin.
+
+   Ueber ein Pseudo-Element und nicht als `border-left` an der Zeile: der
+   Rahmen liefe von Oberkante zu Unterkante durch und stiesse an die Kante der
+   Nachbarzeile, und aus sechs Marken wuerde ein durchgehendes Band. Das
+   Pseudo-Element laesst oben und unten Luft.
+
+   `--status` setzt die Statusklasse an derselben Zeile. Es gibt damit genau
+   eine Zuordnung zwischen Status und Farbe, und sie steht im Stylesheet. */
+.objekt::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--knapp);
+  bottom: var(--knapp);
+  width: 3px;
+  border-radius: 2px;
+  background: var(--status, transparent);
+}
+
+.objekt:hover { background: var(--flaeche); }
+
+/* Bild und Platzhalter tragen DIESELBEN Masse, und das ist der ganze Punkt:
+   Bilder kommen nur ueber das Lesezeichen, die meisten Zeilen haben also
+   keines. Spraenge die Zeilenhoehe je nachdem, stuenden die Zahlen nicht mehr
+   untereinander - und untereinander stehende Zahlen sind der Zweck der Liste.
+
+   Anders als in der Kartenfassung von gestern bleibt der Platzhalter in JEDER
+   Breite stehen: die Zeile ist jetzt in beiden Fassungen eine Zeile mit einem
+   schmalen Bild links, und kein Kartenkopf ueber die volle Breite. Der Grund,
+   ihn am Handy wegzunehmen - ein viertel Bildschirm Nichts -, ist damit weg.
+
+   `object-fit: cover` statt `contain`: ein Inseratsfoto im Hochformat liesse
+   sonst zwei graue Balken stehen, und die Zeile bekaeme wieder zwei
+   verschiedene Erscheinungsbilder. */
+/* Unter 48rem steht das Bild neben der Mitte und nichts darunter: Zahlen und
+   Votum nehmen die volle Zeilenbreite. Ab 48rem reicht es ueber beide
+   Rasterzeilen - siehe den Media-Block am Ende. */
+.objekt .bild {
   display: block;
-  background: var(--flaeche);
+  width: 4.5rem;
+  height: 3.375rem;
+  border-radius: var(--radius);
   border: 1px solid var(--linie);
-  border-radius: 4px;
-  margin-bottom: var(--knapp);
-  /* Das Bild sitzt als Kopf der Karte in der Ecke und wuerde die Rundung sonst
-     ueberdecken. */
-  overflow: hidden;
+  background: var(--flaeche);
+  object-fit: cover;
 }
-.tabelle td {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--mittel);
-  padding: var(--eng) var(--knapp);
-}
-.tabelle td::before { content: attr(data-spalte); color: var(--gedaempft); }
 
-/* Zwei Zellen tragen in der Karte keine Bezeichnung: das Bild (erste Zelle,
-   der Kopf der Karte) und die Bezeichnung darunter, die deren Ueberschrift ist.
-   Beides sind keine Angaben unter anderen.
+.mitte { min-width: 0; display: flex; flex-direction: column; gap: var(--eng); }
 
-   Die zweite wird ueber ihre KLASSE angesprochen und nicht ueber
-   `data-spalte="Objekt"`: diese Schreibweise gehoert ausschliesslich in den
-   Block ab 48rem, wo die Zelle gekappt wird. Stuende sie hier oben ein zweites
-   Mal, liesse sich nicht mehr auseinanderhalten, ob die Kappung wirklich nur
-   in der Tabellenfassung greift - und in der Karte gekappt verloere jede Karte
-   am Handy ihren Namen. */
-.tabelle td:first-child::before,
-.tabelle .bezeichnung::before { content: none; }
-
-/* Die Karten-Ueberschrift darf INNERHALB eines Wortes umbrechen.
-
-   Ohne Titel steht in dieser Zelle die volle URL, und eine URL hat keine
-   Leerstelle: ihre Mindestbreite ist ihre volle Breite, und weil eine
-   `<table>` nie schmaler wird als ihr Inhalt, zog EIN solches Objekt die
-   ganze Tabelle mit sich. Gemessen bei 375px: 725px statt 343px - die Werte
-   jeder Karte standen rechts ausserhalb des Bildschirms, auf dem Geraet, an
-   dem die Liste unterwegs gelesen wird. Objekte ohne Titel sind derzeit der
-   Normalfall.
-
-   `anywhere` und nicht `break-word`: nur `anywhere` geht in die
-   MINDESTBREITE ein, und genau die ist hier das Problem. `break-word` liesse
-   die Tabelle unveraendert breit.
-
-   Ueber die Klasse angesprochen und nicht ueber `data-spalte="Objekt"`:
-   diese Schreibweise gehoert ausschliesslich in den Block ab 48rem.
-
-   Ab 48rem wirkt die Regel nicht mehr - dort traegt der Verweis in der Zelle
-   `white-space: nowrap` und wird gekappt. Die Zusage aus 4.1 der
-   Layout-Runde bleibt damit unangetastet. */
-.tabelle .bezeichnung { overflow-wrap: anywhere; }
+/* Die Marke sitzt in dieser Zeile, vor dem Titel. `baseline` haelt Punkt und
+   Schrift auf einer Linie; `min-width: 0` ist die Voraussetzung dafuer, dass
+   der Titel darin ueberhaupt gekappt werden kann - ohne sie waere die
+   Mindestbreite eines Flexkindes seine Inhaltsbreite. */
+.titelzeile { display: flex; align-items: baseline; gap: var(--eng); min-width: 0; }
 
 /* --- Die Marke "seit deinem letzten Besuch" ------------------------------
    Ein Punkt, kein Wort. Das Wort "neu" ist in der Oberflaeche gesperrt - es
@@ -550,100 +748,156 @@ main input[type="checkbox"] {
    anderes. Was der Punkt bedeutet, steht im `title` am Element.
 
    `--akzent`, weil die Marke ein Hinweis ist und kein Zustand: `--signal`
-   gehoert der Preissenkung, `--fehler` den Fehlern. Keine neue Farbe.
+   gehoert der Preissenkung, `--fehler` den Fehlern. Keine neue Farbe, und
+   ausdruecklich keine der sechs Statusfarben - die Marke sagt "hier hat
+   jemand etwas getan", nicht "dieses Objekt steht so".
 
-   KEINE eigene Spalte, KEIN Platzhalter. Der Punkt sitzt inline vor der
-   Bezeichnung; wo nichts passiert ist, steht nichts. Deshalb auch
-   `inline-block` mit fester Groesse statt eines Pseudo-Elements an der Zelle:
-   ein `::before` an jeder Zelle stuende auch in den Zeilen ohne Bewegung und
-   muesste dort leer gehalten werden - genau der Platzhalter, den es nicht
+   KEINE eigene Spalte, KEIN Platzhalter. Der Punkt sitzt in der Titelzeile
+   vor dem Titel; wo nichts passiert ist, steht nichts. Deshalb auch ein
+   eigenes Element mit fester Groesse statt eines Pseudo-Elements an der
+   Zeile: ein `::before` an jeder Zeile stuende auch in denen ohne Bewegung
+   und muesste dort leer gehalten werden - genau der Platzhalter, den es nicht
    geben soll.
 
-   `vertical-align: middle` haelt ihn auf der Mittellinie der Schrift; ohne
-   das saesse er auf der Grundlinie und zoege die Zeilenhoehe auseinander.
-   `flex-shrink: 0`, weil die Bezeichnungszelle unter 48rem ein Flexkasten ist
-   und der Punkt sonst zum Strich zusammengedrueckt wuerde.
+   `flex-shrink: 0`, weil die Titelzeile ein Flexkasten ist und der Punkt
+   sonst zum Strich zusammengedrueckt wuerde. `align-self` haelt ihn auf der
+   Hoehe der Schrift; an der Grundlinie ausgerichtet saesse er zu tief.
 
    Die Regel steht auf oberster Ebene und NICHT in einem Media-Block: sie gilt
-   fuer die Karte wie fuer die Tabelle. Genau das haelt der Zeuge
+   fuer beide Fassungen. Genau das haelt der Zeuge
    `test_die_marke_wird_in_keiner_fassung_ausgeblendet`. */
 .besuchsmarke {
-  display: inline-block;
+  display: block;
   flex-shrink: 0;
+  align-self: center;
   width: .5rem;
   height: .5rem;
-  margin-right: var(--eng);
   border-radius: 50%;
   background: var(--akzent);
-  vertical-align: middle;
 }
 
-/* --- Das Bild in der Liste ----------------------------------------------
-   Mobil zuerst: die Zelle ist der Kopf der Karte, volle Breite, festes
-   Seitenverhaeltnis. Ab 48rem wird sie eine schmale erste Spalte - siehe den
-   Media-Block am Ende.
+/* Der Titel wird in BEIDEN Fassungen auf eine Zeile gekappt.
 
-   Bild und Platzhalter tragen DIESELBEN Masse, und das ist der ganze Punkt:
-   Bilder kommen nur ueber das Lesezeichen, die meisten Zeilen haben also
-   keines. Spraenge die Zeilenhoehe je nachdem, stuenden die Zahlen nicht mehr
-   untereinander - und untereinander stehende Zahlen sind der Zweck der Liste.
+   Bis zum 04.09. galt das nur ab 48rem; darunter durfte die Karten-
+   Ueberschrift umbrechen, auch innerhalb eines Wortes. Der Grund dafuer war
+   die `<table>`: eine Tabelle wird nie schmaler als ihr Inhalt, und EIN
+   Objekt ohne Titel - also mit voller URL an dieser Stelle - zog die ganze
+   Liste in die Breite. Das Raster kennt dieses Verhalten nicht; `minmax(0,
+   1fr)` und `min-width: 0` deckeln die Spalte, und die Kappung ist die
+   ruhigere Antwort als ein dreizeilig umbrochener Link.
 
-   `object-fit: cover` statt `contain`: ein Inseratsfoto im Hochformat liesse
-   sonst zwei graue Balken stehen, und die Zeile bekaeme wieder zwei
-   verschiedene Erscheinungsbilder. */
-.tabelle [data-spalte="Bild"] { display: block; padding: 0; }
+   Gekappt heisst nicht verloren: der volle Text steht in der Objektansicht,
+   und ein Titel ist links, wo er anfaengt, unterscheidbar. */
+.titel {
+  font-weight: 600;
+  font-size: .9375rem;
+  letter-spacing: -.005em;
+  color: var(--text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.titel:hover { text-decoration: underline; }
 
-.tabelle [data-spalte="Bild"] img {
-  display: block;
-  width: 100%;
-  aspect-ratio: 3 / 2;
-  object-fit: cover;
-  background: var(--flaeche);
+/* Ohne Titel steht hier die URL. Sie ist gedaempft und UNGEFETTET: solche
+   Objekte sind erkennbar unfertig, und ein fett gesetzter Link auf eine
+   Adresse sieht aus wie eine Angabe. */
+.titel.nackt { font-weight: 400; font-size: .875rem; color: var(--gedaempft); }
+
+/* Die Unterzeile: Statusmarke, dann Ort, Herkunft, Zustand - jedes nur, wenn
+   es da ist. Welche Teile dastehen, entscheidet `unterzeile()` in der
+   Ansicht; hier steht nur, wie sie stehen. */
+.unterzeile {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--eng) var(--knapp);
+  font-size: .8125rem;
+  color: var(--gedaempft);
 }
 
-/* In der KARTENFASSUNG bleibt die Flaeche ohne Bild weg. Sie ist dafuer da,
-   dass die Zeilenhoehe der Tabelle nicht springt - in der Kartenliste gibt es
-   keine Zeile, die springen koennte: die Karten stehen untereinander und sind
-   ohnehin verschieden hoch.
+/* Der Trennpunkt kommt aus dem Stylesheet und nicht aus der Vorlage: dort
+   muesste er an jedem Teil ausser dem letzten stehen, und "ausser dem
+   letzten" ist in der Template-Sprache eine Zaehlung, die nach jeder
+   weggefallenen Angabe wieder stimmen muesste. Hier ist es ein Selektor, und
+   ein weggefallener Teil nimmt seinen Punkt von selbst mit.
 
-   Was sie dort anrichtete, ist dagegen echt: die Flaeche misst bei voller
-   Kartenbreite ueber 250px, sie traegt `--flaeche` auf einer Karte, die selbst
-   `--flaeche` ist, und Bilder kommen nur ueber das Lesezeichen - fast jede
-   Karte begaenne also mit einem viertel Bildschirm Nichts. Auf dem Geraet, auf
-   dem die Liste unterwegs gelesen wird, waere das kein ruhiger Grund, sondern
-   ein Loch.
+   HINTEN am Teil und nicht vorn am naechsten. Vorn stand er bis zur
+   Sichtpruefung, und am Handy bricht die Zeile: dann fing die naechste Zeile
+   mit "· Kernsanierung" an und sah aus wie eine Aufzaehlung, der der Anfang
+   fehlt. Hinten angehaengt bleibt er bei dem Wort, zu dem er gehoert.
 
-   Das Markup traegt den Platzhalter unveraendert; hier steht nur, wo er
-   sichtbar wird. Ab 48rem ist er wieder da - siehe den Media-Block am Ende. */
-.tabelle [data-spalte="Bild"] .platzhalter { display: none; }
-
-/* Ohne Tabellenziffern stehen 750.000 und 89.500 nicht untereinander, und
-   genau das Untereinander ist der Zweck der Liste. Auf der ganzen Tabelle
-   statt auf einzelnen Spalten: Buchstaben aendern sich dadurch nicht, und
-   eine spaeter ergaenzte Zahlenspalte ist ohne Zutun mit erfasst. */
-.tabelle {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
+   Die Statusmarke bekommt keinen: sie ist keine Angabe in derselben Reihe,
+   sondern das, was die Reihe eroeffnet. */
+.unterzeile > *:not(:last-child):not(.statusmarke)::after {
+  content: " ·";
+  color: var(--linie-stark);
 }
 
-/* --- Preisaenderung in der Liste -----------------------------------------
-   Der aktuelle Preis fuehrt, die Aenderung steht darunter und kleiner. Beide
-   stecken in `.preis`, damit die Zelle unter 48rem GENAU ZWEI Flexkinder hat:
-   die Spaltenbezeichnung aus `::before` und den Wert. Ohne die Huelle risse
-   `justify-content: space-between` den aktuellen Preis und die Aenderung an
-   die beiden Enden der Zeile.
+/* --- Die Zahlen der Zeile ------------------------------------------------
+   Vier Angaben nebeneinander, jede mit ihrem Etikett darunter. Das Etikett
+   steht UNTER dem Wert und nicht davor: darueber gelesen sind es vier
+   Spalten, davor gelesen waeren es vier Saetze.
 
-   Kein eigener Abstandswert: `--eng` ist die Stufe fuer "innerhalb einer
-   Zeile", und genau das ist der Abstand zwischen einem Wert und seiner
-   Nebenangabe. Die Schriftgroesse .875rem ist dieselbe wie bei jeder anderen
-   Nebenangabe der Oberflaeche (Meldungen, Hilfetexte, Leisten). */
-.tabelle td > .preis { display: block; }
+   "Kein Geldbetrag bricht um" gilt fuer die einzelne ANGABE und nicht fuer
+   den Block: `white-space: nowrap` sitzt an `.zahl` und an `.preisaenderung`,
+   der Block selbst darf umbrechen. Andersherum stand es bis zur
+   Sichtpruefung, und am Handy lief die Reihe aus ihrer Spalte heraus - die
+   letzte Angabe war rechts abgeschnitten.
 
+   Ein geschuetztes Leerzeichen in der Vorlage taete dasselbe wie `nowrap`,
+   stuende dafuer aber als unsichtbares Zeichen in jedem gespeicherten Auszug
+   und in jedem Zeugen. */
+.zahlen {
+  /* Unter 48rem ueber die volle Zeilenbreite - sonst landet der Block in der
+     schmalen Bildspalte, und vier Angaben stapeln sich untereinander statt
+     nebeneinander zu stehen. Ab 48rem steht er als dritte Spalte neben der
+     Mitte; siehe den Media-Block am Ende. */
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--eng) var(--mittel);
+}
+
+.zahl { display: flex; flex-direction: column; white-space: nowrap; }
+.zahl .wert { font-size: .9375rem; font-weight: 500; white-space: nowrap; }
+.zahl .etikett { font-size: .6875rem; color: var(--gedaempft); }
+
+/* Die groesste Zahl der Zeile. Sie traegt seit dem 05.09. der KAUFPREIS; bis
+   dahin war es der Preis je m², wie der Entwurf ihn setzt. Die Entscheidung
+   ist ausdruecklich anders gefallen: der Kaufpreis ist die Zahl, an der eine
+   Zeile haengenbleibt, der Preis je m² steht daneben in normaler Groesse.
+
+   Die Regel selbst weiss davon nichts - sie sagt nur, wie die Hauptzahl
+   aussieht, und WELCHE es ist, entscheidet die Vorlage mit der Klasse. Genau
+   deshalb war der Tausch eine Zeile im Markup und keine im Stylesheet.
+
+   Damit ist die Liste ausserdem mit der Objektansicht einig: dort steht der
+   Kaufpreis schon immer groesser als alles andere auf der Seite. */
+.zahl.haupt .wert { font-size: 1.25rem; font-weight: 700; letter-spacing: -.02em; }
+
+/* Ein fehlender Wert bekommt einen gedaempften Strich - man muss SEHEN, dass
+   nichts da ist. Eine leere Stelle liest sich wie eine Null, und eine Null
+   ist etwas anderes als "nicht bekannt". Ohne den Strich rutschten ausserdem
+   die Werte gegeneinander. */
+.zahl .wert.fehlt { color: var(--linie-stark); font-weight: 400; }
+
+/* --- Preisaenderung ------------------------------------------------------
+   Sie steht UNTER dem Kaufpreis und kleiner. Dieselbe Klasse in Liste und
+   Objektansicht, damit eine Senkung an beiden Stellen gleich aussieht.
+
+   Die Regeln stehen ausserhalb jedes Media-Blocks: eine Senkung, die nur ab
+   48rem markiert waere, fehlte auf dem Geraet, an dem die Liste unterwegs
+   gelesen wird. */
 .preisaenderung {
   display: block;
   margin-top: var(--eng);
-  font-size: .875rem;
+  font-size: .75rem;
+  font-weight: 600;
   color: var(--gedaempft);
+  white-space: nowrap;
 }
 
 /* Die EINZIGE Stelle mit `--signal`. Eine Senkung ist das Kaufsignal, auf das
@@ -657,8 +911,56 @@ main input[type="checkbox"] {
 
 /* Der durchgestrichene alte Preis erbt die Farbe seiner Umgebung - bei einer
    Senkung also `--signal`. Das ist gewollt: die Angabe gehoert zusammen und
-   soll nicht in zwei Farben zerfallen. */
+   soll nicht in zwei Farben zerfallen. Er steht nur in der Objektansicht; die
+   Liste zeigt den Betrag der Aenderung. */
 .preisaenderung s { text-decoration-thickness: 1px; }
+
+/* --- Das Votum in der Zeile ---------------------------------------------
+   Eine Punktreihe, ein Punkt je Person, und der bisherige Text daneben. Die
+   Reihe zeigt den Stand, ohne dass man zaehlen muss; der Text sagt ihn.
+
+   Der Block steht in der zweiten Rasterzeile und beginnt unter der Mitte -
+   nicht unter dem Bild: er gehoert zum Objekt und nicht zum Foto. */
+.votum {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--knapp);
+  margin-top: var(--knapp);
+  font-size: .8125rem;
+}
+
+.stimmen { display: flex; gap: var(--eng); }
+
+/* Der Punkt traegt ein ZEICHEN und nicht nur Farbe. Wer Farben nicht
+   unterscheidet, saehe sonst fuenf gleiche Kreise; die Beschriftung steht
+   zusaetzlich im `title`. */
+.stimme {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  font-size: .6875rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+.stimme.dafuer    { background: var(--status-besichtigung); }
+.stimme.anschauen { background: var(--status-heisse_spur); }
+.stimme.raus      { background: var(--status-raus); }
+
+/* Offen ist kein Zustand mit Farbe, sondern die Abwesenheit einer Stimme:
+   ein gestrichelter Umriss, keine Flaeche. */
+.stimme.offen { background: none; border: 1.5px dashed var(--linie-stark); }
+
+.votum-text { color: var(--gedaempft); }
+
+/* Der Aufruf zum Abstimmen steht dort, wo sonst der Zaehlstand steht. Er ist
+   die einzige verbliebene Aufgabe der Zeile, solange verdeckt ist - und
+   deshalb ein sichtbarer Verweis und keine gedaempfte Nebenangabe. */
+.abstimmen { color: var(--akzent); font-weight: 600; }
 
 /* --- Vorschau des Lesezeichen-Zulaufs ------------------------------------
    Drei Nebenzeilen unter dem Feld: der gelesene Wert, der abweicht; der
@@ -738,23 +1040,34 @@ dd { margin: 0; }
   color: var(--gedaempft);
 }
 
-/* Die Statusmarke ist seit dem 03.09. an DREI Stellen dasselbe Bauteil: in
-   der Objektzeile hier, in der Statusspalte der Liste (beide Fassungen) und -
-   ueber dieselben Farbklassen - an der Auswahl des Statusformulars. Eine
-   zweite Marke daneben waere ein zweites Aussehen fuer dieselbe Sache.
+/* Die Statusmarke ist an DREI Stellen dasselbe Bauteil: in der Objektzeile
+   hier, in der Unterzeile jeder Listenzeile und - ueber dieselben Farbklassen
+   - an der Auswahl des Statusformulars. Eine zweite Marke daneben waere ein
+   zweites Aussehen fuer dieselbe Sache.
 
-   Der Rahmen bleibt: "vom Markt" liegt bewusst dicht am Seitengrund, und ohne
-   Linie waere die Marke dort keine Marke mehr, sondern ein Wort im Nichts.
-   `background` ist der Vorgabewert fuer den Fall ohne Statusklasse - die
-   sechs Klassen unten ueberschreiben ihn. */
+   Seit dem 04.09. eine PILLE: gesaettigter Grund, weisse Schrift, runde
+   Enden. Vorher war es ein blasser Kasten mit dunkler Schrift und einer
+   Linie; die Linie brauchte es, weil fuenf der sechs Toene sonst nicht vom
+   Seitengrund zu unterscheiden waren. Genau diese Schwaeche loest die Runde
+   auf - jetzt traegt der Grund die Unterscheidung selbst, und die Linie ist
+   ueberfluessig geworden.
+
+   Weisse Schrift auf allen sechs. Der schwaechste Wert traegt 4,68:1, der
+   staerkste 6,77:1 - alle sechs Toene sind daraufhin nachgerechnet und
+   angepasst worden; siehe die Begruendung an den Variablen.
+
+   `--flaeche` ist der Vorgabegrund fuer den Fall ohne Statusklasse; die sechs
+   Klassen unten setzen `--status`. Kaeme eine Marke je ohne Klasse, stuende
+   sie als blasser Kasten da und faellt auf, statt unsichtbar zu werden. */
 .statusmarke {
   display: inline-block;
   padding: 0 var(--knapp);
-  border: 1px solid var(--linie);
-  border-radius: 4px;
-  background: var(--flaeche);
-  color: var(--text);
-  font-size: .875rem;
+  border-radius: 100px;
+  background: var(--status, var(--flaeche));
+  color: #fff;
+  font-size: .75rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 /* Die sechs Statusfarben, je Schluessel genau eine Regel. Der Klassenname ist
@@ -762,37 +1075,65 @@ dd { margin: 0; }
    und deshalb gibt es keine Zuordnungstabelle, die von den Auswahllisten
    wegdriften koennte.
 
-   Nur der Grund wird gesetzt. Die Schrift bleibt `--text`, den beide Traeger
-   - `.statusmarke` und `main select` - schon fuehren; sie hier zu wiederholen
-   waere dieselbe Angabe ein zweites Mal.
+   Jede Regel setzt EINE Eigenschaft: `--status`. Sie faerbt nichts von sich
+   aus - wer sie liest, entscheidet, was er damit tut. Das ist der Grund,
+   warum dieselbe Klasse jetzt an drei verschiedenen Traegern haengen kann,
+   die sie verschieden verwenden: die Listenzeile als Kante, die Marke als
+   Grund, die Auswahl am Statusformular als linker Rand. Setzte die Regel
+   stattdessen `background`, bekaeme die Listenzeile eine gefaerbte Flaeche
+   ueber ihre ganze Breite.
 
-   Sie gelten auch fuer die Auswahl am Statusformular: dort ist die Marke kein
-   eigenes Element, sondern das Feld selbst zeigt den gespeicherten Status. */
-.status-neu          { background: var(--status-neu); }
-.status-in_pruefung  { background: var(--status-in_pruefung); }
-.status-besichtigung { background: var(--status-besichtigung); }
-.status-heisse_spur  { background: var(--status-heisse_spur); }
-.status-raus         { background: var(--status-raus); }
-.status-vom_markt    { background: var(--status-vom_markt); }
+   Der Entwurf setzt die Farbe als Stilangabe an der Zeile (`--kante`). Das
+   waere eine zweite Zuordnung zwischen Status und Farbe, diesmal in der
+   Vorlage, und zwei Tabellen fuer dieselbe Regel driften. */
+.status-neu          { --status: var(--status-neu); }
+.status-in_pruefung  { --status: var(--status-in_pruefung); }
+.status-besichtigung { --status: var(--status-besichtigung); }
+.status-heisse_spur  { --status: var(--status-heisse_spur); }
+.status-raus         { --status: var(--status-raus); }
+.status-vom_markt    { --status: var(--status-vom_markt); }
 
-/* Die Auswahl am Statusformular traegt dieselbe Farbe wie die Marke, aber
-   nicht deren Masse: sie bleibt ein Bedienelement in Feldgroesse. Die Regel
-   steht nur da, damit die Farbklasse den Grund aus `main select` sicher
-   schlaegt - eine Klasse gewinnt gegen zwei Elemente, das ist der ganze
-   Zweck. */
-.statuswahl { border-color: var(--linie); }
+/* Der Kopfblock der Objektansicht traegt die Statusklasse und bekommt damit
+   dieselbe Kante wie die Zeile in der Liste - eines der Bauteile, die aus dem
+   Entwurf uebernommen werden, damit Liste und Ansicht nicht auseinanderlaufen.
+
+   Als `border-left` und nicht als Pseudo-Element wie in der Liste: hier steht
+   kein zweiter Block unmittelbar darunter, an dessen Kante die eigene
+   stiesse. */
+.kopfblock {
+  padding-left: var(--mittel);
+  border-left: 3px solid var(--status, var(--linie));
+}
+
+/* Die Auswahl am Statusformular zeigt den gespeicherten Status. Sie bekommt
+   die Farbe als linken Rand und nicht als Grund: ein `<select>` mit
+   gesaettigtem Grund und weisser Schrift faerbt auf mehreren Systemen auch
+   die aufgeklappte Liste ein, und die ist dann teils unlesbar. Der Rand ist
+   dieselbe Aussage in der Bauform, die die Liste ohnehin fuehrt. */
+.statuswahl {
+  border-color: var(--linie);
+  border-left: 3px solid var(--status, var(--linie));
+}
 
 /* --- Zahlen zuerst -------------------------------------------------------
    Der Block, der die Kaufentscheidung traegt. Er steht direkt unter dem Kopf
    und ist gegen den Rest der Seite ueber die FLAECHE abgesetzt - dieselbe
-   Ansage wie beim Filterblock der Liste, und wie dort reicht sie allein. */
-.zahlen {
+   Ansage wie beim Filterblock der Liste, und wie dort reicht sie allein.
+
+   Er heisst `zahlenblock` und nicht `zahlen`: so heisst seit dem 04.09. die
+   Zahlenreihe einer Listenzeile. Unter EINEM Namen trug er ihr diese Flaeche
+   und diesen Innenabstand mit ein - jede Zeile der Liste bekam einen
+   getoenten Kasten um ihre Zahlen, den niemand bestellt hatte. Aufgefallen
+   ist es bei der Sichtpruefung im Browser, nicht einem Zeugen; genau das ist
+   die Art Fehler, die dort auffaellt und sonst nirgends.
+
+   Die Tabellenziffern stehen seit dem 04.09. am `body` und brauchen hier
+   keine eigene Angabe mehr. */
+.zahlenblock {
   margin: 0 0 var(--weit);
   padding: var(--mittel);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--flaeche);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
 }
 
 /* Deutlich groesser als alles andere auf der Seite - groesser als `h1`. Das
@@ -802,7 +1143,7 @@ dd { margin: 0; }
 /* Die Preisaenderung erbt Groesse und Farbe von `.preisaenderung` weiter
    oben - dieselbe Regel wie in der Liste, damit eine Senkung an beiden
    Stellen gleich aussieht. Hier steht nur der Abstand zum Preis darueber. */
-.zahlen .preisaenderung { margin: var(--eng) 0 0; }
+.zahlenblock .preisaenderung { margin: var(--eng) 0 0; }
 
 /* Vier Kennzahlen nebeneinander, solange sie nebeneinander passen. Nicht das
    `auto 1fr`-Raster der Datenliste: hier ist die Beschriftung eine Ueberschrift
@@ -913,16 +1254,13 @@ main button.ruhig {
    des Votum-Blocks und keine eigene Sache daneben. */
 h3 { font-weight: normal; font-size: 1rem; margin: var(--mittel) 0 0; color: var(--gedaempft); }
 
-/* Der Preisverlauf ist Beleg, keine Vergleichsliste - deshalb NICHT die
-   Behandlung von `.tabelle`: sie bricht unter 48rem in Karten auf, und dafuer
-   traegt diese Tabelle keine `data-spalte`. Sie bekommt dieselben Linien und
-   dieselben Tabellenziffern und bleibt sonst ruhig. */
+/* Der Preisverlauf ist Beleg, keine Vergleichsliste. Er bleibt eine Tabelle
+   und bekommt nichts weiter als Linien; die Tabellenziffern stehen seit dem
+   04.09. am `body` und gelten hier ohne eigene Angabe. */
 .verlaufstabelle {
   width: 100%;
   max-width: 30rem;
   border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum";
 }
 .verlaufstabelle th {
   text-align: left;
@@ -967,33 +1305,39 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
 .abgrenzung p { margin: 0 0 var(--knapp); }
 .abgrenzung p:last-child { margin-bottom: 0; }
 
-/* Die Zahlen zu dem, was mit verschwindet. Tabellenziffern, damit vier
-   Zahlen untereinander vergleichbar stehen - dieselbe Behandlung wie im
-   Zahlenblock der Objektansicht. */
-.anhang { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+/* Die Zahlen zu dem, was mit verschwindet. Die Tabellenziffern, damit sie
+   untereinander vergleichbar stehen, kommen seit dem 04.09. vom `body`. */
 
 .loeschform { margin: var(--weit) 0 0; }
 
 /* --- Ab 48rem -----------------------------------------------------------
-   Ein Media-Block fuer die ganze Datei - aus Ordnungsliebe, und seit dem
-   02.09. NUR daraus.
+   Ein Media-Block fuer die ganze Datei - aus Ordnungsliebe, und nur daraus.
 
-   Vorher stand hier, der Block muesse ein einziger bleiben, weil der Zeuge
-   `StylesheetKorrekturenTests._block_ab_48rem` den ERSTEN dieser Breite
-   griff. Das war die falsche Reihenfolge: ein Test bewacht eine Zusage, er
-   schreibt nicht vor, wie diese Datei gegliedert ist. Der Zeuge sammelt
-   jetzt alle Bloecke dieser Breite; wie viele es sind, entscheidet, wer hier
-   schreibt. */
+   Vorher stand hier, der Block muesse ein einziger bleiben, weil ein Zeuge
+   den ERSTEN dieser Breite griff. Das war die falsche Reihenfolge: ein Test
+   bewacht eine Zusage, er schreibt nicht vor, wie diese Datei gegliedert ist.
+   Der Zeuge sammelt alle Bloecke dieser Breite; wie viele es sind,
+   entscheidet, wer hier schreibt.
+
+   Der Block ist seit dem 04.09. deutlich kuerzer. Er trug bis dahin den
+   ganzen Umbau der Liste von Karten auf Tabelle - dreizehn Regeln, die
+   Zellen, Koepfe und Bildspalte umbauten. Die Liste hat jetzt EIN Markup, und
+   der Unterschied zwischen den Fassungen ist einer: die Zahlen stehen ab hier
+   neben der Mitte statt darunter. */
 @media (min-width: 48rem) {
 
-  /* Kopf: alle drei Bereiche in einer Zeile. Das `margin-right: auto` am
-     Werkzeugnamen schiebt Navigation und Konto nach rechts, ohne dass im
-     Markup ein Huellelement noetig waere. */
+  /* Kopf: alle drei Bereiche in einer Zeile, und die Leiste bleibt beim
+     Blaettern am oberen Rand stehen. Unter 48rem tut sie das nicht - dort
+     bricht sie auf zwei Zeilen um, und zwei festgeheftete Zeilen naehmen am
+     Handy zu viel Hoehe. */
+  header { position: sticky; top: 0; z-index: 5; }
+  header .huelle { flex-wrap: nowrap; height: 3.5rem; padding-block: 0; }
   header .marke { flex: 0 0 auto; margin-right: auto; }
   header .konto {
     flex: 0 0 auto;
     gap: var(--mittel);
     padding-left: var(--mittel);
+    border-left: 1px solid var(--linie);
   }
 
   /* Mehrere Spalten fester Mindestbreite, sodass die Feldeinheiten
@@ -1003,110 +1347,45 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
      Das Paar von/bis nimmt zwei Spalten - bei einer Mindestbreite von 14rem
      und mindestens 46rem Inhaltsbreite sind ab hier immer drei Spalten da,
      das Paar passt also. */
-  .filter { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+  .filterfelder { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
   .feldpaar { grid-column: span 2; }
 
-  /* Die Freitextsuche hatte hier bis zum 03.09. eine eigene Regel ueber zwei
-     Spalten. Sie ist gefallen: das Feld war damit doppelt so breit wie jedes
-     andere im Block, bei drei Spalten nahm es zwei Drittel der Zeile. Die
-     Luecke hinter ihm, gegen die die Regel gebaut war, schliesst sie ohnehin
-     nicht - die vollbreite Statuszeile dahinter kann nicht neben das Feld
-     ruecken, gleich wie breit es ist. Bleibt nur die Ungleichheit, und die
-     war der Fehlstand. */
-
   /* Die Aktionen rechtsbuendig, Knoepfe in ihrer natuerlichen Breite. */
-  .filter .aktionen { justify-content: flex-end; }
-  .filter .aktionen button { flex: 0 0 auto; }
+  .filterfelder .aktionen { justify-content: flex-end; }
+  .filterfelder .aktionen button { flex: 0 0 auto; }
 
-  /* Damit bricht eine spaeter ergaenzte Spalte das Layout nicht. */
-  .tabelle { overflow-x: auto; }
+  /* Der einzige Unterschied, den die Liste zwischen den beiden Fassungen
+     macht: die Zahlen stehen neben der Mitte statt darunter, rechtsbuendig
+     und in einer dritten Rasterspalte.
 
-  .tabelle thead { position: static; clip-path: none; }
-
-  .tabelle tbody tr {
-    display: table-row;
-    border: 0;
-    border-bottom: 1px solid var(--linie);  /* kein Zebrastreifen */
-    border-radius: 0;
-    margin: 0;
+     `auto` als Breite und keine feste Zahl: die Spalte ist so breit wie ihre
+     laengste Zahl, und ein achtstelliger Preis soll sie nicht umbrechen,
+     sondern die Mitte schmaler machen. Genau dafuer traegt die mittlere
+     Spalte `minmax(0, 1fr)`. */
+  .objekt {
+    grid-template-columns: 6rem minmax(0, 1fr) auto;
+    padding-block: var(--mittel);
   }
-  .tabelle td { display: table-cell; padding: var(--knapp); }
-  .tabelle td::before { content: none; }
-
-  /* Aus dem Kopf der Karte wird eine schmale erste Spalte. Etwa 4rem breit
-     und mit fester Hoehe: groesser zerriss es die Zeilenhoehe, und dann
-     stuenden die Zahlen nicht mehr nebeneinander - genau das, wofuer die
-     Tabellenfassung da ist.
-
-     Die Regel steht hier ein zweites Mal, weil `[data-spalte="Bild"]` staerker
-     wiegt als `.tabelle td` daneben und die Zelle sonst auch hier ein Block
-     ueber die volle Breite bliebe. */
-  .tabelle [data-spalte="Bild"] { display: table-cell; width: 4rem; padding: var(--knapp); }
-
-  /* Hier greift die Zusage aus 4.4 wirklich: elf Spalten nebeneinander, und
-     eine Zeile, die mal 3rem und mal gar nichts hoch ist, macht den
-     Zahlenvergleich kaputt, um den es in der Tabelle geht. Die Flaeche traegt
-     `--flaeche` wie die Zeile, in der sie steht - sie ist Platz, kein Bild
-     und erst recht kein Hinweis. Kein Text darin, kein Symbol. */
-  .tabelle [data-spalte="Bild"] img,
-  .tabelle [data-spalte="Bild"] .platzhalter {
-    display: block;
-    width: 4rem;
-    height: 3rem;
-    aspect-ratio: auto;
-    object-fit: cover;
-    background: var(--flaeche);
-    border-radius: 4px;
+  .objekt::before { top: var(--mittel); bottom: var(--mittel); }
+  /* Ueber beide Rasterzeilen: die Zahlen stehen jetzt NEBEN der Mitte, und
+     das Bild soll bis unter das Votum reichen statt darueber zu enden. */
+  .objekt .bild { grid-row: span 2; width: 6rem; height: 4.5rem; }
+  .zahlen {
+    grid-column: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    text-align: right;
+    gap: var(--weit);
   }
-
-  .tabelle th {
-    text-align: left;
-    font-weight: normal;
-    font-size: .875rem;
-    color: var(--gedaempft);
-    border-bottom: 1px solid var(--linie);
-    padding: var(--eng) var(--knapp);
-    white-space: nowrap;
-  }
-
-  /* Zahlenspalten rechtsbuendig, Textspalten links. Preise und Flaechen sind
-     nur vergleichbar, wenn die Stellen untereinander stehen. Angesprochen
-     ueber `data-spalte` und NICHT ueber `nth-child`: eine zusaetzlich
-     eingeschobene Spalte verschiebt jede Positionszahl, den Namen aber
-     nicht. Dass diese vier Namen in der Liste wirklich vorkommen, bezeugt
-     `test_die_benannten_spalten_des_stylesheets_gibt_es_in_der_liste` -
-     sonst fiele die Ausrichtung bei einer Umbenennung still aus.
-
-     Greift auf `<th>` und `<td>` zugleich: beide tragen das Attribut, und
-     ein rechtsbuendiger Wert unter einem linksbuendigen Kopf saehe aus wie
-     ein Versehen. */
-  .tabelle [data-spalte="Wohnfläche"],
-  .tabelle [data-spalte="Grundstück"],
-  .tabelle [data-spalte="Kaufpreis"],
-  .tabelle [data-spalte="€/m²"] { text-align: right; }
-
-  /* Ohne Titel steht in dieser Zelle `Portal · ID`, bei unbekanntem Portal die
-     volle URL - und die sprengt die Spalte.
-
-     Gekappt wird am INNEREN Element, nicht an der Zelle selbst. Der
-     Unterschied ist nicht kosmetisch: bei `table-layout: auto` ist
-     `max-width` an einer Tabellenzelle nur ein Hinweis, den der
-     Tabellenalgorithmus ueberstimmt, sobald der Inhalt breiter ist - die
-     Kappung fiel damit still aus. Ein Blockelement IN der Zelle hat eine
-     echte Breite, und daran greifen `overflow` und `text-overflow`. Der
-     Verweis ist ohnehin da; ein zusaetzliches Huellelement braucht es nicht.
-
-     Gekappt wird erst ab 48rem: in der Kartenansicht darunter steht die
-     Zelle allein in ihrer Zeile, dort ist Platz und der Umbruch bleibt
-     erlaubt. Ueber `data-spalte` angesprochen wie die Zahlenspalten und aus
-     demselben Grund. */
-  .tabelle [data-spalte="Objekt"] > a {
-    display: block;
-    max-width: 22rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  .zahl { align-items: flex-end; }
+  /* Auf die LISTE eingegrenzt. Ohne die Eingrenzung traf die Regel auch die
+     Objektansicht, und dort schob sie die Preisaenderung an den rechten Rand
+     des Zahlenblocks - weit weg von dem Preis, zu dem sie gehoert.
+     Aufgefallen bei der Sichtpruefung im Browser. */
+  .zahlen .preisaenderung { text-align: right; }
+  /* Das Votum beginnt unter der Mitte und nicht unter dem Bild: es gehoert
+     zum Objekt und nicht zum Foto. */
+  .votum { grid-column: 2 / -1; }
 
   /* Der Knopf sitzt neben dem Feld. `:has()` bleibt bewusst auf diese
      Verbesserung beschraenkt: faellt es aus, steht der Knopf wie am Handy

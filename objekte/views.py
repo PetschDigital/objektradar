@@ -12,7 +12,7 @@ from django.utils.html import format_html
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
 
-from .choices import PreisQuelle, Quelle, Status, Wertung
+from .choices import PreisQuelle, Quelle, Status, Wertung, Zustand
 from .forms import ObjektFilterForm, ObjektForm, UebernahmeForm
 from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
@@ -212,6 +212,54 @@ SORTIERBESCHRIFTUNG = {
     "wohnflaeche": "Wohnfläche",
 }
 
+#: In welche Richtung ein Schluessel sortiert, der noch nicht gilt.
+#:
+#: Die Leiste traegt seit dem 04.09. EINEN Eintrag je Schluessel statt zweier
+#: winziger Pfeile. Ein Eintrag braucht damit eine erste Richtung, und die ist
+#: je Schluessel verschieden: beim Eingeworfen-Datum will man das Neueste
+#: zuerst, beim Preis das Guenstigste, bei der Flaeche das Groesste. Ein
+#: einheitliches "immer aufsteigend" verlangte bei drei von vier Schluesseln
+#: einen zweiten Klick, bevor ueberhaupt etwas Brauchbares dasteht.
+#:
+#: Beide Richtungen bleiben erreichbar: der GELTENDE Schluessel verweist auf
+#: seine Gegenrichtung, ein zweiter Klick dreht um.
+SORTIERRICHTUNG = {
+    "eingestellt_am": "-",   # das zuletzt Eingeworfene zuerst
+    "aktueller_preis": "",   # das Guenstigste zuerst
+    "qm_preis": "",          # dasselbe je Quadratmeter
+    "wohnflaeche": "-",      # das Groesste zuerst
+}
+
+#: Die Pfeile der Sortierleiste. Nur der geltende Schluessel traegt einen.
+PFEIL_AUF = "↑"
+PFEIL_AB = "↓"
+
+
+def sortiereintrag(schluessel, sortierung):
+    """Ein Eintrag der Sortierleiste: Beschriftung, Ziel, Richtung, ob er gilt.
+
+    Gebaut in Python und nicht im Template: das fuehrende Minus laesst sich
+    dort nicht an einen Schluessel haengen, und die Entscheidung "gilt er
+    gerade, dann fuehrt er auf die Gegenrichtung" ist eine Fallunterscheidung
+    mit drei Ausgaengen.
+
+    `pfeil` steht nur am geltenden Eintrag. Genau das ist die Aenderung dieser
+    Runde: standen alle acht Pfeile gleich laut da, sah man nie, was gerade
+    gilt.
+    """
+    auf, ab = schluessel, f"-{schluessel}"
+    gilt = sortierung in (auf, ab)
+    absteigend = sortierung == ab
+    return {
+        "schluessel": schluessel,
+        "beschriftung": SORTIERBESCHRIFTUNG[schluessel],
+        # Der geltende Eintrag zeigt auf seine GEGENRICHTUNG - sonst waere ein
+        # Klick auf ihn folgenlos und die zweite Richtung unerreichbar.
+        "ziel": (auf if absteigend else ab) if gilt else f"{SORTIERRICHTUNG[schluessel]}{schluessel}",
+        "gilt": gilt,
+        "pfeil": (PFEIL_AB if absteigend else PFEIL_AUF) if gilt else "",
+    }
+
 
 def geprueft_sortierung(roh):
     """Der Sortierwert aus der Adresse, gegen die Positivliste geprueft.
@@ -263,13 +311,27 @@ def reihenfolge(sortierung):
     ]
 
 
-#: Die drei Zaehlungen ueber `vota`: Annotationsname, Wertung, Beschriftung.
-#: Die Reihenfolge ist die der Anzeige in der Spalte.
+#: Die drei Zaehlungen ueber `vota`: Annotationsname, Wertung, Beschriftung,
+#: Zeichen. Die Reihenfolge ist die der Anzeige in der Zeile.
+#:
+#: Das ZEICHEN ist seit dem 04.09. dabei. Das Votum steht jetzt als Punktreihe
+#: da, ein Punkt je Person, und die Punkte tragen Farbe. Farbe allein traegt
+#: keine Bedeutung: wer sie nicht unterscheidet, saehe fuenf gleiche Kreise.
+#: Das Zeichen im Punkt ist die zweite, farbunabhaengige Auskunft - und die
+#: Beschriftung steht zusaetzlich im `title`.
+#:
+#: Vier Angaben in EINER Tabelle und nicht in vieren nebeneinander: die
+#: Zuordnung Wertung-zu-Zeichen darf nicht an einer zweiten Stelle noch einmal
+#: getroffen werden koennen.
 VOTUM_ZAEHLUNGEN = (
-    ("votum_dafuer", Wertung.DAFUER, "dafür"),
-    ("votum_anschauen", Wertung.ANSCHAUEN, "anschauen"),
-    ("votum_raus", Wertung.RAUS, "raus"),
+    ("votum_dafuer", Wertung.DAFUER, "dafür", "+"),
+    ("votum_anschauen", Wertung.ANSCHAUEN, "anschauen", "?"),
+    ("votum_raus", Wertung.RAUS, "raus", "−"),
 )
+
+#: Der Punkt fuer eine Person, die noch nicht abgestimmt hat. Er traegt kein
+#: Zeichen - ein leerer Kreis IST die Aussage.
+VOTUM_OFFEN = ("offen", "offen", "")
 
 #: Was in der Spalte steht, wenn niemand abgestimmt hat. Nicht "5 offen" - die
 #: nackte Zahl saehe aus wie ein Zwischenstand - und nicht leer, das saehe aus
@@ -288,7 +350,7 @@ def mit_votumzaehlung(objekte):
     return objekte.annotate(
         **{
             name: Count("vota", filter=Q(vota__wertung=wertung))
-            for name, wertung, _ in VOTUM_ZAEHLUNGEN
+            for name, wertung, _, _zeichen in VOTUM_ZAEHLUNGEN
         }
     )
 
@@ -309,7 +371,7 @@ def votum_uebersicht(objekt, personen):
     sich dort nur ueber verschachtelte `{% if %}` ausdruecken, und die Zahl
     "offen" braucht eine Subtraktion, die die Template-Sprache nicht kennt.
     """
-    zahlen = [(getattr(objekt, name), wort) for name, _, wort in VOTUM_ZAEHLUNGEN]
+    zahlen = [(getattr(objekt, name), wort) for name, _, wort, _zeichen in VOTUM_ZAEHLUNGEN]
     abgestimmt = sum(zahl for zahl, _ in zahlen)
     if not abgestimmt:
         return KEIN_VOTUM
@@ -321,6 +383,72 @@ def votum_uebersicht(objekt, personen):
     if offen > 0:
         teile.append(f"{offen} offen")
     return " · ".join(teile)
+
+
+def votum_punkte(objekt, personen):
+    """Ein Punkt je Person: erst die abgegebenen Wertungen, dann die offenen.
+
+    Die Punktreihe ersetzt seit dem 04.09. nicht den Text, sie steht DANEBEN.
+    Der Text sagt, wie viele; die Reihe zeigt es, ohne dass man zaehlen muss -
+    fuenf Punkte sind ein Bild, "3 dafür · 2 offen" ist ein Satz.
+
+    Die Reihenfolge ist die von `VOTUM_ZAEHLUNGEN` und danach die offenen -
+    ausdruecklich NICHT die Reihenfolge, in der abgestimmt wurde. Eine
+    zeitliche Reihenfolge waere eine Angabe ueber Personen: wer zuerst
+    gestimmt hat, laesse sich bei fuenf Leuten aus zwei Aufrufen ablesen. Wer
+    wie gestimmt hat, steht in der Objektansicht und nur dort.
+
+    Gerufen wird die Funktion NUR dort, wo der Zaehlstand ohnehin dasteht -
+    die Punkte sind der Zaehlstand in anderer Form, und verdeckt heisst
+    verdeckt. Die Entscheidung darueber faellt in der Vorlage und nur dort;
+    siehe den Kommentar an der Votum-Zeile.
+
+    `personen` kommt aus dem Kontext, EINMAL je Seite ermittelt. Ein `.count()`
+    je Zeile waere das N+1, gegen das `AbfragezahlTests` den Riegel haelt.
+    """
+    punkte = []
+    for name, _wertung, wort, zeichen in VOTUM_ZAEHLUNGEN:
+        punkte += [(name.removeprefix("votum_"), wort, zeichen)] * getattr(objekt, name)
+    # Kann negativ werden: wer nach seinem Votum stillgelegt wurde, zaehlt
+    # nicht mehr zu den aktiven Personen, sein Votum steht aber weiter da.
+    # Dieselbe Lage wie bei "offen" im Text - und dieselbe Antwort.
+    return punkte + [VOTUM_OFFEN] * max(personen - len(punkte), 0)
+
+
+def unterzeile(objekt):
+    """Ort, Herkunft und Zustand als fertige Teile fuer die Zeile unter dem Titel.
+
+    Was leer ist, FAELLT WEG - kein Gedankenstrich, keine leere Stelle. Das ist
+    die Zusage aus `02`, die die Tabelle nie halten konnte: eine Spalte muss in
+    jeder Zeile etwas enthalten, und so stand in der halben Liste ein Strich.
+    Die Liste zeigt jetzt, was da ist; welche Felder fehlen, zeigt die
+    Objektansicht - dort ist ein leeres Feld die Aufforderung, es zu fuellen.
+
+    Region und Land sind EIN Teil ("Málaga, ES") und nicht zwei. Sie
+    beantworten gemeinsam die Frage "wo", und zwischen ihnen steht ein Komma
+    und kein Trennpunkt - der Trennpunkt gliedert die Zeile in Angaben, das
+    Komma gliedert eine Angabe.
+
+    Der Zustand `unklar` gilt hier als LEER. Er ist die Vorbelegung des Feldes
+    und keine Aussage: stuende er da, truege ihn fast jede Zeile, und die
+    Angabe verloere genau dort ihren Wert, wo sie einen haette. Die
+    Objektansicht zeigt ihn weiterhin - dort ist er die Aufforderung.
+
+    Gebaut in Python und nicht in der Vorlage: dort waeren es drei
+    verschachtelte `{% if %}` plus die Frage, wo das Komma steht, und die Regel
+    "leer faellt weg" stuende dreimal statt einmal da.
+    """
+    teile = []
+    if objekt.ort:
+        teile.append(objekt.ort)
+    herkunft = ", ".join(
+        wert for wert in (objekt.region, objekt.get_land_display() if objekt.land else "") if wert
+    )
+    if herkunft:
+        teile.append(herkunft)
+    if objekt.zustand != Zustand.UNKLAR:
+        teile.append(objekt.get_zustand_display())
+    return teile
 
 
 def preisaenderung(objekt):
@@ -355,6 +483,13 @@ def preisaenderung(objekt):
         return None
     return {
         "vorher": vorher,
+        # Der BETRAG der Aenderung, seit dem 04.09. Die Liste zeigt ihn statt
+        # des durchgestrichenen alten Preises: in der Zahlenspalte steht der
+        # aktuelle Preis schon darueber, und "von 110.000 auf 98.000" zweimal
+        # nebeneinander ist eine Angabe zu viel fuer eine Zeile. Absolut und
+        # ohne Vorzeichen - die Richtung traegt `senkung`, und zwei Traeger
+        # fuer dieselbe Aussage driften.
+        "betrag": abs(jetzt - vorher),
         "prozent": (jetzt - vorher) / vorher * 100,
         "datum": objekt.preis_geaendert_am,
         "senkung": jetzt < vorher,
@@ -476,21 +611,20 @@ class ObjektlisteView(ListView):
         # Filterformular traegt ihn weiter, und ein durchgereichter Unfug
         # stuende sonst nach dem naechsten Filtern wieder in der Adresse.
         kwargs.setdefault("sortierung", self.sortierung)
-        # Beide Werte je Schluessel im Kontext statt im Template: dort liesse
-        # sich das fuehrende Minus nicht an einen Schluessel haengen, und vier
-        # Paare von Hand hingeschrieben waeren eine zweite Liste neben
-        # `SORTIERSCHLUESSEL`.
+        # Die Leiste wird aus `SORTIERSCHLUESSEL` gebaut, nicht aus einer
+        # zweiten Liste im Template: dort liesse sich das fuehrende Minus
+        # nicht an einen Schluessel haengen, und vier Eintraege von Hand
+        # hingeschrieben driften vom Original weg.
         kwargs.setdefault(
             "sortierbar",
-            [
-                {
-                    "beschriftung": SORTIERBESCHRIFTUNG[schluessel],
-                    "aufsteigend": schluessel,
-                    "absteigend": f"-{schluessel}",
-                }
-                for schluessel in SORTIERSCHLUESSEL
-            ],
+            [sortiereintrag(schluessel, self.sortierung) for schluessel in SORTIERSCHLUESSEL],
         )
+        # Der Filterblock ist zugeklappt und steht nur dann offen, wenn er
+        # etwas verbirgt. Die Entscheidung faellt im FORMULAR und nicht hier:
+        # es kennt seine Vorbelegung, die Ansicht nicht. Zwei Mechanismen fuer
+        # dieselbe Entscheidung verdecken sich gegenseitig.
+        kwargs.setdefault("filter_offen", self.filterform.weicht_ab())
+        kwargs.setdefault("filterlage", self.filterform.zusammenfassung())
         kontext = super().get_context_data(**kwargs)
         # Aus dem Paginator, nicht ueber ein eigenes `count()`: er hat die
         # Zahl bereits gezaehlt, und eine zweite Zaehlabfrage kaeme obendrauf.
@@ -510,6 +644,13 @@ class ObjektlisteView(ListView):
         personen = get_user_model().objects.filter(is_active=True).count()
         for objekt in kontext["objekte"]:
             objekt.votum_uebersicht = votum_uebersicht(objekt, personen)
+            # Die Punktreihe zum Text. Sie steht in DERSELBEN Schleife und aus
+            # denselben Annotationen - eine zweite Zaehlung daneben koennte
+            # etwas anderes sagen als der Text neben ihr.
+            objekt.votum_punkte = votum_punkte(objekt, personen)
+            # Ort, Herkunft, Zustand - ohne die leeren. Keine Abfrage: alle
+            # drei sind eigene Spalten der Zeile.
+            objekt.unterzeile = unterzeile(objekt)
             # Beide Werte liegen als Annotation schon an der Zeile; hier wird
             # nur gerechnet. Keine Abfrage in dieser Schleife - das ist die
             # Zusage, die `test_mehr_preisverlauf_kostet_nicht_mehr_abfragen`
@@ -729,9 +870,28 @@ class ObjektLoeschenView(View):
         vom Portal verlinkt und niemandes Arbeit - und die Liste beantwortet
         die Frage "verliere ich, was jemand hier hineingelegt hat", nicht
         "wie viele Zeilen loescht die Datenbank".
+
+        Die VOTA stehen seit dem 04.09. ebenfalls nicht mehr darin, und das
+        ist kein Versehen, sondern der Punkt.
+
+        Der Zaehlstand eines Objekts sieht nur, wer an diesem Objekt selbst
+        abgestimmt hat - das ist die Zusage der Runde davor. Diese Seite ist
+        von der Liste zwei Klicks entfernt und verlangt kein Votum. "Vota: 3"
+        beantwortete damit fuer jeden die Frage, die verdeckt sein soll: wie
+        viele haben hier schon gestimmt. Ein Leck, und es reichte, es einmal
+        aufzurufen.
+
+        Ein zweiter Zweig "mit eigenem Votum die Zahl, sonst nicht" waere die
+        naheliegende Rettung und wird ausdruecklich NICHT gebaut: dann gaebe
+        es zwei Stellen, an denen ueber die Freischaltung entschieden wird,
+        und faellt eine aus, haelt die andere den Zeugen gruen.
+
+        Dass die Vota mitgehen, sagt die Seite weiter - im Satz unter der
+        Liste, ohne Zahl. Notizen, Preiseintraege und Statusaenderungen
+        behalten ihre: sie sind Arbeit, keine Wertung, und ihr Verlust ist
+        genau das, wovor diese Seite warnt.
         """
         return [
-            ("Vota", objekt.vota.count()),
             ("Notizen", objekt.notizen.count()),
             ("Einträge im Preisverlauf", objekt.preise.count()),
             ("Statusänderungen", objekt.statusaenderungen.count()),

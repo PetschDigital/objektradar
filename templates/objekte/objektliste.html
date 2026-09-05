@@ -3,7 +3,20 @@
 {% block titel %}Objekte · Objektradar{% endblock %}
 
 {% block inhalt %}
-  <h1>Objekte</h1>
+  {% comment %}
+    Die Kopfzeile der Liste: Ueberschrift, Trefferzahl, Einwurf. Sie stehen in
+    EINER Zeile und nicht untereinander - die drei gehoeren zusammen, und
+    dreimal volle Breite untereinander schoebe die Liste selbst unter den
+    Falz.
+
+    Die Trefferzahl steht nur beim gefilterten Stand. Ungefiltert waere sie
+    eine Auskunft ueber nichts ("22 von 22"), und die Ansicht holte die
+    Gesamtzahl dafuer mit einer zweiten Abfrage.
+  {% endcomment %}
+  <div class="zeile-oben">
+    <h1>Objekte</h1>
+    {% if ist_gefiltert %}<span class="treffer">{{ trefferzahl }} von {{ gesamtzahl }}</span>{% endif %}
+  </div>
 
   <form method="post" action="{% url 'objekt_anlegen' %}" class="einwurf">
     {% csrf_token %}
@@ -13,238 +26,330 @@
   </form>
 
   {% comment %}
-    Ein GET-Formular, damit ein gefilterter Stand teilbar ist. `seite` steht
-    bewusst NICHT darin: ein neuer Filter faengt auf Seite 1 an.
+    Der Filterblock klappt ueber `<details>` und nicht ueber ein Skript: die
+    Oberflaeche kommt ohne JavaScript aus, und `<details>` ist das Element,
+    das genau diese Sache kann - samt Tastaturbedienung und der richtigen
+    Ansage fuer Screenreader, die ein nachgebauter Umschalter erst wieder
+    bekommen muesste.
 
-    Die Felder werden EINZELN gerendert und nicht ueber `as_p`: `as_p` stellt
-    Beschriftung und Feld nebeneinander, und dann laufen die Beschriftungen
-    bei unterschiedlich hohen Feldern auseinander. Die Feldnamen und die
-    Vorbelegung des Statusfilters kommen unveraendert aus der Formklasse -
-    hier steht nur, wie sie stehen.
+    `open` steht nur, wenn ein Filter von der Vorbelegung ABWEICHT. Das ist
+    nicht dasselbe wie "es steht ein Parameter in der Adresse": ein
+    Blaetterlink traegt den vorbelegten Statusfilter vollstaendig mit, und ein
+    Block, der danach immer offen stuende, waere nie zu. Umgekehrt darf eine
+    wirksame Einschraenkung sich nicht hinter einer zugeklappten Zeile
+    verstecken - dann suchte man Objekte, die der Filter gerade ausblendet.
+    Die Unterscheidung faellt in `ObjektFilterForm.weicht_ab()`.
+
+    Die Kopfzeile sagt, was gerade gilt. Ohne sie waere das Zuklappen ein
+    Verlust statt einer Ordnung: man muesste oeffnen, um ueberhaupt zu sehen,
+    ob eingeschraenkt ist.
   {% endcomment %}
-  <form method="get" class="filter">
-    {% comment %}
-      Die Freitextsuche nimmt dieselbe Rasterbreite wie jedes andere Feld.
-      Sie stand bis zum 03.09. auf zwei Spalten und war damit doppelt so breit
-      wie die Felder daneben - bei drei Spalten zog sie sich über zwei Drittel
-      der Zeile. Die Reihe hinter ihr bleibt so oder so leer: die Statuszeile
-      dahinter läuft über die volle Breite und kann nicht neben sie rücken.
-    {% endcomment %}
-    {% include "feld.html" with feld=filterform.suche %}
+  <details class="filter"{% if filter_offen %} open{% endif %}>
+    <summary>Filter <span class="lage">{{ filterlage }}</span></summary>
 
     {% comment %}
-      Der Statusfilter ist kein Feld wie die anderen: sechs Kontrollkaestchen
-      passen in keine Rasterspalte. Eigene Zeile ueber die volle Breite, als
-      `<fieldset>` mit `<legend>` - das ist die Bauform fuer eine Gruppe von
-      Kaestchen unter einer gemeinsamen Beschriftung.
+      Ein GET-Formular, damit ein gefilterter Stand teilbar ist. `seite` steht
+      bewusst NICHT darin: ein neuer Filter faengt auf Seite 1 an.
 
-      Jedes `<input>` steckt in SEINEM `<label>` - so liefert Django die
-      Teilwidgets von `CheckboxSelectMultiple` von sich aus. Kaestchen und
-      Wort koennen damit nicht auseinanderfallen, und das Wort ist
-      anklickbar.
+      Die Felder werden EINZELN gerendert und nicht ueber `as_p`: `as_p` stellt
+      Beschriftung und Feld nebeneinander, und dann laufen die Beschriftungen
+      bei unterschiedlich hohen Feldern auseinander. Die Feldnamen und die
+      Vorbelegung des Statusfilters kommen unveraendert aus der Formklasse -
+      hier steht nur, wie sie stehen.
     {% endcomment %}
-    <fieldset class="statusfilter">
-      <legend>{{ filterform.status.label }}</legend>
-      <div class="kaestchen">
-        {% for kaestchen in filterform.status %}{{ kaestchen }}{% endfor %}
+    <form method="get" class="filterfelder">
+
+      {% comment %}
+        Der Statusfilter steht seit dem 04.09. VORN und ist eine Reihe von
+        Marken, keine Kaestchenliste. Er ist der Filter, den man am
+        haeufigsten anfasst; unter fuenf Textfeldern begraben sah er aus wie
+        eine Angabe unter anderen.
+
+        Weiterhin ein `<fieldset>` mit `<legend>` - das ist die Bauform fuer
+        eine Gruppe von Kaestchen unter einer gemeinsamen Beschriftung, und
+        die Marke ist eine gestaltete Gruppe, keine andere Sache.
+
+        Jedes `<input>` steckt in SEINEM `<label>` - so liefert Django die
+        Teilwidgets von `CheckboxSelectMultiple` von sich aus. Kaestchen und
+        Wort koennen damit nicht auseinanderfallen, das Wort ist anklickbar,
+        und die Marke ist genau dieses Label. Das Kaestchen bleibt darin
+        SICHTBAR: die farbliche Absetzung der angehakten Marke haengt an
+        `:has()`, und faellt das aus, ist der Stand am Kaestchen immer noch
+        abzulesen.
+      {% endcomment %}
+      <fieldset class="statusfilter">
+        <legend>{{ filterform.status.label }}</legend>
+        <div class="kaestchen">
+          {% for kaestchen in filterform.status %}{{ kaestchen }}{% endfor %}
+        </div>
+        {{ filterform.status.errors }}
+      </fieldset>
+
+      {% comment %}
+        Die Freitextsuche nimmt dieselbe Rasterbreite wie jedes andere Feld.
+        Sie stand bis zum 03.09. auf zwei Spalten und war damit doppelt so
+        breit wie die Felder daneben.
+      {% endcomment %}
+      {% include "feld.html" with feld=filterform.suche %}
+
+      {% include "feld.html" with feld=filterform.land %}
+      {% include "feld.html" with feld=filterform.portal %}
+      {% include "feld.html" with feld=filterform.objekttyp %}
+      {% include "feld.html" with feld=filterform.zustand %}
+      {% include "feld.html" with feld=filterform.region %}
+
+      {# Von/bis gehoert zusammen und wird nicht getrennt umbrochen. #}
+      <div class="feldpaar">
+        {% include "feld.html" with feld=filterform.preis_von %}
+        {% include "feld.html" with feld=filterform.preis_bis %}
       </div>
-      {{ filterform.status.errors }}
-    </fieldset>
+      <div class="feldpaar">
+        {% include "feld.html" with feld=filterform.flaeche_von %}
+        {% include "feld.html" with feld=filterform.flaeche_bis %}
+      </div>
 
-    {% include "feld.html" with feld=filterform.land %}
-    {% include "feld.html" with feld=filterform.portal %}
-    {% include "feld.html" with feld=filterform.objekttyp %}
-    {% include "feld.html" with feld=filterform.zustand %}
+      {% comment %}
+        Nur wenn wirklich sortiert wurde, und mit dem GEPRUEFTEN Wert: ein
+        Filtern soll die Sortierung nicht abwerfen, aber auch keinen Unfug aus
+        der Adresse in die naechste Adresse tragen.
+      {% endcomment %}
+      {% if request.GET.sortierung %}
+        <input type="hidden" name="sortierung" value="{{ sortierung }}">
+      {% endif %}
 
-    {# Von/bis gehoert zusammen und wird nicht getrennt umbrochen. #}
-    <div class="feldpaar">
-      {% include "feld.html" with feld=filterform.preis_von %}
-      {% include "feld.html" with feld=filterform.preis_bis %}
-    </div>
-    <div class="feldpaar">
-      {% include "feld.html" with feld=filterform.flaeche_von %}
-      {% include "feld.html" with feld=filterform.flaeche_bis %}
-    </div>
-
-    {% include "feld.html" with feld=filterform.region %}
-
-    {% comment %}
-      Nur wenn wirklich sortiert wurde, und mit dem GEPRUEFTEN Wert: ein
-      Filtern soll die Sortierung nicht abwerfen, aber auch keinen Unfug aus
-      der Adresse in die naechste Adresse tragen.
-    {% endcomment %}
-    {% if request.GET.sortierung %}
-      <input type="hidden" name="sortierung" value="{{ sortierung }}">
-    {% endif %}
-
-    <div class="aktionen">
-      <button type="submit">Filtern</button>
-      {% if ist_gefiltert %}<a href="{% url 'objektliste' %}">Filter zurücksetzen</a>{% endif %}
-    </div>
-  </form>
-
-  {% if ist_gefiltert %}
-    <p class="treffer">{{ trefferzahl }} von {{ gesamtzahl }} Objekten</p>
-  {% endif %}
+      <div class="aktionen">
+        <button type="submit">Filtern</button>
+        {% if ist_gefiltert %}<a href="{% url 'objektliste' %}">Filter zurücksetzen</a>{% endif %}
+      </div>
+    </form>
+  </details>
 
   {% comment %}
-    Eigene Leiste statt Verweise in den Spaltenkoepfen: unter 48rem ist die
-    Tabelle eine Kartenliste, `thead` steht dort nur noch fuer Screenreader
-    und waere mit der Maus nicht erreichbar. `seite=None` wirft die
-    Seitenzahl ab - eine neue Sortierung faengt vorn an.
+    EIN Eintrag je Schluessel, nicht zwei winzige Pfeile. Bis zum 04.09.
+    standen acht gleich laute Pfeile in der Leiste, und welche Sortierung
+    gerade galt, war daran nicht abzulesen - genau das, wofuer eine
+    Sortierleiste da ist.
 
-    Beide Richtungen bleiben je Schluessel erreichbar; erkennbar ist die
-    geltende: der aktive Schluessel und sein Pfeil tragen `--text` und
-    Fettung, alles Uebrige `--gedaempft`.
+    Der geltende Eintrag ist abgesetzt und traegt die Richtung als Pfeil; er
+    verweist auf seine GEGENRICHTUNG, ein zweiter Klick dreht also um. Beide
+    Richtungen bleiben damit je Schluessel erreichbar. Welche Richtung ein
+    noch nicht geltender Schluessel nimmt, entscheidet `SORTIERRICHTUNG` in
+    der Ansicht - beim Preis das Guenstigste zuerst, beim Datum das Neueste.
+
+    Eigene Leiste und keine Verweise in Spaltenkoepfen: die Liste hat keine
+    Spaltenkoepfe mehr.
+
+    `seite=None` wirft die Seitenzahl ab - eine neue Sortierung faengt vorn an.
   {% endcomment %}
-  <p class="sortierung">
-    <span class="titel">Sortieren nach</span>
-    {% for spalte in sortierbar %}
-      <span class="schluessel{% if sortierung == spalte.aufsteigend or sortierung == spalte.absteigend %} aktiv{% endif %}">{{ spalte.beschriftung }}<a
-        href="{% querystring sortierung=spalte.aufsteigend seite=None %}"
-        title="{{ spalte.beschriftung }} aufsteigend"
-        {% if sortierung == spalte.aufsteigend %}aria-current="true"{% endif %}>↑</a><a
-        href="{% querystring sortierung=spalte.absteigend seite=None %}"
-        title="{{ spalte.beschriftung }} absteigend"
-        {% if sortierung == spalte.absteigend %}aria-current="true"{% endif %}>↓</a></span>
-    {% endfor %}
+  <p class="sortieren">
+    <span class="beschriftung">Sortieren</span>
+    {% for spalte in sortierbar %}<a href="{% querystring sortierung=spalte.ziel seite=None %}"{% if spalte.gilt %} aria-current="true"{% endif %}>{{ spalte.beschriftung }}{% if spalte.pfeil %} {{ spalte.pfeil }}{% endif %}</a>{% endfor %}
   </p>
 
   {% if objekte %}
-    <div class="tabelle">
-      <table>
-        <thead>
-          <tr>
-            <th data-spalte="Bild">Bild</th>
-            <th data-spalte="Objekt">Objekt</th>
-            <th data-spalte="Ort">Ort</th>
-            <th data-spalte="Region / Land">Region / Land</th>
-            <th data-spalte="Wohnfläche">Wohnfläche</th>
-            <th data-spalte="Grundstück">Grundstück</th>
-            <th data-spalte="Kaufpreis">Kaufpreis</th>
-            <th data-spalte="€/m²">€/m²</th>
-            <th data-spalte="Zustand">Zustand</th>
-            <th data-spalte="Status">Status</th>
-            <th data-spalte="Votum">Votum</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for o in objekte %}
-            <tr>
+    <ul class="liste">
+      {% for o in objekte %}
+        {% comment %}
+          EIN Markup fuer beide Fassungen - es gibt kein getrenntes Karten-
+          und Tabellenmarkup mehr. Die Zeile ist ein Raster aus Bild, Mitte
+          und Zahlen; unter 48rem rutschen die Zahlen unter die Mitte, mehr
+          passiert nicht.
+
+          Die Statusfarbe steht ZWEIMAL an der Zeile: als Kante links und als
+          Pille in der Unterzeile. Die Kante loest den gemeldeten Punkt, dass
+          die alten Flaechentoene zu dicht am Papierton lagen - eine Kante
+          steht auf dem Papier und nicht darin.
+
+          Die Farbe kommt ueber die KLASSE `status-<wert>` und nicht ueber
+          eine Stilangabe an der Zeile. Der Entwurf setzt sie dort als
+          `--kante`; das waere eine zweite Zuordnung zwischen Status und Farbe
+          neben der im Stylesheet, und zwei Tabellen fuer dieselbe Regel
+          driften. Das Stylesheet fuehrt je Schluessel genau eine Regel, und
+          die setzt `--status`; Kante und Pille lesen daraus.
+        {% endcomment %}
+        <li class="objekt status-{{ o.status }}">
+          {% comment %}
+            Genau EIN Bild je Zeile, und es kommt als Annotation `erstes_bild`
+            aus der Abfrage - nicht ueber `o.bilder`, das waere je Zeile eine
+            eigene Abfrage.
+
+            Ohne Bild steht hier eine leere Flaeche in DERSELBEN Groesse und
+            kein `<img>` mit leerer Adresse: eine Zeile, die mal hoch und mal
+            niedrig ist, macht genau den Zahlenvergleich kaputt, um den es in
+            der Liste geht. Kein Text darin, kein Symbol - und `aria-hidden`,
+            denn fuer das Vorlesen ist sie nichts.
+
+            `referrerpolicy="no-referrer"`, weil Portale Bildadressen an den
+            Verweis binden. Kein `onerror`: die Oberflaeche kommt ohne Skript
+            aus. Verschwindet ein Inserat, bleibt die ruhige Flaeche.
+          {% endcomment %}
+          {% if o.erstes_bild %}
+            <img class="bild" src="{{ o.erstes_bild }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+          {% else %}
+            <span class="bild platzhalter" aria-hidden="true"></span>
+          {% endif %}
+
+          <div class="mitte">
+            {% comment %}
+              Die Besuchsmarke steht VOR dem Titel und bekommt keine eigene
+              Spalte - es gibt keine Spalten mehr, und auch kein eigenes
+              Element neben dem Titel: sie sitzt in derselben Zeile.
+
+              Kein Wort daneben. "neu" ist in der Oberflaeche gesperrt - das
+              Wort gehoert dem Status NEU ("von niemandem angesehen") und
+              meint etwas anderes. Die Erklaerung steht im `title`.
+
+              Ohne Bewegung steht hier NICHTS - kein Platzhalter. Ein leerer
+              Punkt derselben Groesse hielte zwar die Ausrichtung, machte
+              aber genau das kaputt, wofuer die Marke da ist: dass ein Blick
+              ueber die Liste reicht.
+
+              Ohne Titel traegt der Verweis `nackt` und wird gedaempft und
+              ungefettet gesetzt: solche Objekte sind erkennbar unfertig, und
+              ein fett gesetzter Link auf eine URL sieht aus wie eine Angabe.
+              Was dasteht, kommt unveraendert aus `{{ o }}` - Titel,
+              ersatzweise Portal und Inserats-ID, ersatzweise die URL. Gekuerzt
+              wird sie im Stylesheet und nicht hier: eine zweite Formel neben
+              `__str__` driftet von ihr weg.
+            {% endcomment %}
+            <div class="titelzeile">
+              {% if o.seit_besuch_bewegt %}<span class="besuchsmarke" title="seit deinem letzten Besuch"></span>{% endif %}<a class="titel{% if not o.titel %} nackt{% endif %}" href="{% url 'objekt' o.pk %}">{{ o }}</a>
+            </div>
+
+            {% comment %}
+              Ort, Herkunft und Zustand stehen als Unterzeile beim Titel und
+              nicht als eigene Spalten. Was leer ist, faellt einzeln weg - kein
+              Gedankenstrich, keine leere Stelle. Damit haelt die Liste die
+              Zusage aus `02`: leere Felder zeigt die Objektansicht, die Liste
+              nicht.
+
+              Welche Teile dastehen, entscheidet `unterzeile()` in der Ansicht.
+              Hier stehen sie nur - die Regel "leer faellt weg" gaebe es sonst
+              dreimal, einmal je Feld.
+
+              Der Status ist eine MARKE und kein Fliesstext: er wird gesucht,
+              nicht gelesen. Dieselbe Klasse wie in der Objektansicht, damit
+              ein Status an beiden Stellen gleich aussieht; die Farbklasse
+              kommt aus dem gespeicherten Wert.
+            {% endcomment %}
+            <div class="unterzeile">
+              <span class="statusmarke status-{{ o.status }}">{{ o.get_status_display }}</span>{% for teil in o.unterzeile %}<span>{{ teil }}</span>{% endfor %}
+            </div>
+          </div>
+
+          {% comment %}
+            Die Zahlen. Der KAUFPREIS ist die groesste Zahl der Zeile, der
+            Preis je m² steht daneben in normaler Groesse, Wohnflaeche und
+            Grundstueck links davon.
+
+            UMGEDREHT am 05.09. Bis dahin trug "je m²" die Hauptgroesse - so
+            steht es im Entwurf, und der galt bei Widerspruch. Die
+            Entscheidung ist ausdruecklich anders gefallen: der Kaufpreis ist
+            die Zahl, an der eine Zeile haengenbleibt, und die Reihenfolge im
+            Block bleibt dieselbe wie zuvor. Nur die Gewichtung wandert.
+
+            Damit ist die Liste ausserdem mit der Objektansicht einig: dort
+            steht der Kaufpreis schon immer groesser als alles andere auf der
+            Seite.
+
+            Fehlende Zahlen stehen als gedaempfter Gedankenstrich und nicht
+            als Luecke: ohne ihn rutschten die Werte gegeneinander, und eine
+            leere Stelle liest sich ausserdem wie eine Null.
+
+            Kein Betrag bricht um - weder zwischen Zahl und Waehrungszeichen
+            noch innerhalb der Zahl. Das haelt `white-space: nowrap` im
+            Stylesheet; ein geschuetztes Leerzeichen im Markup taete dasselbe,
+            stuende dafuer aber in jedem gespeicherten Auszug und in jedem
+            Zeugen als unsichtbares Zeichen.
+
+            Die Preisaenderung steckt IN der Kaufpreisangabe, nicht daneben:
+            sie gehoert zu diesem einen Wert, und als eigenes Rasterkind
+            schoebe sie die Spalte auseinander.
+          {% endcomment %}
+          <div class="zahlen">
+            <div class="zahl">
+              <span class="wert{% if not o.wohnflaeche %} fehlt{% endif %}">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</span>
+              <span class="etikett">Wohnfläche</span>
+            </div>
+            <div class="zahl">
+              <span class="wert{% if not o.grundstuecksgroesse %} fehlt{% endif %}">{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</span>
+              <span class="etikett">Grundstück</span>
+            </div>
+            <div class="zahl haupt">
+              <span class="wert{% if not o.aktueller_preis %} fehlt{% endif %}">{% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}</span>
+              <span class="etikett">Kaufpreis</span>
               {% comment %}
-                Genau EIN Bild je Zeile, und es kommt als Annotation `erstes_bild`
-                aus der Abfrage - nicht ueber `o.bilder`, das waere je Zeile eine
-                eigene Abfrage. Ab 48rem ist die Zelle eine schmale erste Spalte,
-                darunter der Kopf der Karte.
-
-                Ohne Bild steht hier eine leere Flaeche in DERSELBEN Groesse und
-                kein `<img>` mit leerer Adresse: eine Zeile, die mal hoch und mal
-                niedrig ist, macht genau den Zahlenvergleich kaputt, um den es in
-                der Tabelle geht. Kein Text darin, kein Symbol - die Flaeche sagt
-                schon alles, was zu sagen ist.
-
-                `referrerpolicy="no-referrer"`, weil Portale Bildadressen an den
-                Verweis binden. Kein `onerror`: die Oberflaeche kommt ohne Skript
-                aus. Verschwindet ein Inserat, bleibt die ruhige Flaeche.
-              {% endcomment %}
-              <td data-spalte="Bild">
-                {% if o.erstes_bild %}
-                  <img src="{{ o.erstes_bild }}" alt="" loading="lazy" referrerpolicy="no-referrer">
-                {% else %}
-                  <span class="platzhalter"></span>
-                {% endif %}
-              </td>
-              {% comment %}
-                Die Besuchsmarke steht IN der Bezeichnungszelle und bekommt
-                keine eigene Spalte: eine zwoelfte Spalte kostete Breite in
-                jeder Zeile, auch in den neunundvierzig ohne Marke.
-
-                Kein Wort daneben. "neu" ist in der Oberflaeche gesperrt - das
-                Wort gehoert dem Status NEU ("von niemandem angesehen") und
-                meint etwas anderes. Die Erklaerung steht im `title`.
-
-                Ohne Bewegung steht hier NICHTS - kein Platzhalter. Ein leerer
-                Punkt derselben Groesse hielte zwar die Ausrichtung, machte
-                aber genau das kaputt, wofuer die Marke da ist: dass ein Blick
-                ueber die Liste reicht.
-
-                Das Markup ist dasselbe fuer beide Fassungen - ab 48rem eine
-                Tabellenzelle, darunter die Ueberschrift der Karte. Die Marke
-                steht damit in beiden.
-              {% endcomment %}
-              <td data-spalte="Objekt" class="bezeichnung">{% if o.seit_besuch_bewegt %}<span class="besuchsmarke" title="seit deinem letzten Besuch"></span>{% endif %}<a href="{% url 'objekt' o.pk %}">{{ o }}</a></td>
-              <td data-spalte="Ort">{{ o.ort|default:"—" }}</td>
-              <td data-spalte="Region / Land">{{ o.region|default:"—" }}{% if o.land %} · {{ o.get_land_display }}{% endif %}</td>
-              <td data-spalte="Wohnfläche">{% if o.wohnflaeche %}{{ o.wohnflaeche|floatformat:0 }} m²{% else %}—{% endif %}</td>
-              <td data-spalte="Grundstück">{% if o.grundstuecksgroesse %}{{ o.grundstuecksgroesse|floatformat:0 }} m²{% else %}—{% endif %}</td>
-              {% comment %}
-                Der aktuelle Preis steht wie bisher da; die Aenderung kommt
-                DARUNTER und kleiner. Beides steckt in einer gemeinsamen
-                Huelle: unter 48rem ist die Zelle eine Flexzeile mit der
-                Spaltenbezeichnung links und dem Wert rechts, und ohne die
-                Huelle waeren aktueller Preis und Aenderung zwei getrennte
-                Flexkinder, die die Zeile auseinanderziehen.
-
                 Ob gesenkt oder erhoeht, entscheidet NICHT das Vorzeichen des
                 Prozentwerts an dieser Stelle: die Richtung kommt als
                 `senkung` fertig aus der Ansicht. Hier steht nur, wie sie
                 aussieht.
+
+                Die Liste zeigt den BETRAG und das Datum; der vorherige Preis
+                und der Prozentwert stehen in der Objektansicht. In der
+                Zahlenspalte steht der aktuelle Preis schon darueber - "von
+                110.000 auf 98.000" waere dieselbe Auskunft ein zweites Mal,
+                und die Spalte hat dafuer keine Breite.
+
+                Das Datum steht kurz und traegt das volle im `title`: eine
+                Senkung von vor einem Jahr saehe als "seit 03.09." aus wie
+                eine von gestern.
+
+                Eine ERHOEHUNG erscheint ebenfalls, nur gedaempft und mit dem
+                Pfeil nach oben. Sie zu verschweigen waere eine Luecke - aber
+                sie ist kein Kaufsignal und bekommt `--signal` nicht.
               {% endcomment %}
-              <td data-spalte="Kaufpreis">
-                <span class="preis">
-                  {% if o.aktueller_preis %}{{ o.aktueller_preis|floatformat:0 }} €{% else %}—{% endif %}
-                  {% if o.preisaenderung %}
-                    <span class="preisaenderung{% if o.preisaenderung.senkung %} senkung{% endif %}">
-                      <s>{{ o.preisaenderung.vorher|floatformat:0 }} €</s>
-                      · {% if o.preisaenderung.prozent > 0 %}+{% endif %}{{ o.preisaenderung.prozent|floatformat:"-1" }} %
-                      · {{ o.preisaenderung.datum|date:"d.m.Y" }}
-                    </span>
-                  {% endif %}
-                </span>
-              </td>
-              <td data-spalte="€/m²">{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</td>
-              <td data-spalte="Zustand">{{ o.get_zustand_display }}</td>
-              {% comment %}
-                Der Status ist auch hier eine MARKE und kein Fliesstext - die
-                Spalte wird gesucht, nicht gelesen. Dieselbe Klasse wie in der
-                Objektansicht, damit ein Status an beiden Stellen gleich
-                aussieht; die Farbklasse kommt aus dem gespeicherten Wert.
+              {% if o.preisaenderung %}
+                <span class="preisaenderung{% if o.preisaenderung.senkung %} senkung{% endif %}" title="{% if o.preisaenderung.senkung %}gesenkt{% else %}erhöht{% endif %} am {{ o.preisaenderung.datum|date:"d.m.Y" }} von {{ o.preisaenderung.vorher|floatformat:0 }} €">{% if o.preisaenderung.senkung %}↓{% else %}↑{% endif %} {{ o.preisaenderung.betrag|floatformat:0 }} € seit {{ o.preisaenderung.datum|date:"d.m." }}</span>
+              {% endif %}
+            </div>
+            <div class="zahl">
+              <span class="wert{% if not o.qm_preis %} fehlt{% endif %}">{% if o.qm_preis %}{{ o.qm_preis|floatformat:0 }} €{% else %}—{% endif %}</span>
+              <span class="etikett">je m²</span>
+            </div>
+          </div>
 
-                Gilt für BEIDE Fassungen: ab 48rem ist die Zelle eine
-                Tabellenzelle, darunter eine Zeile der Karte. Das Markup ist
-                dasselbe, also auch die Marke.
-              {% endcomment %}
-              <td data-spalte="Status"><span class="statusmarke status-{{ o.status }}">{{ o.get_status_display }}</span></td>
-              {% comment %}
-                Verdecktes Votum: den Zaehlstand sieht nur, wer an DIESEM
-                Objekt selbst gestimmt hat. Wer noch nicht gestimmt hat,
-                bekommt den Aufruf dazu.
+          {% comment %}
+            Verdecktes Votum: den Zaehlstand sieht nur, wer an DIESEM Objekt
+            selbst gestimmt hat. Wer noch nicht gestimmt hat, bekommt den
+            Aufruf dazu.
 
-                Der Zaehlstand wird nicht ausgegeben und NICHT nachtraeglich
-                unsichtbar gemacht - kein `hidden`, keine Klasse, kein
-                Stylesheet. Er steht nicht im ausgelieferten Markup, und wer
-                den Quelltext ansieht, findet ihn nicht. Eine Verdeckung, die
-                nur im Auge wirkt, ist keine.
+            Die PUNKTREIHE ist der Zaehlstand in anderer Form und steht
+            deshalb im selben Zweig wie der Text. Fuenf Punkte, von denen zwei
+            gefuellt sind, sagen dasselbe wie "2 dafür · 3 offen" - eine
+            Verdeckung, die den Satz weglaesst und die Punkte stehen liesse,
+            waere keine.
 
-                Die Entscheidung faellt HIER und nur hier. Die Ansicht
-                berechnet `votum_uebersicht` weiter fuer jede Zeile: zwei
-                Mechanismen fuer dieselbe Entscheidung verdecken sich
-                gegenseitig, und faellt der eine aus, haelt der andere den
-                Zeugen gruen, waehrend die Zusage schon weg ist.
+            Der Zaehlstand wird nicht ausgegeben und NICHT nachtraeglich
+            unsichtbar gemacht - kein `hidden`, keine Klasse, kein Stylesheet.
+            Er steht nicht im ausgelieferten Markup, und wer den Quelltext
+            ansieht, findet ihn nicht. Eine Verdeckung, die nur im Auge wirkt,
+            ist keine.
 
-                `hat_eigenes_votum` kommt als `Exists()`-Annotation aus der
-                Abfrage - kein Nachschlagen je Zeile.
+            Die Entscheidung faellt HIER und nur hier. Die Ansicht berechnet
+            `votum_uebersicht` und `votum_punkte` weiter fuer jede Zeile: zwei
+            Mechanismen fuer dieselbe Entscheidung verdecken sich gegenseitig,
+            und faellt der eine aus, haelt der andere den Zeugen gruen,
+            waehrend die Zusage schon weg ist.
 
-                Ein Verweis und kein Knopf: abgestimmt wird in der
-                Objektansicht, wo die Begruendung danebensteht. Ein Knopf in
-                der Liste braeuchte eine Wertung, und die waere hier geraten.
-              {% endcomment %}
-              <td data-spalte="Votum">{% if o.hat_eigenes_votum %}{{ o.votum_uebersicht }}{% else %}<a href="{% url 'objekt' o.pk %}">abstimmen</a>{% endif %}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+            `hat_eigenes_votum` kommt als `Exists()`-Annotation aus der
+            Abfrage - kein Nachschlagen je Zeile.
+
+            Ein Verweis und kein Knopf: abgestimmt wird in der Objektansicht,
+            wo die Begruendung danebensteht. Ein Knopf in der Liste braeuchte
+            eine Wertung, und die waere hier geraten.
+          {% endcomment %}
+          <div class="votum">
+            {% if o.hat_eigenes_votum %}
+              <span class="stimmen">{% for art, wort, zeichen in o.votum_punkte %}<span class="stimme {{ art }}" title="{{ wort }}">{{ zeichen }}</span>{% endfor %}</span>
+              <span class="votum-text">{{ o.votum_uebersicht }}</span>
+            {% else %}
+              <a class="abstimmen" href="{% url 'objekt' o.pk %}">abstimmen</a>
+              <span class="votum-text">— die Vota der anderen erscheinen danach</span>
+            {% endif %}
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
     {% if page_obj.has_other_pages %}
       {% comment %}
         Der Tag `querystring` uebernimmt die uebrigen Parameter unveraendert

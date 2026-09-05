@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Objekte · Objektradar — Entwurf</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --papier:#FBFAF8;
+  --flaeche:#F2F0EA;
+  --linie:#E4E0D8;
+  --linie-stark:#C9C4B8;
+  --text:#1B1A17;
+  --gedaempft:#6E695E;
+  --akzent:#1F4A42;
+  --akzent-hell:#E6EDEB;
+  --signal:#B0402A;
+  --fehler:#9E2A2B;
+  --warnung:#8A6A1F;
+
+  --st-neu:#3E5C8A;
+  --st-pruefung:#6B5B8A;
+  --st-besichtigung:#2F6B57;
+  --st-spur:#A85A16;
+  --st-raus:#7A7368;
+  --st-markt:#9A958A;
+
+  --radius:3px;
+  --spalte:1120px;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--papier);
+  color:var(--text);
+  font-family:Archivo,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:15px;
+  line-height:1.45;
+  font-variant-numeric:tabular-nums;
+}
+a{color:inherit}
+
+.huelle{max-width:var(--spalte);margin:0 auto;padding:0 1rem}
+
+/* ---------- Kopfleiste ---------- */
+.kopf{
+  border-bottom:1px solid var(--linie);
+  background:var(--papier);
+  position:sticky;top:0;z-index:5;
+}
+.kopf .huelle{
+  display:flex;align-items:center;gap:1.25rem;
+  height:56px;
+}
+.marke{
+  font-weight:700;letter-spacing:-.015em;font-size:1.0625rem;
+  text-decoration:none;margin-right:auto;
+}
+.marke span{color:var(--akzent)}
+.kopf nav{display:flex;gap:1.25rem;font-size:.875rem}
+.kopf nav a{text-decoration:none;color:var(--gedaempft);padding:.25rem 0;border-bottom:2px solid transparent}
+.kopf nav a:hover{color:var(--text)}
+.kopf nav a[aria-current]{color:var(--text);border-bottom-color:var(--akzent);font-weight:500}
+.konto{
+  font-size:.8125rem;color:var(--gedaempft);
+  padding-left:1.25rem;border-left:1px solid var(--linie);
+}
+
+/* ---------- Werkzeugleiste ---------- */
+.werkzeuge{padding:1.25rem 0 0}
+.zeile-oben{
+  display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;
+  margin-bottom:.875rem;
+}
+h1{font-size:1.5rem;font-weight:600;letter-spacing:-.02em;margin:0}
+.anzahl{color:var(--gedaempft);font-size:.875rem}
+.einwerfen{
+  margin-left:auto;
+  background:var(--akzent);color:#fff;text-decoration:none;
+  font-size:.875rem;font-weight:500;
+  padding:.5rem .875rem;border-radius:var(--radius);
+}
+.einwerfen:hover{background:#173A34}
+
+/* ---------- Filter ---------- */
+details.filter{
+  border:1px solid var(--linie);border-radius:var(--radius);
+  background:var(--flaeche);margin-bottom:.875rem;
+}
+details.filter summary{
+  cursor:pointer;list-style:none;
+  padding:.625rem .875rem;
+  font-size:.875rem;font-weight:500;
+  display:flex;align-items:center;gap:.5rem;
+}
+details.filter summary::-webkit-details-marker{display:none}
+details.filter summary::after{
+  content:"";width:7px;height:7px;margin-left:auto;
+  border-right:1.5px solid var(--gedaempft);border-bottom:1.5px solid var(--gedaempft);
+  transform:rotate(45deg) translateY(-2px);
+}
+details.filter[open] summary::after{transform:rotate(-135deg) translateY(-2px)}
+.aktive-filter{
+  font-weight:400;color:var(--gedaempft);
+}
+.filter-inhalt{
+  padding:0 .875rem 1rem;
+  border-top:1px solid var(--linie);
+  margin-top:0;padding-top:1rem;
+}
+.status-reihe{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem}
+.status-reihe label{
+  display:inline-flex;align-items:center;gap:.375rem;
+  font-size:.8125rem;padding:.3125rem .625rem;
+  border:1px solid var(--linie-stark);border-radius:100px;
+  background:var(--papier);cursor:pointer;
+}
+.status-reihe input{margin:0;accent-color:var(--akzent)}
+.status-reihe label:has(input:checked){
+  background:var(--akzent-hell);border-color:var(--akzent);font-weight:500;
+}
+.raster{
+  display:grid;gap:.75rem 1rem;
+  grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+}
+.feld{display:flex;flex-direction:column;gap:.25rem}
+.feld label{font-size:.75rem;color:var(--gedaempft)}
+.feld input,.feld select{
+  font:inherit;font-size:.875rem;
+  padding:.4375rem .5rem;
+  border:1px solid var(--linie-stark);border-radius:var(--radius);
+  background:var(--papier);color:var(--text);
+}
+.feld input:focus,.feld select:focus{outline:2px solid var(--akzent);outline-offset:-1px}
+.filter-fuss{display:flex;gap:.75rem;align-items:center;margin-top:1rem}
+.knopf{
+  font:inherit;font-size:.875rem;font-weight:500;
+  padding:.4375rem .875rem;border-radius:var(--radius);
+  border:1px solid var(--akzent);background:var(--akzent);color:#fff;cursor:pointer;
+}
+.knopf.leer{background:transparent;color:var(--gedaempft);border-color:var(--linie-stark)}
+
+/* ---------- Sortierung ---------- */
+.sortieren{
+  display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;
+  font-size:.8125rem;padding:.5rem 0;
+  border-bottom:1px solid var(--linie-stark);
+}
+.sortieren > span{color:var(--gedaempft);margin-right:.375rem}
+.sortieren a{
+  text-decoration:none;color:var(--gedaempft);
+  padding:.25rem .5rem;border-radius:var(--radius);
+}
+.sortieren a:hover{background:var(--flaeche);color:var(--text)}
+.sortieren a[aria-current]{background:var(--akzent);color:#fff;font-weight:500}
+
+/* ---------- Liste ---------- */
+.liste{list-style:none;margin:0;padding:0}
+.objekt{
+  display:grid;
+  grid-template-columns:96px minmax(0,1fr) auto;
+  gap:0 1rem;
+  padding:.875rem 0 .875rem .75rem;
+  border-bottom:1px solid var(--linie);
+  position:relative;
+}
+.objekt::before{
+  content:"";position:absolute;left:0;top:.875rem;bottom:.875rem;
+  width:3px;border-radius:2px;background:var(--kante,transparent);
+}
+.objekt:hover{background:var(--flaeche)}
+
+.bild{
+  grid-row:span 2;
+  width:96px;height:72px;border-radius:var(--radius);
+  background:var(--flaeche);object-fit:cover;display:block;
+  border:1px solid var(--linie);
+}
+.bild.leer{
+  display:grid;place-items:center;
+  color:var(--linie-stark);font-size:1.25rem;
+}
+
+.mitte{min-width:0;display:flex;flex-direction:column;gap:.25rem}
+.titelzeile{display:flex;align-items:baseline;gap:.5rem;min-width:0}
+.marke-neu{
+  flex:none;width:7px;height:7px;border-radius:50%;
+  background:var(--akzent);margin-top:.4375rem;
+}
+.titel{
+  font-weight:600;font-size:.9375rem;letter-spacing:-.005em;
+  text-decoration:none;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.titel:hover{text-decoration:underline}
+.titel.nackt{font-weight:400;color:var(--gedaempft);font-size:.875rem}
+.unterzeile{
+  display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;
+  font-size:.8125rem;color:var(--gedaempft);
+}
+.pille{
+  font-size:.75rem;font-weight:500;
+  padding:.125rem .5rem;border-radius:100px;
+  color:#fff;white-space:nowrap;
+}
+.trenner{color:var(--linie-stark)}
+
+/* Zahlen */
+.zahlen{
+  display:flex;align-items:baseline;gap:1.5rem;
+  text-align:right;white-space:nowrap;
+}
+.zahl{display:flex;flex-direction:column;gap:.0625rem}
+.zahl .wert{font-size:.9375rem;font-weight:500}
+.zahl .etikett{font-size:.6875rem;color:var(--gedaempft)}
+.zahl.haupt .wert{font-size:1.25rem;font-weight:700;letter-spacing:-.02em}
+.zahl .wert.leer{color:var(--linie-stark);font-weight:400}
+.senkung{
+  color:var(--signal);font-size:.75rem;font-weight:600;
+  display:flex;align-items:center;gap:.1875rem;justify-content:flex-end;
+}
+
+/* Votum */
+.votum{
+  grid-column:2/-1;
+  display:flex;align-items:center;gap:.5rem;
+  margin-top:.5rem;font-size:.8125rem;
+}
+.stimmen{display:flex;gap:.25rem}
+.stimme{
+  width:1.25rem;height:1.25rem;border-radius:50%;
+  display:grid;place-items:center;
+  font-size:.6875rem;font-weight:700;color:#fff;
+}
+.stimme.dafuer{background:var(--st-besichtigung)}
+.stimme.raus{background:var(--st-raus)}
+.stimme.anschauen{background:var(--st-spur)}
+.stimme.offen{background:transparent;border:1.5px dashed var(--linie-stark)}
+.votum-text{color:var(--gedaempft)}
+.abstimmen{
+  color:var(--akzent);font-weight:600;text-decoration:none;
+  border-bottom:1.5px solid currentColor;
+}
+
+@media (max-width:47.99rem){
+  .objekt{grid-template-columns:72px minmax(0,1fr);padding-left:.625rem}
+  .bild{width:72px;height:56px;grid-row:span 1}
+  .zahlen{
+    grid-column:1/-1;margin-top:.625rem;
+    justify-content:flex-start;text-align:left;gap:1.25rem;
+  }
+  .senkung{justify-content:flex-start}
+  .votum{grid-column:1/-1}
+  .kopf nav{display:none}
+}
+
+.fuss{
+  padding:1.5rem 0 3rem;font-size:.8125rem;color:var(--gedaempft);
+  display:flex;gap:1rem;align-items:center;
+}
+.hinweis{
+  max-width:var(--spalte);margin:2rem auto 0;padding:1rem;
+  border-left:3px solid var(--warnung);background:var(--flaeche);
+  font-size:.8125rem;
+}
+</style>
+</head>
+<body>
+
+<header class="kopf">
+  <div class="huelle">
+    <a href="#" class="marke">Objekt<span>radar</span></a>
+    <nav>
+      <a href="#" aria-current="page">Objekte</a>
+      <a href="#">Einwerfen</a>
+      <a href="#">Lesezeichen</a>
+    </nav>
+    <span class="konto">Petsch</span>
+  </div>
+</header>
+
+<main class="huelle werkzeuge">
+
+  <div class="zeile-oben">
+    <h1>Objekte</h1>
+    <span class="anzahl">14 von 22</span>
+    <a href="#" class="einwerfen">Objekt einwerfen</a>
+  </div>
+
+  <details class="filter">
+    <summary>Filter <span class="aktive-filter">— 4 Status, sonst alle</span></summary>
+    <div class="filter-inhalt">
+      <div class="status-reihe">
+        <label><input type="checkbox" checked> neu</label>
+        <label><input type="checkbox" checked> in Prüfung</label>
+        <label><input type="checkbox" checked> Besichtigung</label>
+        <label><input type="checkbox" checked> heiße Spur</label>
+        <label><input type="checkbox"> raus</label>
+        <label><input type="checkbox"> vom Markt</label>
+      </div>
+      <div class="raster">
+        <div class="feld"><label>Land</label><select><option>alle</option></select></div>
+        <div class="feld"><label>Portal</label><select><option>alle</option></select></div>
+        <div class="feld"><label>Objekttyp</label><select><option>alle</option></select></div>
+        <div class="feld"><label>Zustand</label><select><option>alle</option></select></div>
+        <div class="feld"><label>Region</label><input type="text" placeholder="z. B. Málaga"></div>
+        <div class="feld"><label>Preis ab €</label><input type="text" inputmode="numeric"></div>
+        <div class="feld"><label>Preis bis €</label><input type="text" inputmode="numeric"></div>
+        <div class="feld"><label>Fläche ab m²</label><input type="text" inputmode="numeric"></div>
+        <div class="feld"><label>Fläche bis m²</label><input type="text" inputmode="numeric"></div>
+      </div>
+      <div class="filter-fuss">
+        <button class="knopf">Filtern</button>
+        <button class="knopf leer">Zurücksetzen</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="sortieren">
+    <span>Sortieren</span>
+    <a href="#" aria-current="true">Eingeworfen ↓</a>
+    <a href="#">Kaufpreis</a>
+    <a href="#">€/m²</a>
+    <a href="#">Wohnfläche</a>
+  </div>
+
+  <ul class="liste">
+
+    <li class="objekt" style="--kante:var(--st-spur)">
+      <img class="bild" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='72'><rect width='96' height='72' fill='%23D8D2C4'/><path d='M0 52l26-20 20 15 18-12 32 24V72H0z' fill='%23A9A08C'/><circle cx='72' cy='18' r='8' fill='%23EDE8DC'/></svg>">
+      <div class="mitte">
+        <div class="titelzeile">
+          <span class="marke-neu" title="seit deinem letzten Besuch"></span>
+          <a href="#" class="titel">Casa de pueblo para reformar, 3 dormitorios</a>
+        </div>
+        <div class="unterzeile">
+          <span class="pille" style="background:var(--st-spur)">heiße Spur</span>
+          <span>Álora</span><span class="trenner">·</span>
+          <span>Málaga, ES</span><span class="trenner">·</span>
+          <span>Kernsanierung</span>
+        </div>
+      </div>
+      <div class="zahlen">
+        <div class="zahl"><span class="wert">142 m²</span><span class="etikett">Wohnfläche</span></div>
+        <div class="zahl"><span class="wert">310 m²</span><span class="etikett">Grundstück</span></div>
+        <div class="zahl"><span class="wert">98.000 €</span><span class="etikett">Kaufpreis</span>
+          <span class="senkung">↓ 12.000 € seit 28.08.</span>
+        </div>
+        <div class="zahl haupt"><span class="wert">690 €</span><span class="etikett">je m²</span></div>
+      </div>
+      <div class="votum">
+        <div class="stimmen">
+          <span class="stimme dafuer" title="dafür">+</span>
+          <span class="stimme dafuer" title="dafür">+</span>
+          <span class="stimme anschauen" title="anschauen">?</span>
+          <span class="stimme offen" title="offen"></span>
+          <span class="stimme offen" title="offen"></span>
+        </div>
+        <span class="votum-text">2 dafür · 1 anschauen · 2 offen</span>
+      </div>
+    </li>
+
+    <li class="objekt" style="--kante:var(--st-neu)">
+      <img class="bild" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='72'><rect width='96' height='72' fill='%23C3CBB8'/><rect x='18' y='30' width='60' height='34' fill='%23F0EDE4'/><path d='M12 32L48 10l36 22z' fill='%238E9A7C'/></svg>">
+      <div class="mitte">
+        <div class="titelzeile">
+          <a href="#" class="titel">Haus 115 m² 290000 € zum Kauf Neu Lüdershagen</a>
+        </div>
+        <div class="unterzeile">
+          <span class="pille" style="background:var(--st-neu)">neu</span>
+          <span>Neu Lüdershagen</span><span class="trenner">·</span>
+          <span>DE</span>
+        </div>
+      </div>
+      <div class="zahlen">
+        <div class="zahl"><span class="wert">115 m²</span><span class="etikett">Wohnfläche</span></div>
+        <div class="zahl"><span class="wert leer">—</span><span class="etikett">Grundstück</span></div>
+        <div class="zahl"><span class="wert">323.553 €</span><span class="etikett">Kaufpreis</span></div>
+        <div class="zahl haupt"><span class="wert">2.814 €</span><span class="etikett">je m²</span></div>
+      </div>
+      <div class="votum">
+        <a href="#" class="abstimmen">Abstimmen</a>
+        <span class="votum-text">— die Vota der anderen erscheinen danach</span>
+      </div>
+    </li>
+
+    <li class="objekt" style="--kante:var(--st-besichtigung)">
+      <div class="bild leer" aria-hidden="true">▢</div>
+      <div class="mitte">
+        <div class="titelzeile">
+          <span class="marke-neu" title="seit deinem letzten Besuch"></span>
+          <a href="#" class="titel nackt">immowelt.de/expose/ecd16e27-fa4b-…</a>
+        </div>
+        <div class="unterzeile">
+          <span class="pille" style="background:var(--st-besichtigung)">Besichtigung</span>
+          <span>nur URL — Felder noch leer</span>
+        </div>
+      </div>
+      <div class="zahlen">
+        <div class="zahl"><span class="wert leer">—</span><span class="etikett">Wohnfläche</span></div>
+        <div class="zahl"><span class="wert leer">—</span><span class="etikett">Grundstück</span></div>
+        <div class="zahl"><span class="wert leer">—</span><span class="etikett">Kaufpreis</span></div>
+        <div class="zahl haupt"><span class="wert leer">—</span><span class="etikett">je m²</span></div>
+      </div>
+      <div class="votum">
+        <a href="#" class="abstimmen">Abstimmen</a>
+        <span class="votum-text">— die Vota der anderen erscheinen danach</span>
+      </div>
+    </li>
+
+    <li class="objekt" style="--kante:var(--st-pruefung)">
+      <img class="bild" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='72'><rect width='96' height='72' fill='%23D9CFC0'/><rect x='10' y='24' width='34' height='40' fill='%23EFE9DC'/><rect x='52' y='34' width='34' height='30' fill='%23C7B9A4'/></svg>">
+      <div class="mitte">
+        <div class="titelzeile">
+          <a href="#" class="titel">Finca rústica con almendros, para reformar</a>
+        </div>
+        <div class="unterzeile">
+          <span class="pille" style="background:var(--st-pruefung)">in Prüfung</span>
+          <span>Cómpeta</span><span class="trenner">·</span>
+          <span>Málaga, ES</span><span class="trenner">·</span>
+          <span>mittel</span>
+        </div>
+      </div>
+      <div class="zahlen">
+        <div class="zahl"><span class="wert">186 m²</span><span class="etikett">Wohnfläche</span></div>
+        <div class="zahl"><span class="wert">4.200 m²</span><span class="etikett">Grundstück</span></div>
+        <div class="zahl"><span class="wert">245.000 €</span><span class="etikett">Kaufpreis</span></div>
+        <div class="zahl haupt"><span class="wert">1.317 €</span><span class="etikett">je m²</span></div>
+      </div>
+      <div class="votum">
+        <div class="stimmen">
+          <span class="stimme raus" title="raus">−</span>
+          <span class="stimme offen"></span>
+          <span class="stimme offen"></span>
+          <span class="stimme offen"></span>
+          <span class="stimme offen"></span>
+        </div>
+        <span class="votum-text">1 raus · 4 offen</span>
+      </div>
+    </li>
+
+    <li class="objekt" style="--kante:var(--st-raus)">
+      <img class="bild" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='72'><rect width='96' height='72' fill='%23CFCFD4'/><rect x='16' y='18' width='64' height='46' fill='%23E8E8EC'/><rect x='28' y='30' width='16' height='16' fill='%23B8B8C0'/><rect x='54' y='30' width='16' height='16' fill='%23B8B8C0'/></svg>">
+      <div class="mitte">
+        <div class="titelzeile">
+          <a href="#" class="titel">Wohnen im Lochenbach-Quartier | Neubauprojekt</a>
+        </div>
+        <div class="unterzeile">
+          <span class="pille" style="background:var(--st-raus)">raus</span>
+          <span>Preis unplausibel — Bookmarklet-Lesefehler</span>
+        </div>
+      </div>
+      <div class="zahlen">
+        <div class="zahl"><span class="wert">84 m²</span><span class="etikett">Wohnfläche</span></div>
+        <div class="zahl"><span class="wert leer">—</span><span class="etikett">Grundstück</span></div>
+        <div class="zahl"><span class="wert">30.239.000 €</span><span class="etikett">Kaufpreis</span></div>
+        <div class="zahl haupt"><span class="wert">359.988 €</span><span class="etikett">je m²</span></div>
+      </div>
+      <div class="votum">
+        <div class="stimmen">
+          <span class="stimme raus">−</span><span class="stimme raus">−</span>
+          <span class="stimme raus">−</span><span class="stimme offen"></span>
+          <span class="stimme offen"></span>
+        </div>
+        <span class="votum-text">3 raus · 2 offen</span>
+      </div>
+    </li>
+
+  </ul>
+
+  <div class="fuss">
+    <span>Seite 1 von 2</span>
+    <a href="#" style="color:var(--akzent);font-weight:500">Weiter →</a>
+  </div>
+
+  <div class="hinweis">
+    <strong>Entwurf, nicht gebaut.</strong> Statische Datei mit erfundenen Daten.
+    Zwei Objekte sind aus deinem Bestand übernommen, damit du den Unterschied siehst.
+    Das Feld „je m²“ ist absichtlich die größte Zahl der Zeile.
+  </div>
+
+</main>
+</body>
+</html>
