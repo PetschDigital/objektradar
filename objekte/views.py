@@ -18,7 +18,12 @@ from .choices import PreisQuelle, Quelle, Status, Wertung, Zustand
 from .forms import ObjektFilterForm, ObjektForm, UebernahmeForm
 from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
-from .portale import ist_bekannte_domain, portal_und_id
+from .portale import (
+    ist_bekannte_domain,
+    portal_und_id,
+    preis_aus_titel,
+    preis_kommt_aus_dem_titel,
+)
 
 URL_MAXLAENGE = Objekt._meta.get_field("url").max_length
 
@@ -1094,7 +1099,7 @@ class UebernehmenView(View):
             return redirect("objektliste")
         url, portal, inserats_id, vorhanden = gepruefte
 
-        gelesen = self._gelesene_werte(request.GET)
+        gelesen = self._gelesene_werte(request.GET, portal)
         form = UebernahmeForm(instance=vorhanden)
 
         # Reihenfolge: erst die Hinweise, dann das Vorbelegen. `_vorbelegen`
@@ -1273,13 +1278,47 @@ class UebernehmenView(View):
             },
         )
 
-    def _gelesene_werte(self, daten):
-        """Die gelesenen Felder als Rohtext, leere weggelassen."""
+    def _gelesene_werte(self, daten, portal):
+        """Die gelesenen Felder als Rohtext, leere weggelassen.
+
+        Der Preis ist der einzige Wert, dessen QUELLE vom Portal abhaengt.
+        Bei Immowelt liefert das Fliesstextmuster des Lesezeichens belegt den
+        Kaufpreis inklusive Kaufnebenkosten - rund elf Prozent zu hoch, und
+        das lautlos. Dort gilt stattdessen der og:Titel, den das Lesezeichen
+        ohnehin als `titel` uebergibt; die Regel steht in `portale.py`.
+
+        Der uebermittelte `preis` faellt fuer solche Portale ZUERST heraus,
+        und zwar unabhaengig davon, ob der Titel etwas hergibt. Das ist der
+        Riegel und keine Reihenfolgefrage: griffe der Fliesstextwert, sobald
+        der Titel schweigt, kaeme bei einem geaenderten Titelformat wieder der
+        falsche Wert an - genau der Fehler, gegen den diese Runde gebaut ist.
+        Ein leeres Feld sieht man, einen um elf Prozent falschen nicht.
+
+        `is not None` und nicht der Wahrheitswert: eine 0 im Titel ist ein
+        GELESENER Preis. Ueber `if preis` faellt ausgerechnet der auffaelligste
+        Wert wortlos heraus.
+
+        Nur die Preisquelle wechselt. Titel, Beschreibung, Wohnflaeche und
+        Zimmerzahl kommen unveraendert aus den uebermittelten Feldern - die
+        Zahl vor `m²` im Titel wird NICHT als Wohnflaeche gelesen.
+
+        Gerufen wird das nur im GET. Der POST liest die Felder aus dem
+        Formular, in dem die Person den Wert vor Augen hatte; ihn dort ein
+        zweites Mal aus dem Titel abzuleiten hiesse, eine Korrektur von Hand
+        wieder zu ueberschreiben.
+        """
         werte = {}
         for parameter, feldname in GELESENE_FELDER.items():
             wert = daten.get(parameter, "").strip()
             if wert:
                 werte[feldname] = wert
+
+        if preis_kommt_aus_dem_titel(portal):
+            werte.pop("kaufpreis", None)
+            preis = preis_aus_titel(portal, daten.get("titel", ""))
+            if preis is not None:
+                werte["kaufpreis"] = str(preis)
+
         return werte
 
     def _gelesene_bilder(self, daten):

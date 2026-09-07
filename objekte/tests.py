@@ -11495,3 +11495,455 @@ class HstsTests(SimpleTestCase):
         steht.
         """
         self.assertIs(self.betrieb["SECURE_SSL_REDIRECT"], True)
+
+
+# =========================================================================
+# 07.09.: die Preisquelle bei Immowelt
+# =========================================================================
+
+
+class PreisAusTitelTests(SimpleTestCase):
+    """Zusage 1, 3, 4, 7 und 8: das Titelmuster und sein Riegel.
+
+    Gemessen wird die reine Funktion aus `portale.py`. Dass die Uebernahme sie
+    auch wirklich benutzt und den Fliesstextpreis dabei verwirft, bezeugt
+    `PreisquelleUebernahmeTests` unten - eine gruene Funktion allein sagt
+    darueber nichts.
+    """
+
+    # --- Zusage 1: die fuenf belegten Titel --------------------------------
+
+    def test_bad_herrenalb_68_qm(self):
+        self.assertEqual(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT,
+                "Wohnung 68 m² 139000 € zum Kauf Bernbach,Bad Herrenalb (76332)",
+            ),
+            139000,
+        )
+
+    def test_neu_luedershagen(self):
+        self.assertEqual(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT,
+                "Haus 115 m² 290000 € zum Kauf Neu Lüdershagen,Wendorf (18442)",
+            ),
+            290000,
+        )
+
+    def test_bad_herrenalb_76_qm(self):
+        self.assertEqual(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT,
+                "Wohnung 76 m² 140000 € zum Kauf Bad Herrenalb,Bad Herrenalb (76332)",
+            ),
+            140000,
+        )
+
+    def test_hofgeismar(self):
+        self.assertEqual(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT,
+                "Haus 95 m² 210000 € zum Kauf Hofgeismar,Hofgeismar (34369)",
+            ),
+            210000,
+        )
+
+    def test_stralsund_mit_hausnummer_im_titel(self):
+        """Der Titel traegt hier eine Strassennummer - sie ist kein Preis."""
+        self.assertEqual(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT,
+                "Wohnung 62 m² 138000 € zum Kauf Großer Diebsteig 11,"
+                "Frankenvorstadt,Stralsund",
+            ),
+            138000,
+        )
+
+    # --- Zusage 3: keine Zahl mit Euro-Zeichen -----------------------------
+
+    def test_ein_titel_ohne_euro_zahl_ergibt_keinen_preis(self):
+        self.assertIsNone(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT, "Haus 115 m² zum Kauf auf Anfrage, Wendorf (18442)"
+            )
+        )
+
+    # --- Zusage 4: mehr als eine Zahl mit Euro-Zeichen ---------------------
+
+    def test_zwei_euro_zahlen_ergeben_keinen_preis(self):
+        """Nicht "die erste nehmen": bei zwei Zahlen bleibt das Feld leer.
+
+        Ein Titel mit Preis UND Quadratmeterpreis ist der wahrscheinlichste
+        Weg, auf dem Immowelt das Format aendert. Genau dann muss der Weg auf
+        "kein Preis" fallen und nicht auf "irgendein Preis".
+        """
+        self.assertIsNone(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT, "Haus 115 m² 290000 € (2522 €/m²) zum Kauf Wendorf"
+            )
+        )
+
+    def test_auch_die_groesste_der_beiden_wird_nicht_genommen(self):
+        """Der Riegel gegen den Rueckfall in das alte Verfahren.
+
+        Das Fliesstextmuster des Lesezeichens nimmt die GROESSTE Zahl. Wer
+        diese Regel hierher uebertruege, bekaeme aus dem Titel unten 323553 -
+        also genau den falschen Wert, gegen den diese Runde gebaut ist.
+        """
+        self.assertIsNone(
+            portale.preis_aus_titel(
+                Portal.IMMOWELT, "Haus 115 m² 290000 € statt 323553 € zum Kauf"
+            )
+        )
+
+    # --- Zusage 7: die Zahl vor m² ist keine Preisquelle -------------------
+
+    def test_die_flaechenzahl_wird_nicht_als_preis_gelesen(self):
+        """Im Titel steht die Wohnflaeche VOR dem Preis.
+
+        Ein Muster, das die erste Zahl im Titel nimmt, lieferte hier 115. Der
+        Zeuge faellt genau dann.
+        """
+        self.assertEqual(
+            portale.preis_aus_titel(Portal.IMMOWELT, "Haus 115 m² 290000 € zum Kauf"),
+            290000,
+        )
+
+    def test_ein_titel_nur_mit_flaeche_ergibt_keinen_preis(self):
+        self.assertIsNone(
+            portale.preis_aus_titel(Portal.IMMOWELT, "Haus 115 m² zum Kauf Wendorf")
+        )
+
+    # --- Zusage 8: die Null ist ein gelesener Preis ------------------------
+
+    def test_null_euro_im_titel_ergibt_die_zahl_null(self):
+        """`0` und nicht `None`.
+
+        Ueber den Wahrheitswert geprueft saehen beide gleich aus, und
+        ausgerechnet der auffaelligste Wert fiele wortlos heraus.
+        """
+        preis = portale.preis_aus_titel(Portal.IMMOWELT, "Haus 115 m² 0 € zum Kauf")
+        self.assertIsNotNone(preis)
+        self.assertEqual(preis, 0)
+
+    # --- der Tausendertrenner ---------------------------------------------
+
+    def test_ein_tausenderpunkt_ergibt_nicht_still_die_null(self):
+        """Der Riegel gegen den naheliegendsten stillen Lesefehler.
+
+        Belegt ist die Schreibweise ohne Trenner. Ein blosses `\\d+` vor dem
+        Euro-Zeichen traefe an `290.000 €` aber die drei Ziffern `000` - und
+        lieferte einen Preis von null, ohne dass irgendetwas auffiele.
+        """
+        self.assertEqual(
+            portale.preis_aus_titel(Portal.IMMOWELT, "Haus 115 m² 290.000 € zum Kauf"),
+            290000,
+        )
+
+    def test_ein_nicht_belegtes_format_ergibt_keinen_preis(self):
+        """Nachkommastellen sind nicht belegt - also kein Preis, kein Raten."""
+        self.assertIsNone(
+            portale.preis_aus_titel(Portal.IMMOWELT, "Haus 115 m² 290000,00 € zum Kauf")
+        )
+
+    def test_ein_leerer_titel_ergibt_keinen_preis(self):
+        self.assertIsNone(portale.preis_aus_titel(Portal.IMMOWELT, ""))
+
+    # --- Zusage 6: die Regel gilt nur fuer Immowelt ------------------------
+
+    def test_fuer_idealista_gilt_das_titelmuster_nicht(self):
+        """Derselbe Titel, anderes Portal - kein Titelpreis.
+
+        Der Zeuge faellt, wenn die Regel versehentlich global greift.
+        """
+        self.assertIsNone(
+            portale.preis_aus_titel(
+                Portal.IDEALISTA, "Haus 115 m² 290000 € zum Kauf Wendorf"
+            )
+        )
+
+    def test_fuer_ein_unbekanntes_portal_gilt_das_titelmuster_nicht(self):
+        """Der leere Portalschluessel ist der Ausgang unbekannter Domains."""
+        self.assertIsNone(
+            portale.preis_aus_titel("", "Haus 115 m² 290000 € zum Kauf Wendorf")
+        )
+
+    def test_nur_immowelt_liest_den_preis_aus_dem_titel(self):
+        self.assertTrue(portale.preis_kommt_aus_dem_titel(Portal.IMMOWELT))
+
+    def test_kein_anderes_portal_liest_den_preis_aus_dem_titel(self):
+        """"Keine Aenderung an den anderen Portalen", strukturell gehalten.
+
+        Kaeme ein Portal ohne belegtes Titelformat dazu, verwuerfe die
+        Uebernahme dort den Fliesstextpreis und das Feld bliebe dauerhaft
+        leer - eine stille Verschlechterung.
+        """
+        self.assertEqual(set(portale.PREIS_AUS_TITEL), {Portal.IMMOWELT})
+
+    def test_die_schluessel_der_tabelle_sind_echte_portalschluessel(self):
+        """Dasselbe Driftrisiko wie bei `PORTALE`: `portale.py` kennt `choices`
+        nicht, die Zuordnung ist nur zurueckgelesen bezeugt."""
+        self.assertLessEqual(set(portale.PREIS_AUS_TITEL), set(Portal.values))
+
+    def test_beide_auskuenfte_stammen_aus_derselben_tabelle(self):
+        """Der Riegel gegen zwei auseinanderdriftende Listen.
+
+        Waere die Frage "liest dieses Portal aus dem Titel" anderswo
+        beantwortet als die Frage "was steht drin", verwuerfe die Uebernahme
+        den Fliesstextpreis fuer ein Portal, fuer das gar kein Muster
+        hinterlegt ist.
+        """
+        for portal in Portal.values:
+            with self.subTest(portal=portal):
+                self.assertEqual(
+                    portale.preis_kommt_aus_dem_titel(portal),
+                    portale.preis_aus_titel(portal, "Haus 115 m² 290000 €") is not None,
+                )
+
+
+class PreisquelleUebernahmeTests(TestCase):
+    """Zusagen 2, 3, 4, 5, 6 und 7 am echten Codepfad.
+
+    Die Testdaten tragen DURCHGEHEND BEIDE Preise: den richtigen im `titel`
+    (das ist der og:Titel, den das Lesezeichen uebergibt) und den falschen als
+    `preis` (das ist der Wert, den das Fliesstextmuster des Lesezeichens auf
+    der Seite findet). Ohne den falschen Wert in den Daten passierten die
+    Zeugen 2 und 5 strukturell, ohne den Codepfad je zu durchlaufen: gruen
+    waere dann, dass kein falscher Wert ankommt, nicht dass er ignoriert wird.
+
+    Die Zahlen sind die aus Neu Lüdershagen: 290.000 € im Inserat, 323.553 €
+    im Bestand.
+    """
+
+    INSERAT = "https://www.immowelt.de/expose/ecd16e27-fa20-49ce-a28f-57ee676c9eec"
+    FREMDES_INSERAT = "https://www.idealista.com/inmueble/12345/"
+
+    TITEL = "Haus 115 m² 290000 € zum Kauf Neu Lüdershagen,Wendorf (18442)"
+    RICHTIG = Decimal("290000")
+
+    #: Was das Fliesstextmuster auf derselben Seite findet: der Kaufpreis
+    #: INKLUSIVE Kaufnebenkosten, 11,57 % zu hoch.
+    FLIESSTEXT = "323553"
+    FALSCH = Decimal("323553")
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    # --- Handgriffe -------------------------------------------------------
+
+    def _parameter(self, **abweichungen):
+        daten = {
+            "url": self.INSERAT,
+            "titel": self.TITEL,
+            "beschreibung": "Ruhige Lage.",
+            "preis": self.FLIESSTEXT,
+            "wohnflaeche": "115",
+            "zimmer": "4",
+        }
+        daten.update(abweichungen)
+        return {k: v for k, v in daten.items() if v not in (None, "")}
+
+    def _vorschau(self, **abweichungen):
+        return self.client.get("/uebernehmen/", self._parameter(**abweichungen))
+
+    def _im_feld(self, antwort, name):
+        """Was in der Vorschau im Feld steht - der Wert, den die Person sieht."""
+        return antwort.context["form"][name].value()
+
+    def _post_rumpf(self, antwort, **abweichungen):
+        """Derselbe Rundlauf wie in `UebernahmeTests`: zurueck geht der
+        gerenderte Text, nicht der Rohwert."""
+        formular = antwort.context["form"]
+        daten = {}
+        for name, feld in formular.fields.items():
+            gerendert = feld.widget.format_value(formular[name].value())
+            if isinstance(gerendert, list):
+                gerendert = gerendert[0] if gerendert else ""
+            daten[name] = "" if gerendert is None else gerendert
+        for verstecktes in ("url", "portal", "inserats_id", "bilder"):
+            daten[verstecktes] = antwort.context[verstecktes]
+        daten.update(abweichungen)
+        return daten
+
+    def _uebernehmen(self, **parameter):
+        """Vorschau aufrufen, absenden, was dort steht - und das Objekt holen."""
+        antwort = self._vorschau(**parameter)
+        self.client.post("/uebernehmen/", self._post_rumpf(antwort))
+        return Objekt.objects.get()
+
+    # --- Zusage 2: der echte Fehlerfall -----------------------------------
+
+    def test_der_preis_aus_dem_titel_kommt_an(self):
+        self.assertEqual(self._uebernehmen().aktueller_preis, self.RICHTIG)
+
+    def test_der_preis_aus_dem_fliesstext_kommt_nicht_an(self):
+        """Der Zeuge, der faellt, wenn das alte Textmuster wieder greift."""
+        self.assertNotEqual(self._uebernehmen().aktueller_preis, self.FALSCH)
+
+    def test_schon_die_vorschau_zeigt_den_titelpreis(self):
+        """Vor dem Speichern, nicht erst danach: der Wert steht vor Augen."""
+        self.assertEqual(self._im_feld(self._vorschau(), "kaufpreis"), "290000")
+
+    def test_der_falsche_preis_liegt_wirklich_in_den_testdaten(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        DERSELBE Parametersatz, nur mit einer idealista-Adresse: dort kommt
+        323.553 € an. Damit ist bezeugt, dass der falsche Wert in den Daten
+        steht und auf dem Weg zum Feld auch ankaeme - die Zeugen oben messen
+        also das Verwerfen und nicht ein Fehlen.
+        """
+        objekt = self._uebernehmen(url=self.FREMDES_INSERAT)
+        self.assertEqual(objekt.aktueller_preis, self.FALSCH)
+
+    # --- Zusage 3: kein Euro-Zeichen im Titel ------------------------------
+
+    OHNE_PREIS = "Haus 115 m² zum Kauf auf Anfrage, Neu Lüdershagen (18442)"
+
+    def test_ohne_euro_zahl_im_titel_bleibt_das_feld_leer(self):
+        """Der Fliesstextpreis steht in denselben Daten und darf NICHT
+        einspringen - das ist Zusage 5 an dieser Stelle."""
+        self.assertIsNone(
+            self._im_feld(self._vorschau(titel=self.OHNE_PREIS), "kaufpreis")
+        )
+
+    def test_ohne_euro_zahl_im_titel_ist_das_objekt_trotzdem_anlegbar(self):
+        """Ein Lesefehler darf nie dazu fuehren, dass ein Objekt verloren geht."""
+        objekt = self._uebernehmen(titel=self.OHNE_PREIS)
+        self.assertEqual(objekt.url, self.INSERAT)
+        self.assertIsNone(objekt.aktueller_preis)
+
+    # --- Zusage 4: zwei Euro-Zahlen im Titel -------------------------------
+
+    ZWEI_PREISE = "Haus 115 m² 290000 € (2522 €/m²) zum Kauf Neu Lüdershagen"
+
+    def test_bei_zwei_euro_zahlen_bleibt_das_feld_leer(self):
+        self.assertIsNone(
+            self._im_feld(self._vorschau(titel=self.ZWEI_PREISE), "kaufpreis")
+        )
+
+    def test_bei_zwei_euro_zahlen_ist_das_objekt_trotzdem_anlegbar(self):
+        objekt = self._uebernehmen(titel=self.ZWEI_PREISE)
+        self.assertEqual(objekt.url, self.INSERAT)
+        self.assertIsNone(objekt.aktueller_preis)
+
+    # --- Zusage 5: kein Rueckfall auf das Fliesstextmuster -----------------
+
+    def test_bei_keiner_titelzahl_kommt_der_fliesstextpreis_nicht_durch(self):
+        objekt = self._uebernehmen(titel=self.OHNE_PREIS)
+        self.assertNotEqual(objekt.aktueller_preis, self.FALSCH)
+
+    def test_bei_zwei_titelzahlen_kommt_der_fliesstextpreis_nicht_durch(self):
+        objekt = self._uebernehmen(titel=self.ZWEI_PREISE)
+        self.assertNotEqual(objekt.aktueller_preis, self.FALSCH)
+
+    def test_derselbe_titel_ohne_preis_laesst_den_fliesstextpreis_woanders_durch(self):
+        """Der Riegel gegen einen blinden Zeugen ueber Zusage 5.
+
+        Dieselben Daten, dieselbe titellose Preisangabe - nur bei idealista.
+        Kommt dort 323.553 € an, ist bezeugt, dass die beiden Zeugen darueber
+        das Verwerfen messen und nicht eine leere Uebergabe.
+        """
+        objekt = self._uebernehmen(url=self.FREMDES_INSERAT, titel=self.OHNE_PREIS)
+        self.assertEqual(objekt.aktueller_preis, self.FALSCH)
+
+    # --- Zusage 6: die anderen Portale bleiben, wie sie waren --------------
+
+    def test_bei_idealista_gilt_weiter_der_fliesstextpreis(self):
+        objekt = self._uebernehmen(url=self.FREMDES_INSERAT)
+        self.assertEqual(objekt.aktueller_preis, self.FALSCH)
+
+    def test_bei_immoscout24_gilt_weiter_der_fliesstextpreis(self):
+        """Ein zweites fremdes Portal, damit der Zeuge nicht an einer
+        Besonderheit von idealista haengt."""
+        objekt = self._uebernehmen(
+            url="https://www.immobilienscout24.de/expose/987654"
+        )
+        self.assertEqual(objekt.aktueller_preis, self.FALSCH)
+
+    def test_bei_unbekannter_domain_gilt_weiter_der_fliesstextpreis(self):
+        objekt = self._uebernehmen(url="https://beispiel.example/inserat/1")
+        self.assertEqual(objekt.aktueller_preis, self.FALSCH)
+
+    # --- Zusage 7: Flaeche und Zimmer bleiben unberuehrt -------------------
+
+    def test_die_wohnflaeche_kommt_weiter_aus_dem_eigenen_feld(self):
+        """Der Titel nennt 115 m², uebergeben werden 200 - es gilt das Feld."""
+        objekt = self._uebernehmen(wohnflaeche="200")
+        self.assertEqual(objekt.wohnflaeche, Decimal("200"))
+
+    def test_ohne_uebergebene_wohnflaeche_bleibt_sie_leer(self):
+        """Die Zahl vor `m²` im Titel wird NICHT als Wohnflaeche gelesen.
+
+        Der Zeuge faellt, wenn jemand die Titelregel auf die Flaeche ausweitet:
+        dann staenden hier 115.
+        """
+        self.assertIsNone(self._im_feld(self._vorschau(wohnflaeche=""), "wohnflaeche"))
+
+    def test_die_zimmerzahl_kommt_weiter_aus_dem_eigenen_feld(self):
+        self.assertEqual(self._uebernehmen().zimmer, 4)
+
+    def test_der_titel_selbst_wird_unveraendert_uebernommen(self):
+        self.assertEqual(self._uebernehmen().titel, self.TITEL)
+
+    def test_die_beschreibung_wird_unveraendert_uebernommen(self):
+        self.assertEqual(self._uebernehmen().beschreibung, "Ruhige Lage.")
+
+    # --- Zusage 8: die Null am echten Codepfad ----------------------------
+
+    NULL_EURO = "Haus 115 m² 0 € zum Kauf Neu Lüdershagen,Wendorf (18442)"
+
+    def test_null_euro_im_titel_steht_als_null_im_feld(self):
+        """Nicht leer: eine 0 ist ein gelesener Preis.
+
+        Ueber den Wahrheitswert statt ueber `is not None` geprueft, faellt sie
+        aus `_gelesene_werte()` heraus, und im Feld staende nichts.
+        """
+        self.assertEqual(self._im_feld(self._vorschau(titel=self.NULL_EURO), "kaufpreis"), "0")
+
+    def test_null_euro_im_titel_verdraengt_den_fliesstextpreis(self):
+        objekt = self._uebernehmen(titel=self.NULL_EURO)
+        self.assertEqual(objekt.aktueller_preis, Decimal("0"))
+
+
+class LesezeichenUnveraendertTests(SimpleTestCase):
+    """Was diese Runde am Lesezeichen NICHT geaendert hat - und warum.
+
+    Die Preisquelle je Portal wird in der Uebernahme unterschieden, nicht im
+    Lesezeichen. Der Grund ist nicht Bequemlichkeit: das Skript liegt als Link
+    in Steffens Lesezeichenleiste. Jede Aenderung daran muss von Hand neu
+    gesetzt werden, geht beim Deploy nicht mit und faellt erst auf, wenn
+    jemand tagelang mit der alten Fassung erfasst hat. Die Uebernahme hat
+    ohnehin alles, was die Regel braucht: die Adresse und den og:Titel.
+
+    Diese Zeugen halten die Voraussetzung dafuer fest. Faellt einer, ist die
+    Regel in der Uebernahme blind - der Titel kaeme dort nicht mehr an.
+    """
+
+    def test_das_lesezeichen_uebergibt_den_titel(self):
+        self.assertIn("setze('titel',titel)", lesezeichen.SKRIPT)
+
+    def test_der_titel_kommt_aus_og_title(self):
+        """`og:title` zuerst, `document.title` nur als Rueckfall."""
+        self.assertIn("var titel=erst('title')||d.title", lesezeichen.SKRIPT)
+
+    def test_der_titel_faellt_auch_bei_langer_adresse_nicht_weg(self):
+        """Gekuerzt werden Bilder und Beschreibung - der Titel nie.
+
+        Fiele er unter der Laengengrenze mit heraus, haette die Uebernahme bei
+        einem bilderreichen Immowelt-Inserat keine Preisquelle mehr.
+        """
+        aufbau = lesezeichen.SKRIPT.split("var bauen=")[1].split("var q=")[0]
+        self.assertIn("setze('titel',titel)", aufbau)
+        self.assertNotIn("if(mitText){setze('titel'", aufbau)
+
+    def test_das_lesezeichen_kennt_kein_portal(self):
+        """Es schickt weiter unterschiedslos, was es findet.
+
+        Steht hier eines Tages ein Portalname, ist das Skript portalabhaengig
+        geworden - und Steffen muss das Lesezeichen neu setzen.
+        """
+        for portal in Portal.values:
+            with self.subTest(portal=portal):
+                self.assertNotIn(portal, lesezeichen.SKRIPT.lower())

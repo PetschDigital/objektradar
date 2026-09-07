@@ -245,3 +245,118 @@ def ist_bekannte_domain(url: str) -> bool:
         return False
 
     return any(_passt(host, domains) for _, domains, _, _ in PORTALE)
+
+
+# =========================================================================
+# Die Preisquelle je Portal
+# =========================================================================
+#
+# Der Preis wurde bisher ausschliesslich aus dem Fliesstext der Seite
+# gelesen - vom Lesezeichen, ueber das groesste Zahl-mit-Euro-Muster. Bei
+# Immowelt liefert dieser Weg belegt den Kaufpreis INKLUSIVE
+# Kaufnebenkosten: an vier Objekten aus dem Bestand zwischen 10,57 % und
+# 11,57 % zu hoch, und die Spreizung ist die der Grunderwerbsteuer.
+#
+# Der Fehler ist STILL. Elf Prozent liegen mitten im plausiblen Bereich; die
+# Plausibilitaetswarnung kann sie nicht fangen, und jedes Immowelt-Objekt
+# sortiert sich ueber den EUR/m2-Vergleich lautlos zu teuer ein. Genau
+# deshalb steht die Regel hier und nicht als weitere Heuristik im
+# Lesezeichen.
+#
+# Gelesen wird stattdessen der og:Titel, den das Lesezeichen ohnehin schon
+# uebergibt. Das ist eine BEWUSSTE Abweichung von `03_Technik.md` ("keine
+# portalspezifischen Auswahlen"): der Satz dort zielt auf geratene
+# CSS-Auswahlen in undokumentiertem Markup. Ein Meta-Feld, aus dem Titel,
+# Beschreibung und Bilder ohnehin kommen und dessen Format an fuenf echten
+# Inseraten belegt ist, ist etwas anderes.
+
+#: Eine Zahl unmittelbar vor dem Euro-Zeichen.
+#:
+#: Belegt ist die Schreibweise OHNE Tausendertrenner (`139000 €`). Der erste
+#: Zweig - `139.000 €` - steht hier trotzdem, und zwar nicht aus Vorsorge,
+#: sondern als RIEGEL: ohne ihn traefe `\d+` an `139.000 €` die Ziffern `000`
+#: und ergaebe einen Preis von null. Ein Muster, das an einer geaenderten
+#: Schreibweise still einen falschen Wert liefert, ist genau der Fehler,
+#: gegen den diese Runde gebaut ist.
+#:
+#: Der Blick zurueck `(?<![\d.,])` verhindert dasselbe von der anderen
+#: Seite: eine Zahl wird nur als GANZE gelesen, nie als ihr eigenes Ende.
+#: Ohne ihn zaehlte `139.000 €` als zwei Treffer, und der Riegel unten
+#: schluege an einem voellig normalen Titel an.
+#:
+#: Ein Komma trennt hier NICHT: `139000,00 €` trifft bewusst nicht und ergibt
+#: damit KEINEN Preis. Ein nicht belegtes Format faellt auf "kein Preis" -
+#: das ist der gewollte Ausgang, nicht eine Luecke.
+TITEL_EURO = re.compile(r"(?<![\d.,])(\d{1,3}(?:[.\u00a0\u202f ]\d{3})+|\d+)\s*€")
+
+
+def _immowelt_preis_aus_titel(titel: str) -> int | None:
+    """Der Kaufpreis aus dem og:Titel - oder `None`.
+
+    Belegtes Format, fuenf Faelle aus zwei Tagen:
+
+        Wohnung 68 m² 139000 € zum Kauf Bernbach,Bad Herrenalb (76332)
+        Haus 115 m² 290000 € zum Kauf Neu Lüdershagen,Wendorf (18442)
+
+    Die Zahl vor `m²` ist die Wohnflaeche. Sie wird hier AUSDRUECKLICH NICHT
+    gelesen - fuer die Wohnflaeche bleibt das bisherige Verfahren
+    unveraendert. Diese Funktion liefert einen Preis und sonst nichts.
+
+    DER RIEGEL: gelesen wird nur bei GENAU EINER Zahl mit Euro-Zeichen. Keine
+    Zahl oder mehrere heisst `None` - kein Rueckfall auf das Fliesstextmuster,
+    kein "die erste nehmen", kein Raten.
+
+    Die Begruendung ist die Fehlerart: ein leeres Feld sieht man, einen um elf
+    Prozent falschen nicht. Aendert Immowelt das Titelformat, muss der Weg auf
+    "kein Preis" fallen und nicht auf "irgendein Preis". Ein Inserat auf
+    Anfrage, ganz ohne Preisangabe, ist derselbe Fall.
+
+    `None` und nicht 0 als Fehlanzeige: eine 0 im Titel ist ein GELESENER
+    Preis und muss von "nichts gelesen" unterscheidbar bleiben. Der Aufrufer
+    prueft deshalb gegen `is not None` und nicht gegen den Wahrheitswert.
+    """
+    treffer = TITEL_EURO.findall(titel or "")
+    if len(treffer) != 1:
+        return None
+    return int(re.sub(r"\D", "", treffer[0]))
+
+
+#: Welche Portale den Preis aus dem Titel lesen statt aus dem Fliesstext.
+#:
+#: Eine TABELLE und keine `if`-Abfrage in der Uebernahme: dass die Regel
+#: ausschliesslich fuer Immowelt gilt, ist damit strukturell und nicht in
+#: einer View nachgehalten. Ein weiteres Portal waere eine Zeile.
+#:
+#: Beide Funktionen unten lesen aus dieser einen Tabelle. Eine zweite Liste
+#: daneben - etwa eine Menge "Portale mit Titelpreis" - driftete von ihr weg,
+#: und dann verwuerfe die Uebernahme den Fliesstextpreis fuer ein Portal, fuer
+#: das gar kein Titelmuster hinterlegt ist. Das Feld bliebe dauerhaft leer.
+PREIS_AUS_TITEL = {
+    PORTAL_IMMOWELT: _immowelt_preis_aus_titel,
+}
+
+
+def preis_kommt_aus_dem_titel(portal: str) -> bool:
+    """Ob fuer dieses Portal der Fliesstextpreis NICHT mehr gilt.
+
+    Getrennt von `preis_aus_titel()` abzufragen, weil es zwei verschiedene
+    Fragen sind: ob das Fliesstextmuster verworfen wird, und was der Titel
+    hergibt. Ueber ein `None` allein waeren sie nicht auseinanderzuhalten -
+    "dieses Portal liest normal" und "der Riegel hat zugeschlagen" saehen
+    gleich aus, und der Riegel fiele auf den Fliesstext zurueck. Genau das
+    darf er nicht.
+    """
+    return portal in PREIS_AUS_TITEL
+
+
+def preis_aus_titel(portal: str, titel: str) -> int | None:
+    """Der Preis aus dem Titel fuer dieses Portal - oder `None`.
+
+    `None` fuer jedes Portal ohne eigene Titelregel. Der Aufrufer fragt vorher
+    `preis_kommt_aus_dem_titel()`; ohne diese Frage saehe er nicht, ob `None`
+    "kein Titelpreis gelesen" oder "gilt hier gar nicht" heisst.
+    """
+    leser = PREIS_AUS_TITEL.get(portal)
+    if leser is None:
+        return None
+    return leser(titel)
