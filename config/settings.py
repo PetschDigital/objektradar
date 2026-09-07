@@ -163,12 +163,17 @@ if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    # Fuenf Minuten, nicht ein Jahr - fuer die ersten Betriebstage. Ein
-    # gesetzter HSTS-Kopf ist im Browser BINDEND: geht am Zertifikat etwas
-    # schief, kaeme mit einer Jahresfrist niemand mehr behelfsweise ueber HTTP
-    # drauf, auch nicht der Betreiber. Nach ein paar ruhigen Tagen von Hand
-    # hochziehen (Jahr = 60 * 60 * 24 * 365).
-    SECURE_HSTS_SECONDS = 300
+    # Dreissig Tage, nicht ein Jahr. Ein gesetzter HSTS-Kopf ist im Browser
+    # BINDEND: geht am Zertifikat etwas schief, kaeme mit einer Jahresfrist
+    # niemand mehr behelfsweise ueber HTTP drauf, auch nicht der Betreiber.
+    #
+    # Die fuenf Minuten vom Anfang haben ihren Zweck erfuellt - fuenf
+    # Betriebstage ohne Zwischenfall. Was noch aussteht, ist die erste
+    # AUTOMATISCHE Zertifikatserneuerung durch Caddy: bei 90 Tagen Laufzeit und
+    # Erneuerung bei rund 30 Tagen Rest faellt sie auf Anfang November. Dreissig
+    # Tage decken die Strecke bis dahin und lassen sich im Fehlerfall aussitzen.
+    # Ein Jahr kommt DANACH, nicht davor (Jahr = 60 * 60 * 24 * 365).
+    SECURE_HSTS_SECONDS = 2592000  # 30 * 24 * 60 * 60
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     # `SECURE_HSTS_PRELOAD` steht hier bewusst NICHT: Preloading gilt fuer die
     # Hauptdomain, und diese Unterdomain kommt weder in die Browser-Liste noch

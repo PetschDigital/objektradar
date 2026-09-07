@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -987,6 +989,84 @@ DOMAIN_UNBEKANNT = (
 #: Parameter und werden einzeln geprueft.
 BILD_MAXLAENGE = Bild._meta.get_field("url").max_length
 
+#: Grenzwerte der Plausibilitaetspruefung auf der Uebernahme-Vorschau.
+#:
+#: GESCHAETZT, nicht gemessen: fuer eine Datenbasis ist die Liste zu klein.
+#: Bewusst WEIT gefasst - eine Warnung, die zu oft falsch anschlaegt, wird nach
+#: zwei Wochen ignoriert, und dann ist sie schlechter als keine. Ein spanisches
+#: Ruinenobjekt kann echte 300 EUR/m2 haben. NACH DEN ERSTEN BETRIEBSWOCHEN
+#: GEGEN ECHTE DATEN ZU PRUEFEN - und erst dann enger zu ziehen, nicht vorher.
+#:
+#: Sie stehen an EINER Stelle und nicht als Zahlen im Code verstreut: dieselbe
+#: Zahl an zwei Stellen driftet auseinander, und die Warnung meldete danach
+#: einen anderen Grenzwert, als sie prueft.
+QM_PREIS_MINDESTENS = Decimal("250")
+QM_PREIS_HOECHSTENS = Decimal("12000")
+PREIS_HOECHSTENS = Decimal("3000000")
+
+#: Die beiden Warntexte. Sie nennen den errechneten Wert und benennen ihn als
+#: VERDACHT, nicht als Feststellung - und sagen ausdruecklich, dass Speichern
+#: moeglich bleibt. Derselbe Schluss wie bei `DOMAIN_UNBEKANNT`, aus demselben
+#: Grund: ein Objekt mit ungewoehnlichem Preis muss ohne schlechtes Gewissen
+#: speicherbar sein. Klaenge die Meldung nach Fehler, bricht jemand eine echte
+#: Erfassung ab.
+QM_PREIS_AUFFAELLIG = (
+    "Der errechnete Preis je m² liegt bei {wert} €/m². Das deutet auf einen "
+    "Lesefehler hin — bitte Kaufpreis und Wohnfläche prüfen. Speichern ist "
+    "trotzdem möglich."
+)
+PREIS_AUFFAELLIG = (
+    "Der übermittelte Kaufpreis liegt bei {wert} €. Das deutet auf einen "
+    "Lesefehler hin — bitte den Kaufpreis prüfen. Speichern ist trotzdem "
+    "möglich."
+)
+
+
+def als_betrag(wert):
+    """Eine Zahl als gruppierter Betrag ohne Nachkommastellen: 359.988."""
+    return formats.number_format(wert, decimal_pos=0, force_grouping=True)
+
+
+def plausibilitaetswarnungen(kaufpreis, wohnflaeche):
+    """Auffaellige uebermittelte Werte als fertige Warntexte.
+
+    Zwei UNABHAENGIGE Pruefungen. Beide koennen gleichzeitig anschlagen; dann
+    kommen zwei Texte zurueck, und es erscheinen zwei Warnungen. Die zweite ist
+    kein Beiwerk der ersten: ohne gelesene Wohnflaeche laeuft die
+    EUR/m2-Pruefung ins Leere, und genau dann bliebe ein absurder Preis
+    unbemerkt.
+
+    `kaufpreis is None` und NICHT `if not kaufpreis`: eine 0 ist ein
+    UEBERMITTELTER Preis und ergibt 0 EUR/m2 - also eine Warnung, nicht ein
+    stilles Ueberspringen. Ueber den Wahrheitswert geprueft fiele ausgerechnet
+    der auffaelligste Wert heraus. Derselbe Griff ist in diesem Projekt schon
+    einmal danebengegangen und haette eine Eingabe wortlos verworfen.
+
+    Die Wohnflaeche wird gegen `> 0` gehalten, BEVOR geteilt wird. Eine
+    Division durch Null ist hier kein theoretischer Fall: `mit_qm_preis()`
+    faengt sie in der Datenbank eigens ab, weil PostgreSQL dort
+    `psycopg.errors.DivisionByZero` wirft - in Python waere es
+    `decimal.DivisionByZero`, und die Vorschau bliebe mit einem Serverfehler
+    stehen, statt zu warnen.
+
+    Rein, ohne `request` und ohne Formular: die Grenzwerte lassen sich so
+    einzeln pruefen, ohne einen halben Zulauf aufzubauen.
+
+    Gesperrt wird NICHTS, korrigiert wird NICHTS, gespeichert wird nichts. Die
+    Funktion liefert Text und laesst die Werte, wie sie sind.
+    """
+    if kaufpreis is None:
+        return []
+
+    warnungen = []
+    if wohnflaeche is not None and wohnflaeche > 0:
+        qm_preis = kaufpreis / wohnflaeche
+        if qm_preis < QM_PREIS_MINDESTENS or qm_preis > QM_PREIS_HOECHSTENS:
+            warnungen.append(QM_PREIS_AUFFAELLIG.format(wert=als_betrag(qm_preis)))
+    if kaufpreis > PREIS_HOECHSTENS:
+        warnungen.append(PREIS_AUFFAELLIG.format(wert=als_betrag(kaufpreis)))
+    return warnungen
+
 
 class UebernehmenView(View):
     """Zwei Stationen auf einer Adresse, streng getrennt.
@@ -1151,6 +1231,30 @@ class UebernehmenView(View):
         if not ist_bekannte_domain(url):
             messages.warning(request, DOMAIN_UNBEKANNT)
 
+        # Aus GENAU DEMSELBEN Grund hier und nicht in `get()`: die Vorschau
+        # wird an zwei Stellen gerendert. In `get()` gesetzt, fehlte die
+        # Warnung ausgerechnet beim zweiten Blick - der POST scheitert an einem
+        # ANDEREN Feld, der unplausible Preis steht unveraendert im Formular,
+        # und der zweite Speicherversuch liefe ungewarnt durch. Das ist genau
+        # der Fall, fuer den die Warnung gebaut ist.
+        #
+        # Gerechnet wird auf dem AKTUELLEN Wert des Formulars und nicht auf dem
+        # einmal uebermittelten: so steht die Warnung da, solange der Preis
+        # unplausibel ist, und verschwindet von selbst, sobald jemand ihn
+        # korrigiert. Ein einmal gemerkter Verdacht bliebe dagegen auch am
+        # berichtigten Wert kleben.
+        #
+        # `messages.warning` und nicht `messages.error`: ein ungewoehnlicher
+        # Preis ist kein Fehler. Gesperrt wird nichts, der POST legt das Objekt
+        # an - dieselbe Linie wie bei der unbekannten Domain darueber, und
+        # `03_Technik.md` verlangt sie ausdruecklich: ein Lesefehler darf nie
+        # dazu fuehren, dass ein Objekt verloren geht.
+        for text in plausibilitaetswarnungen(
+            self._zahl_im_feld(form, "kaufpreis"),
+            self._zahl_im_feld(form, "wohnflaeche"),
+        ):
+            messages.warning(request, text)
+
         return render(
             request,
             self.template_name,
@@ -1229,12 +1333,39 @@ class UebernehmenView(View):
                 hinweise[name] = self._als_text(name, wert)
         return hinweise
 
+    def _zahl_im_feld(self, form, name):
+        """Was AKTUELL im Feld steht, als Zahl. Leer oder unlesbar heisst `None`.
+
+        `form[name].value()` liefert an beiden Stationen das Richtige: im GET
+        die Vorbelegung - gelesener Wert beim neuen Objekt, Bestandswert beim
+        vorhandenen -, nach einem abgewiesenen POST den abgeschickten Rohwert.
+        Also das, was die Person gerade vor sich sieht und was beim naechsten
+        Absenden gespeichert wuerde. Genau darueber soll die Warnung reden.
+
+        Ueber `Field.clean()` und nicht ueber `Decimal(roh)`: das Feld liest
+        LOKALISIERT - "30.239.000,00" ist hier eine Zahl und wird es ueber
+        `sanitize_separators`. Ein zweiter, selbstgebauter Weg von Text zu Zahl
+        laege irgendwann anders als der erste, und die Warnung rechnete mit
+        etwas anderem, als das Formular speichert. Ein Bestandswert aus
+        `initial` kommt bereits als `Decimal` an; `clean()` nimmt auch den.
+
+        Leer heisst `None` und nicht 0 - `clean()` liefert das von selbst, denn
+        beide Felder sind `required=False`. Ein nicht ausgefuelltes Preisfeld
+        darf keine Pruefung ausloesen.
+
+        Unlesbar heisst NICHT "Warnung": aus etwas, das keine Zahl ist, laesst
+        sich kein Preis je m2 errechnen, und eine Warnung ueber einen Wert, den
+        niemand ausrechnen kann, benennt nichts. Verschwiegen wird es trotzdem
+        nicht - das Feld traegt dann seinen eigenen Fehler.
+        """
+        try:
+            return form.fields[name].clean(form[name].value())
+        except ValidationError:
+            return None
+
     def _als_text(self, name, wert):
         if name in EINHEITEN:
-            return (
-                f"{formats.number_format(wert, decimal_pos=0, force_grouping=True)} "
-                f"{EINHEITEN[name]}"
-            )
+            return f"{als_betrag(wert)} {EINHEITEN[name]}"
         return formats.localize(wert)
 
     def _vorbelegen(self, form, gelesen):

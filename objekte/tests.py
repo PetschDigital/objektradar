@@ -10626,3 +10626,872 @@ class VotumpunkteTests(ListenTestBasis):
         inhalt = self.client.get("/").content.decode()
         self.assertIn('title="dafür"', inhalt)
         self.assertIn('title="offen"', inhalt)
+
+
+class MeldungParser(HTMLParser):
+    """Die `<li>` der Meldungsliste als Paare Klassenliste -> Text.
+
+    Gelesen wird ueber ELEMENTE und KLASSENLISTEN, nicht ueber eine
+    Zeichenkette `class="…"`: ein erweiterter Klassenname liefe an einem Zeugen
+    auf die Zeichenkette vorbei, und genau diese Blindheit ist in diesem
+    Projekt schon einmal aufgetreten - siehe `KlassenParser`.
+
+    Und ausdruecklich eingegrenzt auf `ul.meldungen`: der Warntext nennt einen
+    Betrag, und Betraege stehen auf dieser Seite noch an anderer Stelle. Ein
+    `assertContains` auf die ganze Antwort faende "359.988" auch im
+    Preisfeld des Formulars und bezeugte damit nichts.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.meldungen = []
+        self._tiefe = 0
+        self._klassen = None
+        self._text = ""
+
+    def handle_starttag(self, tag, attrs):
+        klassen = (dict(attrs).get("class") or "").split()
+        if tag == "ul" and "meldungen" in klassen:
+            self._tiefe = 1
+        elif self._tiefe and tag == "li":
+            self._klassen = klassen
+            self._text = ""
+
+    def handle_endtag(self, tag):
+        if tag == "ul":
+            self._tiefe = 0
+        elif self._tiefe and tag == "li" and self._klassen is not None:
+            self.meldungen.append((self._klassen, " ".join(self._text.split())))
+            self._klassen = None
+
+    def handle_data(self, daten):
+        if self._klassen is not None:
+            self._text += daten
+
+
+def gerenderte_meldungen(antwort):
+    """Was in der Meldungsliste der Seite WIRKLICH steht - Klassen und Text."""
+    parser = MeldungParser()
+    parser.feed(antwort.content.decode())
+    return parser.meldungen
+
+
+class PlausibilitaetsfunktionTests(SimpleTestCase):
+    """Die reine Funktion, ohne Zulauf und ohne Formular.
+
+    `plausibilitaetswarnungen()` traegt die ganze Regel. Sie hier einzeln zu
+    messen ist kein Beiwerk zu den Zeugen ueber die Vorschau: die
+    Randfaelle - Wohnflaeche 0, Preis 0, fehlende Wohnflaeche - sind ueber
+    einen Seitenaufruf nur mittelbar zu treffen, und ein Zeuge, der sie ueber
+    drei Schichten hinweg misst, faellt spaeter aus einem Grund, der mit der
+    Regel nichts zu tun hat.
+    """
+
+    def _warnungen(self, preis, flaeche):
+        preis = None if preis is None else Decimal(preis)
+        flaeche = None if flaeche is None else Decimal(flaeche)
+        return views.plausibilitaetswarnungen(preis, flaeche)
+
+    # --- Zusage 1: unter 250 EUR/m2 ---------------------------------------
+
+    def test_ein_wert_unter_der_untergrenze_warnt(self):
+        self.assertEqual(len(self._warnungen("10000", "100")), 1)
+
+    def test_die_untergrenze_selbst_warnt_nicht(self):
+        """Gewarnt wird UNTER 250, nicht ab 250.
+
+        Der Zeuge haelt die Grenze auf der Zahl fest. Ohne ihn liesse sich `<`
+        gegen `<=` tauschen, ohne dass etwas faellt - und ein Objekt mit genau
+        250 EUR/m2 traegt dann eine Warnung, die die Spezifikation nicht
+        vorsieht.
+        """
+        self.assertEqual(self._warnungen("25000", "100"), [])
+
+    def test_knapp_unter_der_untergrenze_warnt(self):
+        """Das Gegenstueck: die Grenze liegt WIRKLICH bei 250, nicht darunter."""
+        self.assertEqual(len(self._warnungen("24999", "100")), 1)
+
+    # --- Zusage 2: ueber 12.000 EUR/m2 ------------------------------------
+
+    def test_ein_wert_ueber_der_obergrenze_warnt(self):
+        self.assertEqual(len(self._warnungen("2000000", "100")), 1)
+
+    def test_die_obergrenze_selbst_warnt_nicht(self):
+        self.assertEqual(self._warnungen("1200000", "100"), [])
+
+    def test_knapp_ueber_der_obergrenze_warnt(self):
+        self.assertEqual(len(self._warnungen("1200100", "100")), 1)
+
+    # --- Zusage 3: dazwischen ist still -----------------------------------
+
+    def test_ein_gewoehnlicher_wert_warnt_nicht(self):
+        self.assertEqual(self._warnungen("750000", "200"), [])
+
+    # --- Zusage 4: der echte Fall -----------------------------------------
+
+    def test_der_echte_fall_warnt(self):
+        """30.239.000 EUR bei 84 m2 - der Anlass dieser Runde.
+
+        Der Gesamtpreis eines Neubauprojekts stand im sichtbaren Text, nicht
+        der Wohnungspreis. 359.988 EUR/m2 faellt auf; um den Faktor zehn
+        verlesen faellt es niemandem auf, und genau dafuer ist die Pruefung da.
+        """
+        self.assertEqual(len(self._warnungen("30239000", "84")), 2)
+
+    def test_der_echte_fall_nennt_den_errechneten_wert(self):
+        warnungen = self._warnungen("30239000", "84")
+        self.assertIn("359.988", warnungen[0])
+
+    def test_der_echte_fall_nennt_die_einheit(self):
+        self.assertIn("€/m²", self._warnungen("30239000", "84")[0])
+
+    # --- Zusage 5: Wohnflaeche 0 teilt nicht ------------------------------
+
+    def test_wohnflaeche_null_erzeugt_keine_qm_warnung(self):
+        """Kein `DivisionByZero`, keine Warnung, keine halbe Seite.
+
+        `mit_qm_preis()` faengt denselben Fall in der Datenbank eigens ab, weil
+        PostgreSQL dort `psycopg.errors.DivisionByZero` wirft. In Python waere
+        es `decimal.DivisionByZero` - und die Vorschau bliebe mit einem
+        Serverfehler stehen, statt zu warnen.
+        """
+        self.assertEqual(self._warnungen("100", "0"), [])
+
+    def test_derselbe_preis_bei_einem_quadratmeter_warnt_sehr_wohl(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn bezeugte "keine Warnung bei Wohnflaeche 0" moeglicherweise nur,
+        dass 100 EUR ueberhaupt nie warnen. Hier laeuft derselbe Preis gegen
+        eine Wohnflaeche, die die Pruefung durchlaeuft: 100 EUR/m2 liegt unter
+        250 und warnt.
+        """
+        self.assertEqual(len(self._warnungen("100", "1")), 1)
+
+    def test_wohnflaeche_null_wirft_nicht(self):
+        """Ausdruecklich auf die Ausnahme, nicht nur auf das Ergebnis."""
+        try:
+            self._warnungen("100", "0")
+        except Exception as fehler:  # pragma: no cover - der Zeuge ist der Fall
+            self.fail(f"Wohnflaeche 0 hat geworfen: {fehler!r}")
+
+    # --- Zusage 6: fehlende Wohnflaeche -----------------------------------
+
+    def test_ohne_wohnflaeche_entfaellt_die_qm_pruefung(self):
+        self.assertEqual(self._warnungen("750000", None), [])
+
+    def test_ohne_wohnflaeche_laeuft_die_preispruefung_trotzdem(self):
+        """Genau dafuer gibt es die zweite Pruefung.
+
+        Die EUR/m2-Pruefung laeuft ins Leere, wenn keine Wohnflaeche gelesen
+        wurde - und genau dann bliebe ein absurder Preis unbemerkt.
+        """
+        self.assertEqual(len(self._warnungen("4000000", None)), 1)
+
+    # --- Zusage 7: absoluter Preis ----------------------------------------
+
+    def test_ein_preis_ueber_der_obergrenze_warnt(self):
+        self.assertEqual(len(self._warnungen("4000000", None)), 1)
+
+    def test_die_preisobergrenze_selbst_warnt_nicht(self):
+        """Gewarnt wird UEBER drei Millionen, nicht ab drei Millionen."""
+        self.assertEqual(self._warnungen("3000000", None), [])
+
+    def test_knapp_ueber_der_preisobergrenze_warnt(self):
+        self.assertEqual(len(self._warnungen("3000001", None)), 1)
+
+    def test_die_preiswarnung_nennt_den_betrag(self):
+        self.assertIn("4.000.000", self._warnungen("4000000", None)[0])
+
+    # --- beide Pruefungen sind unabhaengig --------------------------------
+
+    def test_beide_pruefungen_koennen_gleichzeitig_anschlagen(self):
+        """30.239.000 EUR bei 84 m2 reisst beide Grenzen - dann zwei Warnungen."""
+        self.assertEqual(len(self._warnungen("30239000", "84")), 2)
+
+    def test_ein_hoher_preis_auf_grosser_flaeche_warnt_nur_absolut(self):
+        """4 Mio. auf 1.000 m2 sind 4.000 EUR/m2 - unauffaellig je m2.
+
+        Trennt die beiden Pruefungen wirklich voneinander: waere die zweite an
+        die erste gekoppelt, faende sich hier keine Warnung.
+        """
+        warnungen = self._warnungen("4000000", "1000")
+        self.assertEqual(len(warnungen), 1)
+
+    def test_diese_eine_warnung_ist_die_absolute(self):
+        self.assertIn("Kaufpreis liegt bei", self._warnungen("4000000", "1000")[0])
+
+    def test_ein_niedriger_preis_auf_winziger_flaeche_warnt_nur_je_qm(self):
+        warnungen = self._warnungen("100000", "1")
+        self.assertEqual(len(warnungen), 1)
+
+    def test_diese_eine_warnung_ist_die_je_quadratmeter(self):
+        self.assertIn("je m²", self._warnungen("100000", "1")[0])
+
+    # --- Zusage 8: Preis 0 ist ein uebermittelter Preis --------------------
+
+    def test_preis_null_warnt(self):
+        """`is not None`, NICHT der Wahrheitswert.
+
+        Eine 0 ist ein uebermittelter Preis und ergibt 0 EUR/m2 - also eine
+        Warnung, nicht ein stilles Ueberspringen. Ueber `if not kaufpreis`
+        geprueft fiele ausgerechnet der auffaelligste Wert heraus. Dieser Griff
+        ist in diesem Projekt schon einmal danebengegangen und haette eine
+        Eingabe wortlos verworfen.
+        """
+        self.assertEqual(len(self._warnungen("0", "84")), 1)
+
+    def test_preis_null_nennt_null_euro_je_quadratmeter(self):
+        self.assertIn("0 €/m²", self._warnungen("0", "84")[0])
+
+    def test_preis_null_ohne_wohnflaeche_warnt_nicht(self):
+        """Die absolute Pruefung schlaegt nach OBEN aus, nicht nach unten.
+
+        Ohne Wohnflaeche gibt es zu einer 0 nichts zu sagen: sie ist kein Preis
+        ueber drei Millionen. Der Zeuge haelt fest, dass die zweite Pruefung
+        keine Untergrenze bekommen hat, die die Spezifikation nicht nennt.
+        """
+        self.assertEqual(self._warnungen("0", None), [])
+
+    # --- Zusage 11: ohne Preis keine Pruefung ------------------------------
+
+    def test_ohne_preis_faellt_beides_aus(self):
+        self.assertEqual(self._warnungen(None, "84"), [])
+
+    def test_ohne_preis_und_ohne_wohnflaeche_faellt_beides_aus(self):
+        self.assertEqual(self._warnungen(None, None), [])
+
+    def test_ohne_preis_faellt_auch_bei_absurder_flaeche_nichts_an(self):
+        self.assertEqual(self._warnungen(None, "0"), [])
+
+
+class PlausibilitaetsgrenzwerteTests(SimpleTestCase):
+    """Die Grenzwerte selbst: EINE Stelle, benannt, mit Begruendung.
+
+    Die Spezifikation verlangt sie ausdruecklich als benannte Modulkonstanten
+    an einer Stelle - nicht als Zahlen im Code verstreut - mit einem Kommentar,
+    dass sie GESCHAETZT sind und nach den ersten Betriebswochen gegen echte
+    Daten zu pruefen. Ohne diese Zeugen bliebe von der Zusage nichts uebrig,
+    sobald jemand die Regel umschreibt.
+    """
+
+    def _quelle(self):
+        return (settings.BASE_DIR / "objekte" / "views.py").read_text(encoding="utf-8")
+
+    def test_die_untergrenze_je_quadratmeter_steht_auf_250(self):
+        self.assertEqual(views.QM_PREIS_MINDESTENS, Decimal("250"))
+
+    def test_die_obergrenze_je_quadratmeter_steht_auf_12000(self):
+        self.assertEqual(views.QM_PREIS_HOECHSTENS, Decimal("12000"))
+
+    def test_die_preisobergrenze_steht_auf_drei_millionen(self):
+        self.assertEqual(views.PREIS_HOECHSTENS, Decimal("3000000"))
+
+    def test_jeder_grenzwert_steht_an_genau_einer_stelle(self):
+        """Keine Zahl im Code verstreut - sonst driften zwei Stellen auseinander.
+
+        Gemessen ueber den Syntaxbaum und nicht mit `count()` auf dem Text:
+        "250" steckt als Zeichenfolge auch in "12500" und in jedem Kommentar,
+        der eine Zahl nennt. Ein Zeuge auf die Zeichenkette faende Treffer, die
+        keine sind, und meldete sich beim ersten erklaerenden Satz.
+        """
+        baum = ast.parse(self._quelle())
+        gezaehlt = {"250": 0, "12000": 0, "3000000": 0}
+        for knoten in ast.walk(baum):
+            if isinstance(knoten, ast.Constant):
+                text = str(knoten.value)
+                if text in gezaehlt and not isinstance(knoten.value, bool):
+                    gezaehlt[text] += 1
+        for zahl, anzahl in gezaehlt.items():
+            with self.subTest(grenzwert=zahl):
+                self.assertEqual(anzahl, 1)
+
+    def test_die_regel_rechnet_gegen_die_konstanten(self):
+        """Der Riegel darunter: die Funktion darf die Zahlen nicht selbst tragen.
+
+        Ohne ihn liesse sich ein Grenzwert in `plausibilitaetswarnungen()`
+        einsetzen und die Konstante daneben unbenutzt stehen lassen - die
+        Zaehlung oben bliebe bei eins, und die Konstante meldete etwas anderes,
+        als die Vorschau prueft.
+        """
+        quelle = textwrap.dedent(inspect.getsource(views.plausibilitaetswarnungen))
+        for name in ("QM_PREIS_MINDESTENS", "QM_PREIS_HOECHSTENS", "PREIS_HOECHSTENS"):
+            with self.subTest(konstante=name):
+                self.assertIn(name, quelle)
+
+    def test_der_kommentar_nennt_die_werte_geschaetzt(self):
+        block = self._quelle()
+        block = block[: block.index("QM_PREIS_MINDESTENS")]
+        self.assertIn("GESCHAETZT", block[block.rindex("#: Grenzwerte") :])
+
+    def test_der_kommentar_verlangt_die_pruefung_gegen_echte_daten(self):
+        """Sonst bleiben die geschaetzten Werte fuer immer stehen."""
+        block = self._quelle()
+        block = block[: block.index("QM_PREIS_MINDESTENS")]
+        block = block[block.rindex("#: Grenzwerte") :]
+        self.assertIn("ECHTE DATEN", block)
+
+    def test_die_grenzwerte_sind_weit_gefasst(self):
+        """Nicht kosmetisch: eine zu enge Spanne macht die Warnung wertlos.
+
+        Eine Warnung, die zu oft falsch anschlaegt, wird nach zwei Wochen
+        ignoriert - und dann ist sie schlechter als keine. Der Zeuge haelt die
+        Weite fest, damit sie nicht ohne Datenbasis enger gezogen wird.
+        """
+        self.assertGreaterEqual(
+            views.QM_PREIS_HOECHSTENS / views.QM_PREIS_MINDESTENS, Decimal("48")
+        )
+
+
+class PlausibilitaetVorschauTests(TestCase):
+    """Die Warnung auf der Uebernahme-Vorschau, durch die Ansicht gemessen.
+
+    Die reine Funktion ist eine Etage tiefer bezeugt. Hier steht die Frage, ob
+    sie ueberhaupt angeschlossen ist, auf welcher Stufe sie meldet und ob sie
+    etwas SPERRT - denn genau das darf sie nicht.
+
+    Die Adresse ist bewusst eine BEKANNTE Portaldomain: sonst kaeme die
+    Domainwarnung dazu, und jede Zaehlung hier maesse zwei Regeln auf einmal.
+    """
+
+    INSERAT = "https://www.idealista.com/inmueble/12345/"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    # --- Handgriffe -------------------------------------------------------
+
+    def _vorschau(self, **abweichungen):
+        daten = {
+            "url": self.INSERAT,
+            "titel": "Villa am Hang",
+            "preis": "750000",
+            "wohnflaeche": "200",
+        }
+        daten.update(abweichungen)
+        return self.client.get(
+            "/uebernehmen/", {k: v for k, v in daten.items() if v is not None}
+        )
+
+    def _post_rumpf(self, antwort):
+        """Der Rumpf, den der Browser aus der Vorschau zurueckschickt.
+
+        Ueber `widget.format_value()` und nicht ueber die Rohwerte - genau der
+        gerenderte Text geht zurueck. Dieselbe Bauart wie in `UebernahmeTests`.
+        """
+        formular = antwort.context["form"]
+        daten = {}
+        for name, feld in formular.fields.items():
+            gerendert = feld.widget.format_value(formular[name].value())
+            if isinstance(gerendert, list):
+                gerendert = gerendert[0] if gerendert else ""
+            daten[name] = "" if gerendert is None else gerendert
+        for verstecktes in ("url", "portal", "inserats_id"):
+            daten[verstecktes] = antwort.context[verstecktes]
+        return daten
+
+    def _texte(self, antwort):
+        return [text for _klassen, text in gerenderte_meldungen(antwort)]
+
+    def _klassenlisten(self, antwort):
+        return [klassen for klassen, _text in gerenderte_meldungen(antwort)]
+
+    def _warntexte(self, antwort):
+        """Nur die Meldungen auf der WARNSTUFE.
+
+        Nach einem abgewiesenen POST steht "Bitte die markierten Felder
+        pruefen." als Fehler daneben. Eine blosse Zaehlung aller Meldungen
+        maesse dort zwei Regeln auf einmal.
+        """
+        return [text for klassen, text in gerenderte_meldungen(antwort) if "warning" in klassen]
+
+    def _abgewiesener_post(self, **abweichungen):
+        """Vorschau aufrufen, absenden, am Baujahr scheitern lassen.
+
+        `baujahr` ist bewusst das kaputte Feld und nicht der Preis: der POST
+        muss aus einem ANDEREN Grund abgewiesen werden als dem, um den es geht.
+        Sonst bezeugte die zurueckkehrende Warnung nur einen Formularfehler.
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        rumpf = self._post_rumpf(antwort)
+        rumpf["baujahr"] = "keine-zahl"
+        rumpf.update(abweichungen)
+        return self.client.post("/uebernehmen/", rumpf)
+
+    # --- Zusage 3: der gewoehnliche Fall bleibt still ---------------------
+
+    def test_ein_gewoehnlicher_zulauf_meldet_nichts(self):
+        """750.000 EUR auf 200 m2 sind 3.750 EUR/m2 - unauffaellig.
+
+        Der wichtigste Zeuge der Runde: eine Warnung, die auch beim normalen
+        Objekt erscheint, wird nach zwei Wochen ignoriert.
+        """
+        self.assertEqual(self._texte(self._vorschau()), [])
+
+    # --- Zusage 4: der echte Fall auf der Seite ---------------------------
+
+    def test_der_echte_fall_meldet_sich_auf_der_seite(self):
+        """Im Kontext allein nuetzt die Warnung nichts - sie muss gerendert werden."""
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(len(self._texte(antwort)), 2)
+
+    def test_der_echte_fall_nennt_den_errechneten_wert_in_der_meldung(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertIn("359.988", " ".join(self._texte(antwort)))
+
+    def test_die_meldung_benennt_den_verdacht_und_nicht_die_feststellung(self):
+        """Sie darf nicht nach Fehler klingen.
+
+        Ein Objekt mit ungewoehnlichem Preis muss ohne schlechtes Gewissen
+        speicherbar sein - wer "falsch" liest, bricht eine echte Erfassung ab.
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertIn("deutet auf", " ".join(self._texte(antwort)))
+
+    def test_die_meldung_sagt_dass_speichern_moeglich_bleibt(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertIn("trotzdem möglich", " ".join(self._texte(antwort)))
+
+    def test_die_meldung_bittet_um_pruefung_der_beiden_zahlen(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertIn("Wohnfläche", " ".join(self._texte(antwort)))
+
+    # --- Zusage 1 und 2 durch die Ansicht ---------------------------------
+
+    def test_ein_wert_unter_der_untergrenze_meldet_sich(self):
+        antwort = self._vorschau(preis="10000", wohnflaeche="100")
+        self.assertEqual(len(self._texte(antwort)), 1)
+
+    def test_ein_wert_ueber_der_obergrenze_meldet_sich(self):
+        antwort = self._vorschau(preis="2000000", wohnflaeche="100")
+        self.assertEqual(len(self._texte(antwort)), 1)
+
+    # --- Zusage 5: Wohnflaeche 0 --------------------------------------------
+
+    def test_wohnflaeche_null_laesst_die_vorschau_stehen(self):
+        """Kein Serverfehler. Auf Postgres ist die Division kein Gedankenspiel."""
+        self.assertEqual(self._vorschau(wohnflaeche="0").status_code, 200)
+
+    def test_wohnflaeche_null_meldet_keine_qm_warnung(self):
+        antwort = self._vorschau(preis="100", wohnflaeche="0")
+        self.assertEqual(self._texte(antwort), [])
+
+    def test_derselbe_preis_auf_einem_quadratmeter_meldet_sich_sehr_wohl(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn bezeugte die Stille bei Wohnflaeche 0 moeglicherweise nur,
+        dass 100 EUR ueberhaupt nie melden.
+        """
+        antwort = self._vorschau(preis="100", wohnflaeche="1")
+        self.assertEqual(len(self._texte(antwort)), 1)
+
+    # --- Zusage 6 und 7: ohne Wohnflaeche ---------------------------------
+
+    def test_ohne_wohnflaeche_bleibt_ein_gewoehnlicher_preis_still(self):
+        antwort = self._vorschau(wohnflaeche=None)
+        self.assertEqual(self._texte(antwort), [])
+
+    def test_ohne_wohnflaeche_meldet_sich_ein_preis_ueber_drei_millionen(self):
+        """Sonst bliebe ein absurder Preis genau dann unbemerkt, wenn die
+        EUR/m2-Pruefung ins Leere laeuft."""
+        antwort = self._vorschau(preis="4000000", wohnflaeche=None)
+        self.assertEqual(len(self._texte(antwort)), 1)
+
+    # --- Zusage 8: Preis 0 ------------------------------------------------
+
+    def test_preis_null_meldet_sich(self):
+        """Eine 0 ist ein uebermittelter Preis - `is not None`, nicht der
+        Wahrheitswert. Auch der Weg durch `_gelesene_werte()` darf sie nicht
+        wegwerfen: dort faellt weg, was LEER ist, und "0" ist nicht leer."""
+        antwort = self._vorschau(preis="0")
+        self.assertEqual(len(self._texte(antwort)), 1)
+
+    def test_preis_null_nennt_null_in_der_meldung(self):
+        antwort = self._vorschau(preis="0")
+        self.assertIn("0 €/m²", self._texte(antwort)[0])
+
+    # --- Zusage 11: ohne Preis --------------------------------------------
+
+    def test_ohne_preis_meldet_sich_nichts(self):
+        self.assertEqual(self._texte(self._vorschau(preis=None)), [])
+
+    def test_ohne_preis_und_ohne_wohnflaeche_meldet_sich_nichts(self):
+        antwort = self._vorschau(preis=None, wohnflaeche=None)
+        self.assertEqual(self._texte(antwort), [])
+
+    # --- Zusage 9: die Stufe ----------------------------------------------
+
+    def test_die_meldung_laeuft_auf_der_warnstufe(self):
+        """Gemessen an der KLASSENLISTE des Elements, nicht an `class="…"`.
+
+        Daran haengt, welche Regel im Stylesheet greift. Ohne `warning` faellt
+        die Meldung auf die neutrale Vorgabe zurueck und sieht aus wie "Das
+        Inserat liegt schon in der Liste".
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        for klassen in self._klassenlisten(antwort):
+            with self.subTest(klassen=klassen):
+                self.assertIn("warning", klassen)
+
+    def test_die_meldung_laeuft_nicht_als_fehler(self):
+        """Ein ungewoehnlicher Preis ist kein Fehler.
+
+        `error` griffe im Stylesheet die Fehlerfarbe ab, und die gehoert einem
+        Tippfehler im Formular. Das Speichern laeuft weiter, und eine Meldung
+        in Fehlerfarbe behauptete das Gegenteil.
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        for klassen in self._klassenlisten(antwort):
+            with self.subTest(klassen=klassen):
+                self.assertNotIn("error", klassen)
+
+    def test_die_meldung_laeuft_nicht_auf_der_neutralen_stufe(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        for klassen in self._klassenlisten(antwort):
+            with self.subTest(klassen=klassen):
+                self.assertNotIn("info", klassen)
+
+    def test_die_stufe_kommt_aus_der_ansicht_und_nicht_aus_der_vorlage(self):
+        """Gegenprobe zur Klassenliste: der Tag steht schon in `messages`.
+
+        Faellt nur die Vorlage aus, meldet der Zeuge oben - faellt die Ansicht
+        auf `messages.info` zurueck, meldet dieser hier.
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        tags = [m.tags for m in antwort.context["messages"]]
+        self.assertEqual(tags, ["warning", "warning"])
+
+    # --- Zusage 10: es wird nicht gesperrt --------------------------------
+
+    def test_die_vorschau_legt_trotz_warnung_nichts_an(self):
+        self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_der_anschliessende_post_legt_das_objekt_an(self):
+        """Die Warnung SPERRT NICHT.
+
+        Dieselbe Linie wie bei der unbekannten Domain: ein Lesefehler darf nie
+        dazu fuehren, dass ein Objekt verloren geht. Der Zeuge ist der Kern
+        dieser Runde - ohne ihn liesse sich die Warnung jederzeit in eine
+        Sperre verwandeln, ohne dass etwas faellt.
+        """
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.client.post("/uebernehmen/", self._post_rumpf(antwort))
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_das_angelegte_objekt_traegt_den_auffaelligen_preis_unveraendert(self):
+        """Nichts wird korrigiert: kein Umrechnen, kein Kappen, kein Nullsetzen."""
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.client.post("/uebernehmen/", self._post_rumpf(antwort))
+        self.assertEqual(Objekt.objects.get().aktueller_preis, Decimal("30239000"))
+
+    def test_das_angelegte_objekt_traegt_die_wohnflaeche_unveraendert(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.client.post("/uebernehmen/", self._post_rumpf(antwort))
+        self.assertEqual(Objekt.objects.get().wohnflaeche, Decimal("84"))
+
+    def test_der_auffaellige_preis_steht_unveraendert_im_formular(self):
+        """Nichts wird verworfen - der Wert steht da und laesst sich von Hand
+        aendern. Ein geleertes Feld waere der Datenverlust, den die Warnung
+        gerade verhindern soll."""
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(antwort.context["form"].initial["kaufpreis"], "30239000")
+
+    def test_die_auffaellige_wohnflaeche_steht_unveraendert_im_formular(self):
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(antwort.context["form"].initial["wohnflaeche"], "84")
+
+    # --- die beiden Warnungen stoeren die Domainwarnung nicht --------------
+
+    def test_eine_unbekannte_domain_meldet_zusaetzlich_und_nicht_stattdessen(self):
+        """Drei Meldungen: zwei Plausibilitaeten und die Domain.
+
+        Die Regeln sind unabhaengig. Waere die eine in die andere gebaut,
+        verschluckte ein auffaelliger Preis die Domainwarnung oder umgekehrt.
+        """
+        antwort = self._vorschau(
+            url="https://beispiel.de/inserat/2xk4c5r", preis="30239000", wohnflaeche="84"
+        )
+        self.assertEqual(len(self._texte(antwort)), 3)
+
+    # --- der Bestand aendert an der Pruefung nichts -----------------------
+
+    def test_bei_einem_bestandsobjekt_ohne_preis_greift_der_gelesene_wert(self):
+        """`_vorbelegen` fuellt das LEERE Feld mit dem gelesenen Wert.
+
+        Damit steht der unplausible Preis im Formular und wuerde beim naechsten
+        Absenden gespeichert - also wird gewarnt. Der Zeuge haelt fest, dass die
+        Pruefung auch bei einem Bestandsobjekt laeuft.
+        """
+        Objekt.objects.create(
+            url=self.INSERAT,
+            portal=Portal.IDEALISTA,
+            inserats_id="12345",
+            titel="Finca",
+        )
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(len(self._texte(antwort)), 2)
+
+    def test_ein_plausibler_bestandspreis_schlaegt_den_gelesenen_und_schweigt(self):
+        """Gerechnet wird auf dem Wert IM FELD, nicht auf dem uebermittelten.
+
+        Der Bestandswert schlaegt beim Vorbelegen durch; nichts wird
+        ueberschrieben. Im Formular stehen dann 250.000 EUR auf 140 m2, und nur
+        die koennen gespeichert werden. Der gelesene Wert steht als Hinweis
+        darunter - eine Warnung ueber eine Zahl, die gar nicht im Feld steht,
+        klebte am falschen Wert.
+        """
+        Objekt.objects.create(
+            url=self.INSERAT,
+            portal=Portal.IDEALISTA,
+            inserats_id="12345",
+            titel="Finca",
+            wohnflaeche=Decimal("140"),
+            aktueller_preis=Decimal("250000"),
+        )
+        antwort = self._vorschau(preis="30239000", wohnflaeche="84")
+        self.assertEqual(self._texte(antwort), [])
+
+    # --- die Warnung ueberlebt einen abgewiesenen POST --------------------
+
+    def test_nach_einem_abgewiesenen_post_steht_die_warnung_wieder_da(self):
+        """Der Zeuge, der die Warnung in `_zeigen()` haelt.
+
+        Die Vorschau wird an ZWEI Stellen gerendert. Wandert die Pruefung nach
+        `get()` zurueck, fehlt die Warnung ausgerechnet hier: der POST ist am
+        Baujahr gescheitert, der unplausible Preis steht unveraendert im
+        Formular, und der zweite Speicherversuch liefe ungewarnt durch - genau
+        der Fall, fuer den die Warnung gebaut ist.
+        """
+        self.assertEqual(len(self._warntexte(self._abgewiesener_post())), 2)
+
+    def test_der_abgewiesene_post_nennt_denselben_errechneten_wert(self):
+        """Nicht irgendeine Warnung - dieselbe."""
+        self.assertIn("359.988", " ".join(self._warntexte(self._abgewiesener_post())))
+
+    def test_der_abgewiesene_post_zeigt_den_preis_weiterhin_an(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn koennte die zurueckkehrende Warnung an einem leergeraeumten
+        Feld haengen - dann bezeugte sie nicht, dass der unplausible Preis noch
+        da ist, sondern nur, dass irgendetwas gemeldet wird.
+        """
+        formular = self._abgewiesener_post().context["form"]
+        self.assertEqual(
+            formular.fields["kaufpreis"].clean(formular["kaufpreis"].value()),
+            Decimal("30239000"),
+        )
+
+    def test_der_abgewiesene_post_legt_nichts_an(self):
+        self._abgewiesener_post()
+        self.assertEqual(Objekt.objects.count(), 0)
+
+    def test_ein_korrigierter_preis_laesst_die_warnung_verschwinden(self):
+        """Gerechnet wird auf dem AKTUELLEN Wert.
+
+        302.390 EUR auf 84 m2 sind 3.600 EUR/m2 - unauffaellig. Die Warnung
+        verschwindet also von selbst, sobald jemand den Preis berichtigt, und
+        zwar schon beim naechsten abgewiesenen Absenden. Ein einmal gemerkter
+        Verdacht klebte dagegen auch am berichtigten Wert.
+        """
+        antwort = self._abgewiesener_post(kaufpreis="302390")
+        self.assertEqual(self._warntexte(antwort), [])
+
+    def test_der_korrigierte_preis_scheitert_weiterhin_am_baujahr(self):
+        """Der Riegel darunter: die Stille kommt nicht von einem gelungenen POST.
+
+        Waere der zweite Versuch durchgelaufen, zeigte die Antwort die
+        Objektansicht und gar keine Vorschau mehr - und "keine Warnung" bezeugte
+        nichts ueber die Pruefung.
+        """
+        antwort = self._abgewiesener_post(kaufpreis="302390")
+        self.assertIn("baujahr", antwort.context["form"].errors)
+
+
+class PlausibilitaetGrenzenDerPruefungTests(TestCase):
+    """Wo die Pruefung ausdruecklich NICHT laeuft.
+
+    Beim Bearbeiten und bei der Schnellerfassung gibt ein Mensch die Zahl ein
+    und sieht sie dabei an. Der Fehler, um den es geht, entsteht beim
+    MASCHINELLEN Auslesen - eine Warnung an den beiden anderen Stellen waere
+    eine Belehrung ueber eine gerade selbst getippte Zahl.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/999/",
+            portal=Portal.IDEALISTA,
+            inserats_id="999",
+            titel="Der Anlassfall",
+            wohnflaeche=Decimal("84"),
+            aktueller_preis=Decimal("30239000"),
+        )
+
+    def _texte(self, antwort):
+        return [text for _klassen, text in gerenderte_meldungen(antwort)]
+
+    def test_das_bearbeiten_formular_warnt_nicht(self):
+        """Dasselbe Zahlenpaar wie der Anlassfall - und trotzdem still."""
+        antwort = self.client.get(f"/objekt/{self.objekt.pk}/bearbeiten/")
+        self.assertEqual(self._texte(antwort), [])
+
+    def test_die_vorschau_warnt_bei_genau_diesen_zahlen_sehr_wohl(self):
+        """Der Riegel gegen einen blinden Zeugen darueber.
+
+        Ohne ihn bezeugte die Stille im Bearbeiten-Formular moeglicherweise
+        nur, dass 30.239.000 EUR bei 84 m2 nirgends melden.
+        """
+        antwort = self.client.get(
+            "/uebernehmen/",
+            {
+                "url": "https://www.idealista.com/inmueble/12345/",
+                "preis": "30239000",
+                "wohnflaeche": "84",
+            },
+        )
+        self.assertEqual(len(self._texte(antwort)), 2)
+
+    def test_die_schnellerfassung_warnt_nicht(self):
+        """Sie nimmt nur einen Link entgegen - ein mitgeschickter Preis darf
+        daran nichts aendern und keine Warnung ausloesen."""
+        antwort = self.client.post(
+            "/einwerfen/",
+            {
+                "url": "https://www.idealista.com/inmueble/4711/",
+                "preis": "30239000",
+                "wohnflaeche": "84",
+            },
+            follow=True,
+        )
+        klassen = [k for k, _t in gerenderte_meldungen(antwort)]
+        for eine in klassen:
+            with self.subTest(klassen=eine):
+                self.assertNotIn("warning", eine)
+
+    def test_die_schnellerfassung_legt_das_objekt_trotzdem_an(self):
+        """Der Riegel darunter: die Stille kommt nicht von einem kaputten Aufruf."""
+        self.client.post(
+            "/einwerfen/", {"url": "https://www.idealista.com/inmueble/4711/"}
+        )
+        self.assertTrue(Objekt.objects.filter(inserats_id="4711").exists())
+
+
+def _einstellungszuweisungen(pfad):
+    """Die literalen Zuweisungen einer Einstellungsdatei als Name -> Wert.
+
+    Gelesen wird die DATEI, nicht `django.conf.settings`. Der Grund steht in
+    der Spezifikation: ein Zeuge, der die Testumgebung misst statt die Zusage,
+    gilt als blind. Der Testlauf laeuft ueber `config.settings_test`, und die
+    Datei setzt `SECURE_HSTS_SECONDS` ausdruecklich auf 0 zurueck - `settings`
+    kennt den Betriebswert also gar nicht.
+
+    Ein Import von `config.settings` und ein Blick auf das Modul reichten auch
+    nicht: der Block haengt an `if not DEBUG`, und lokal steht `DJANGO_DEBUG`
+    auf `True`. Der Zeuge fiele dann auf einem Entwicklungsrechner mit einem
+    `AttributeError` - und maesse wieder die Umgebung statt die Zusage.
+
+    `ast.walk` steigt in den `if`-Zweig hinein; was kein Literal ist - `env(…)`
+    etwa - faellt still heraus.
+    """
+    baum = ast.parse((settings.BASE_DIR / pfad).read_text(encoding="utf-8"))
+    gefunden = {}
+    for knoten in ast.walk(baum):
+        if not isinstance(knoten, ast.Assign):
+            continue
+        for ziel in knoten.targets:
+            if isinstance(ziel, ast.Name):
+                try:
+                    gefunden[ziel.id] = ast.literal_eval(knoten.value)
+                except (ValueError, TypeError, SyntaxError):
+                    pass
+    return gefunden
+
+
+class HstsTests(SimpleTestCase):
+    """Zusagen 12 bis 14: der HSTS-Kopf steht auf 30 Tagen.
+
+    Ein gesetzter HSTS-Kopf ist im Browser BINDEND. Die fuenf Minuten vom
+    Anfang haben ihren Zweck erfuellt; was noch aussteht, ist die erste
+    automatische Zertifikatserneuerung durch Caddy. Deshalb 30 Tage und nicht
+    ein Jahr - das kommt danach.
+    """
+
+    def setUp(self):
+        self.betrieb = _einstellungszuweisungen("config/settings.py")
+        self.testlauf = _einstellungszuweisungen("config/settings_test.py")
+
+    # --- Zusage 12 --------------------------------------------------------
+
+    def test_der_betrieb_setzt_hsts_auf_2592000(self):
+        self.assertEqual(self.betrieb["SECURE_HSTS_SECONDS"], 2592000)
+
+    def test_2592000_sind_wirklich_dreissig_tage(self):
+        """Der Kommentar behauptet 30 Tage - der Zeuge rechnet nach."""
+        self.assertEqual(self.betrieb["SECURE_HSTS_SECONDS"], 30 * 24 * 60 * 60)
+
+    def test_der_alte_wert_von_300_sekunden_steht_nicht_mehr_da(self):
+        self.assertNotEqual(self.betrieb["SECURE_HSTS_SECONDS"], 300)
+
+    def test_es_ist_noch_kein_jahr(self):
+        """Ein Jahr kommt NACH der ersten automatischen Erneuerung, nicht davor."""
+        self.assertLess(self.betrieb["SECURE_HSTS_SECONDS"], 60 * 60 * 24 * 365)
+
+    def test_der_kommentar_begruendet_den_neuen_wert(self):
+        """Er begruendete bis zum 07.09. die 300 Sekunden mit den ersten
+        Betriebstagen. Bliebe er stehen, erklaerte er eine Zahl, die es nicht
+        mehr gibt."""
+        quelle = (settings.BASE_DIR / "config" / "settings.py").read_text(
+            encoding="utf-8"
+        )
+        block = quelle[: quelle.index("SECURE_HSTS_SECONDS =")]
+        self.assertIn("Erneuerung", block[block.rindex("SESSION_COOKIE_SECURE") :])
+
+    # --- Zusage 13 --------------------------------------------------------
+
+    def test_der_testlauf_bleibt_bei_null(self):
+        self.assertEqual(self.testlauf["SECURE_HSTS_SECONDS"], 0)
+
+    def test_der_testlauf_setzt_die_null_selbst_und_erbt_sie_nicht(self):
+        """`settings_test` importiert `config.settings` mit `*`.
+
+        Faellt die eigene Zeile weg, kaeme der Betriebswert durch, und der
+        Testclient bekaeme einen bindenden HSTS-Kopf ueber HTTP. Der Zeuge oben
+        liest die Datei; dieser hier misst, was im Lauf WIRKLICH gilt.
+        """
+        self.assertEqual(settings.SECURE_HSTS_SECONDS, 0)
+
+    # --- Zusage 14 --------------------------------------------------------
+
+    def test_preload_ist_im_betrieb_nicht_gesetzt(self):
+        """Preloading gilt fuer die Hauptdomain.
+
+        Diese Unterdomain kommt weder in die Browser-Liste noch soll sie das -
+        ein Eintrag dort ist praktisch nicht zurueckzunehmen.
+        """
+        self.assertNotIn("SECURE_HSTS_PRELOAD", self.betrieb)
+
+    def test_preload_gilt_auch_im_lauf_als_aus(self):
+        self.assertFalse(settings.SECURE_HSTS_PRELOAD)
+
+    # --- unveraendert: die Unterdomains bleiben dabei ---------------------
+
+    def test_include_subdomains_bleibt_gesetzt(self):
+        """Der Kopf gilt fuer die Unterdomains des Objektradars.
+
+        Steht ausdruecklich hier: die Anhebung auf 30 Tage haette ihn beilaeufig
+        mitnehmen koennen, und dann bezeugte niemand mehr, dass er absichtlich
+        steht.
+        """
+        self.assertIs(self.betrieb["SECURE_HSTS_INCLUDE_SUBDOMAINS"], True)
+
+    def test_der_zeuge_liest_wirklich_den_betriebszweig(self):
+        """Der Riegel gegen einen blinden Ableser.
+
+        `SECURE_SSL_REDIRECT` steht im selben `if not DEBUG`-Block. Faende der
+        Helfer den Zweig nicht, gaebe er ein leeres Verzeichnis zurueck - und
+        `assertNotIn` bei Zusage 14 waere gruen, ganz gleich, was in der Datei
+        steht.
+        """
+        self.assertIs(self.betrieb["SECURE_SSL_REDIRECT"], True)
