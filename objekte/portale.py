@@ -30,6 +30,7 @@ PORTAL_IMMOSCOUT24 = "immoscout24"
 PORTAL_FOTOCASA = "fotocasa"
 PORTAL_MILANUNCIOS = "milanuncios"
 PORTAL_PISOS = "pisos"
+PORTAL_IMMOWELT = "immowelt"
 
 #: Beide Werte oder keiner. Ein halb gefuelltes Paar ist wertlos - der
 #: partielle Unique-Index greift nur, wenn Portal UND ID gesetzt sind.
@@ -47,6 +48,14 @@ IMMOSCOUT24_DOMAINS = ("immobilienscout24.de",)
 FOTOCASA_DOMAINS = ("fotocasa.es",)
 MILANUNCIOS_DOMAINS = ("milanuncios.com",)
 PISOS_DOMAINS = ("pisos.com",)
+
+#: NUR `immowelt.de`. `immowelt.at`, `immowelt.ch` und `immonet.de` stehen
+#: ausdruecklich NICHT hier: fuer keine dieser Domains liegt eine belegte
+#: Inserats-URL vor. Ein Domaineintrag ohne belegtes Pfadmuster taeuscht
+#: Abdeckung vor - genau dafuer sind am 02.09. `idealista.it` und `.pt`
+#: herausgefallen. Das fuehrende `www.` nimmt `_host()` ab, es gehoert deshalb
+#: nicht in die Liste.
+IMMOWELT_DOMAINS = ("immowelt.de",)
 
 #: Sprachpraefix optional, abschliessender Schraegstrich optional, danach
 #: Schluss. Query und Fragment stehen nicht im Pfad - `urlsplit` hat sie
@@ -97,20 +106,58 @@ MILANUNCIOS_PFAD = re.compile(r"^/.*-(\d+)\.htm$")
 #: waere unsichtbar.
 PISOS_PFAD = re.compile(r"^/.*[-/](\d+_\d+)/?$")
 
-#: Portal, Domains und Pfadmuster in EINER Tabelle statt in fuenf Zweigen.
-#: Ein weiteres Portal ist damit eine Zeile und keine vierte Kopie derselben
-#: drei Zeilen - und die Zeilen koennen nicht auseinanderdriften.
+#: Das ERSTE Pfadsegment hinter `/expose/`, was auch immer darin steht.
+#:
+#: Kein `$` am Ende und deshalb auch keine Sonderbehandlung fuer den
+#: abschliessenden Schraegstrich oder fuer weitere Segmente dahinter: `[^/]+`
+#: hoert am naechsten Schraegstrich von selbst auf. Query und Fragment hat
+#: `urlsplit` schon abgetrennt. Ist das Segment leer (`/expose/`), verlangt
+#: `+` mindestens ein Zeichen und das Muster trifft nicht - die Antwort ist
+#: dann LEER, also Portal `sonstiges` ohne Schluessel.
+#:
+#: AUSDRUECKLICH NICHT auf UUID-Format geprueft. Beide Belege tragen eine
+#: UUID, aber fuehrt Immowelt aeltere Inserate mit anderem Kennungsformat,
+#: fielen die bei einem strengen Muster auf `sonstiges` durch - das erzeugt
+#: eine sichtbare Dublette. Ein zu breites Muster erzeugte umgekehrt eine
+#: STILLE Kollision, und die ist hier ausgeschlossen: das Segment hinter
+#: `/expose/` ist per Definition die Inseratskennung und nicht die eines
+#: Anbieters. Von den beiden moeglichen Fehlern ist der sichtbare gewaehlt.
+IMMOWELT_PFAD = re.compile(r"^/expose/([^/]+)")
+
+
+def _unveraendert(kennung: str) -> str:
+    """Die Kennung so, wie sie im Pfad steht."""
+    return kennung
+
+
+#: Portal, Domains, Pfadmuster und Normalisierung der Kennung in EINER Tabelle
+#: statt in sechs Zweigen. Ein weiteres Portal ist damit eine Zeile und keine
+#: weitere Kopie derselben vier Zeilen - und die Zeilen koennen nicht
+#: auseinanderdriften.
+#:
+#: Die vierte Spalte ist am 07.09. dazugekommen. Sie steht ABSICHTLICH je
+#: Portal und nicht als ein globales `.lower()` in `portal_und_id()`: fuer die
+#: fuenf aelteren Portale ist die Kennung eine reine Ziffernfolge, an der
+#: Kleinschreibung nichts belegt und nichts geprueft waere. Eine Regel, die
+#: fuer vier Portale nie an einer echten URL nachgemessen wurde, dort
+#: mitlaufen zu lassen, ist dieselbe vorgetaeuschte Abdeckung wie eine Domain
+#: ohne Pfadmuster.
 #:
 #: Die Domainmengen ueberschneiden sich nicht; die Schleife nimmt den ersten
 #: Treffer. Passt die Domain, aber nicht der Pfad, ist die Antwort LEER - es
 #: wird NICHT beim naechsten Eintrag weitergesucht: eine idealista-URL mit
 #: unbekanntem Pfad ist kein fotocasa-Inserat.
 PORTALE = (
-    (PORTAL_IDEALISTA, IDEALISTA_DOMAINS, IDEALISTA_PFAD),
-    (PORTAL_IMMOSCOUT24, IMMOSCOUT24_DOMAINS, IMMOSCOUT24_PFAD),
-    (PORTAL_FOTOCASA, FOTOCASA_DOMAINS, FOTOCASA_PFAD),
-    (PORTAL_MILANUNCIOS, MILANUNCIOS_DOMAINS, MILANUNCIOS_PFAD),
-    (PORTAL_PISOS, PISOS_DOMAINS, PISOS_PFAD),
+    (PORTAL_IDEALISTA, IDEALISTA_DOMAINS, IDEALISTA_PFAD, _unveraendert),
+    (PORTAL_IMMOSCOUT24, IMMOSCOUT24_DOMAINS, IMMOSCOUT24_PFAD, _unveraendert),
+    (PORTAL_FOTOCASA, FOTOCASA_DOMAINS, FOTOCASA_PFAD, _unveraendert),
+    (PORTAL_MILANUNCIOS, MILANUNCIOS_DOMAINS, MILANUNCIOS_PFAD, _unveraendert),
+    (PORTAL_PISOS, PISOS_DOMAINS, PISOS_PFAD, _unveraendert),
+    # `str.lower`, weil dieselbe Kennung in abweichender Gross-/Kleinschreibung
+    # sonst zwei verschiedene Schluessel fuer dasselbe Inserat ergaebe. Der
+    # Dublettenschutz fiele dabei LAUTLOS aus - dieselbe Fehlerart, gegen die
+    # bei `pisos.com` der ganze Zahlenblock genommen wurde.
+    (PORTAL_IMMOWELT, IMMOWELT_DOMAINS, IMMOWELT_PFAD, str.lower),
 )
 
 
@@ -159,10 +206,10 @@ def portal_und_id(url: str) -> tuple[str, str]:
     if not host:
         return LEER
 
-    for portal, domains, muster in PORTALE:
+    for portal, domains, muster, normalisieren in PORTALE:
         if _passt(host, domains):
             treffer = muster.match(teile.path)
-            return (portal, treffer.group(1)) if treffer else LEER
+            return (portal, normalisieren(treffer.group(1))) if treffer else LEER
 
     return LEER
 
@@ -197,4 +244,4 @@ def ist_bekannte_domain(url: str) -> bool:
     if not host:
         return False
 
-    return any(_passt(host, domains) for _, domains, _ in PORTALE)
+    return any(_passt(host, domains) for _, domains, _, _ in PORTALE)

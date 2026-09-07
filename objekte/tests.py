@@ -68,6 +68,9 @@ zweiter_nachtrag = import_module("objekte.migrations.0005_bestand_neue_portale_n
 #: Der Erfassungszeitpunkt am Preisverlauf, nachgezogen am 04.09.
 erfassungsmigration = import_module("objekte.migrations.0006_preisverlauf_erfasst_am")
 
+#: Der dritte Lauf desselben Nachtrags, jetzt mit Immowelt (07.09.).
+dritter_nachtrag = import_module("objekte.migrations.0008_bestand_immowelt_nachtragen")
+
 Person = get_user_model()
 
 
@@ -1969,6 +1972,231 @@ class PortalUndIdTests(SimpleTestCase):
             ("immoscout24", "98765"),
         )
 
+    # --- Immowelt (07.09.) ------------------------------------------------
+
+    #: Die beiden am 07.09. aus Safari uebernommenen Bestandsinserate. Sie
+    #: stehen als Konstanten, weil mehrere Zeugen unten dieselbe Kennung in
+    #: verschiedenen Schreibweisen gegeneinander halten.
+    IMMOWELT_KENNUNG = "715825d1-36ac-4c8c-99a0-10312f8c7de6"
+    IMMOWELT_ERSTE = f"https://www.immowelt.de/expose/{IMMOWELT_KENNUNG}"
+    IMMOWELT_ZWEITE = (
+        "https://www.immowelt.de/expose/ecd16e27-fa20-49ce-a28f-57ee676c9eec"
+    )
+
+    def test_immowelt_erster_beleg(self):
+        self.assertEqual(
+            portal_und_id(self.IMMOWELT_ERSTE), ("immowelt", self.IMMOWELT_KENNUNG)
+        )
+
+    def test_immowelt_zweiter_beleg(self):
+        self.assertEqual(
+            portal_und_id(self.IMMOWELT_ZWEITE),
+            ("immowelt", "ecd16e27-fa20-49ce-a28f-57ee676c9eec"),
+        )
+
+    def test_immowelt_ohne_www(self):
+        self.assertEqual(
+            portal_und_id(f"https://immowelt.de/expose/{self.IMMOWELT_KENNUNG}"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    def test_immowelt_auf_einer_subdomain(self):
+        self.assertEqual(
+            portal_und_id(f"https://m.immowelt.de/expose/{self.IMMOWELT_KENNUNG}"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    # --- Zusage: Query, Fragment und Schraegstrich aendern nichts ---------
+
+    def test_immowelt_mit_query_parameter_ergibt_denselben_schluessel(self):
+        """Gemessen GEGEN die nackte Form, nicht gegen eine abgeschriebene.
+
+        Eine Zeichenkette hier hinzuschreiben bezeugte, dass das Muster
+        irgendetwas liefert. Gefordert ist, dass es DASSELBE liefert.
+        """
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}?serp_view=list"),
+            portal_und_id(self.IMMOWELT_ERSTE),
+        )
+
+    def test_immowelt_mit_query_parameter_liefert_die_kennung(self):
+        # Der Riegel gegen einen vakuum-gruenen Zeugen darueber: waeren BEIDE
+        # Seiten `("", "")`, waere der Vergleich erfuellt und nichts gemessen.
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}?serp_view=list"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    def test_immowelt_mit_abschliessendem_schraegstrich_ergibt_denselben_schluessel(self):
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}/"), portal_und_id(self.IMMOWELT_ERSTE)
+        )
+
+    def test_immowelt_mit_abschliessendem_schraegstrich_liefert_die_kennung(self):
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}/"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    def test_immowelt_mit_fragment(self):
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}#bilder"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    def test_immowelt_mit_angehaengtem_unterpfad(self):
+        # Weitere Segmente hinter der Kennung werden uebergangen. `[^/]+` hoert
+        # am naechsten Schraegstrich von selbst auf.
+        self.assertEqual(
+            portal_und_id(f"{self.IMMOWELT_ERSTE}/karte/umgebung"),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    # --- Zusage: Kleinschreibung ------------------------------------------
+
+    def test_eine_grossgeschriebene_kennung_wird_klein_geliefert(self):
+        """Der Zeuge, der ohne Grossbuchstaben in der EINGABE blind waere.
+
+        Die Kennung steht hier ausdruecklich in Grossbuchstaben. Stuende die
+        Testkennung als reine Ziffernfolge oder schon klein da, waere
+        `str.lower()` ein Nichts und der Zeuge bliebe gruen, auch wenn die
+        Normalisierung ersatzlos entfiele.
+        """
+        self.assertEqual(
+            portal_und_id(
+                "https://www.immowelt.de/expose/715825D1-36AC-4C8C-99A0-10312F8C7DE6"
+            ),
+            ("immowelt", self.IMMOWELT_KENNUNG),
+        )
+
+    def test_beide_schreibweisen_derselben_kennung_ergeben_denselben_schluessel(self):
+        """Die eigentliche Zusage - der Dublettenschutz haengt daran.
+
+        Zwei verschiedene Schluessel fuer dasselbe Inserat liessen ihn LAUTLOS
+        ausfallen: kein Fehler, keine Meldung, nur zwei Zeilen in der Liste.
+
+        Gross geschrieben wird AUSSCHLIESSLICH die Kennung, nicht die ganze
+        URL. `/EXPOSE/` ist ein anderer Pfad als `/expose/` - der Pfad ist
+        anders als der Host case-sensitiv, und das Muster trifft ihn zu Recht
+        nicht. Das ist eine eigene Zusage und steht als eigener Zeuge darunter.
+        """
+        self.assertEqual(
+            portal_und_id(
+                f"https://www.immowelt.de/expose/{self.IMMOWELT_KENNUNG.upper()}"
+            ),
+            portal_und_id(self.IMMOWELT_ERSTE),
+        )
+
+    def test_ein_grossgeschriebenes_expose_wird_nicht_erkannt(self):
+        """Die Grenze der Normalisierung, ausdruecklich festgehalten.
+
+        Normalisiert wird die KENNUNG, nicht der Pfad. `/EXPOSE/` faellt auf
+        `sonstiges` durch - der sichtbare Ausgang, und der richtige: Immowelt
+        gibt diese Form nicht aus, und ein Muster, das sie mitnaehme, waere
+        wieder nur an keiner echten URL belegt.
+        """
+        self.assertEqual(
+            portal_und_id(f"https://www.immowelt.de/EXPOSE/{self.IMMOWELT_KENNUNG}"),
+            ("", ""),
+        )
+
+    def test_die_kennung_in_der_testadresse_traegt_ueberhaupt_buchstaben(self):
+        """Riegel gegen ein spaeteres Umschreiben der Konstante.
+
+        Setzte jemand `IMMOWELT_KENNUNG` irgendwann auf eine reine
+        Ziffernfolge, blieben die beiden Zeugen darueber gruen - und
+        bezeugten von da an nichts mehr. Gross-/Kleinschreibung ist an
+        Ziffern nicht messbar.
+        """
+        self.assertNotEqual(self.IMMOWELT_KENNUNG, self.IMMOWELT_KENNUNG.upper())
+
+    # --- Zusage: was NICHT als Immowelt durchgeht -------------------------
+
+    def test_immowelt_ohne_expose_ergibt_beide_werte_leer(self):
+        self.assertEqual(portal_und_id("https://www.immowelt.de/"), ("", ""))
+
+    def test_eine_immowelt_suchseite_ergibt_beide_werte_leer(self):
+        self.assertEqual(
+            portal_und_id("https://www.immowelt.de/liste/berlin/wohnungen/kaufen"),
+            ("", ""),
+        )
+
+    def test_ein_leeres_segment_hinter_expose_ergibt_beide_werte_leer(self):
+        """`/expose/` ohne Kennung: kein Muster, also `sonstiges` ohne Schluessel.
+
+        Ein leerer Schluessel waere hier der teuerste Ausgang - er kollidierte
+        am Unique-Index mit jedem anderen leeren. `LEER` bedeutet deshalb
+        BEIDE Werte leer, und der partielle Index greift dann gar nicht.
+        """
+        self.assertEqual(portal_und_id("https://www.immowelt.de/expose/"), ("", ""))
+
+    def test_expose_ganz_ohne_schraegstrich_dahinter_ergibt_beide_werte_leer(self):
+        self.assertEqual(portal_und_id("https://www.immowelt.de/expose"), ("", ""))
+
+    def test_immowelt_at_wird_nicht_als_immowelt_erkannt(self):
+        """`immowelt.at` ist NICHT aufgenommen - es liegt keine belegte URL vor.
+
+        Ein Domaineintrag ohne belegtes Pfadmuster taeuscht Abdeckung vor.
+        Genau dafuer sind am 02.09. `idealista.it` und `.pt` herausgefallen.
+        """
+        self.assertEqual(
+            portal_und_id(f"https://www.immowelt.at/expose/{self.IMMOWELT_KENNUNG}"),
+            ("", ""),
+        )
+
+    def test_immowelt_ch_wird_nicht_als_immowelt_erkannt(self):
+        self.assertEqual(
+            portal_und_id(f"https://www.immowelt.ch/expose/{self.IMMOWELT_KENNUNG}"),
+            ("", ""),
+        )
+
+    def test_immonet_wird_nicht_als_immowelt_erkannt(self):
+        """Dasselbe Haus, aber eine andere Domain und keine belegte URL."""
+        self.assertEqual(
+            portal_und_id(f"https://www.immonet.de/expose/{self.IMMOWELT_KENNUNG}"),
+            ("", ""),
+        )
+
+    def test_eine_domain_die_nur_auf_immowelt_de_endet_wird_nicht_erkannt(self):
+        # `endswith` allein traefe hier zu - deshalb der Punkt in `_passt()`.
+        self.assertEqual(
+            portal_und_id(f"https://nichtimmowelt.de/expose/{self.IMMOWELT_KENNUNG}"),
+            ("", ""),
+        )
+
+    def test_zugangsdaten_taeuschen_auch_immowelt_nicht_vor(self):
+        self.assertEqual(
+            portal_und_id("https://www.immowelt.de@beispiel.de/expose/abc"), ("", "")
+        )
+
+    # --- das bewusst WEITE Muster -----------------------------------------
+
+    def test_eine_kennung_ohne_uuid_form_wird_ebenfalls_genommen(self):
+        """Ausdrueckliche Entscheidung der Spezifikation, kein Versehen.
+
+        Auf UUID-Format zu pruefen liesse aeltere Inserate mit abweichendem
+        Kennungsformat auf `sonstiges` durchfallen - das erzeugt eine
+        SICHTBARE Dublette. Ein zu weites Muster erzeugte eine STILLE
+        Kollision, und die ist hier ausgeschlossen: hinter `/expose/` steht
+        per Definition die Inseratskennung.
+        """
+        self.assertEqual(
+            portal_und_id("https://www.immowelt.de/expose/12345"),
+            ("immowelt", "12345"),
+        )
+
+    def test_zwei_verschiedene_kennungen_ergeben_zwei_verschiedene_schluessel(self):
+        """Die Gegenprobe zum weiten Muster: es fasst nicht alles zusammen.
+
+        Waere das Muster versehentlich auf etwas ausgewichen, das allen
+        Immowelt-URLs gemeinsam ist, truegen alle Inserate denselben
+        Schluessel und der Dublettenschutz waere still tot - dieselbe
+        Fehlerart wie bei der Maklerkennung von `pisos.com`.
+        """
+        self.assertNotEqual(
+            portal_und_id(self.IMMOWELT_ERSTE), portal_und_id(self.IMMOWELT_ZWEITE)
+        )
+
     # --- das leere Paar (Zusage 3) ----------------------------------------
 
     def test_eine_unbekannte_domain_ergibt_beide_werte_leer(self):
@@ -2082,6 +2310,113 @@ class PortalModulTests(TestCase):
     def test_der_pisos_schluessel_passt_zu_den_auswahllisten(self):
         self.assertEqual(portale.PORTAL_PISOS, Portal.PISOS.value)
 
+    def test_der_immowelt_schluessel_passt_zu_den_auswahllisten(self):
+        self.assertEqual(portale.PORTAL_IMMOWELT, Portal.IMMOWELT.value)
+
+    def test_die_beschriftung_von_immowelt_steht_gross(self):
+        """Die Beschriftung, direkt an der Auswahlliste gemessen.
+
+        Der Zeuge an `Objekt.__str__` misst sie ueber `get_portal_display()`
+        mit. Dieser hier haengt nicht an der Bezeichnung: aendert sich
+        irgendwann, WIE die Liste die Beschriftung ausgibt, bleibt die Zusage
+        selbst trotzdem bewacht.
+        """
+        self.assertEqual(Portal.IMMOWELT.label, "Immowelt")
+
+    def test_sonstiges_bleibt_der_letzte_eintrag_der_portalauswahl(self):
+        """`sonstiges` ist der Auffangwert und gehoert ans Ende.
+
+        Die Reihenfolge der Auswahlliste ist die Reihenfolge im Filter und im
+        Formular. Ein Auffangwert zwischen den Portalen liest sich wie ein
+        Portal - und das naechste Portal, das jemand hinter ihm eintraegt,
+        stuende dann dahinter, ohne dass etwas rot wuerde.
+        """
+        self.assertEqual(Portal.values[-1], Portal.SONSTIGES.value)
+
+    def test_immowelt_steht_vor_sonstiges(self):
+        """Die andere Haelfte derselben Zusage.
+
+        Der Zeuge darueber bliebe gruen, wenn `immowelt` gar nicht in der
+        Liste stuende - `sonstiges` waere trotzdem das letzte Element.
+        """
+        self.assertLess(
+            Portal.values.index(Portal.IMMOWELT.value),
+            Portal.values.index(Portal.SONSTIGES.value),
+        )
+
+    def test_immowelt_steht_in_der_portaltabelle(self):
+        """Der Schluessel allein genuegt nicht.
+
+        Stuende `PORTAL_IMMOWELT` da, ohne dass eine Zeile in `PORTALE` ihn
+        verwendet, waere der Zeuge darueber gruen und die Erkennung taete
+        nichts.
+        """
+        self.assertIn(portale.PORTAL_IMMOWELT, [p for p, *_ in portale.PORTALE])
+
+    # --- die vierte Spalte: Normalisierung der Kennung (07.09.) -----------
+
+    def test_jede_zeile_der_portaltabelle_traegt_vier_spalten(self):
+        """Riegel gegen eine halb nachgezogene Zeile.
+
+        Ein spaeteres Portal, das nur drei Spalten mitbringt, liesse
+        `portal_und_id()` beim Entpacken auflaufen - und zwar erst zur
+        Laufzeit an der ersten URL dieses Portals, nicht beim Import.
+        """
+        for zeile in portale.PORTALE:
+            with self.subTest(portal=zeile[0]):
+                self.assertEqual(len(zeile), 4)
+
+    def test_jede_normalisierung_ist_aufrufbar(self):
+        for portal, _, _, normalisieren in portale.PORTALE:
+            with self.subTest(portal=portal):
+                self.assertTrue(callable(normalisieren))
+
+    def test_immowelt_traegt_die_kleinschreibung_in_der_tabelle(self):
+        """Strukturzeuge neben den Verhaltenszeugen in `PortalUndIdTests`.
+
+        Die messen das Ergebnis an einer URL. Dieser hier haelt fest, dass die
+        Regel als SPALTE der Tabelle steht und nicht irgendwo im Rumpf von
+        `portal_und_id()` an Immowelt festgeschrieben ist - denn dort faende
+        das naechste Portal sie nicht wieder.
+        """
+        (normalisieren,) = [
+            n for p, _, _, n in portale.PORTALE if p == portale.PORTAL_IMMOWELT
+        ]
+        self.assertEqual(normalisieren("ABC-def"), "abc-def")
+
+    def test_die_normalisierung_der_tabelle_wird_wirklich_angewendet(self):
+        """Der Zeuge gegen die stillste Sabotage dieser Runde.
+
+        Alle Verhaltenszeugen zur Kleinschreibung koennten auch dann gruen
+        sein, wenn `portal_und_id()` ein festes `.lower()` schriebe statt die
+        Spalte aufzurufen. Dann liefe die Regel fuer JEDES Portal mit, auch
+        fuer die vier, an denen sie nie belegt wurde. Gemessen wird deshalb
+        mit einer untergeschobenen Normalisierung: wird die Spalte nicht
+        aufgerufen, kommt der Wert unveraendert zurueck.
+        """
+        eigene = tuple(
+            (p, d, m, (lambda k: "GEMESSEN") if p == portale.PORTAL_IMMOWELT else n)
+            for p, d, m, n in portale.PORTALE
+        )
+        with mock.patch.object(portale, "PORTALE", eigene):
+            self.assertEqual(
+                portal_und_id("https://www.immowelt.de/expose/abc"),
+                ("immowelt", "GEMESSEN"),
+            )
+
+    def test_die_kleinschreibung_laeuft_nicht_bei_den_anderen_portalen_mit(self):
+        """Die Gegenprobe: nur Immowelt traegt `str.lower`.
+
+        Ein globales `.lower()` in `portal_und_id()` waere an den vier
+        aelteren Portalen nie an einer echten URL nachgemessen - dieselbe
+        vorgetaeuschte Abdeckung wie eine Domain ohne belegtes Pfadmuster.
+        """
+        for portal, _, _, normalisieren in portale.PORTALE:
+            if portal == portale.PORTAL_IMMOWELT:
+                continue
+            with self.subTest(portal=portal):
+                self.assertEqual(normalisieren("ABC-def"), "ABC-def")
+
     def test_die_portaltabelle_ist_nicht_leer(self):
         """Riegel gegen einen vakuum-gruenen Zeugen darunter.
 
@@ -2100,7 +2435,7 @@ class PortalModulTests(TestCase):
         schriebe die View einen Schluessel, den keine Auswahlliste kennt: das
         Feld bliebe ohne Beschriftung und der Filter fuende das Objekt nie.
         """
-        for portal, _, _ in portale.PORTALE:
+        for portal, *_ in portale.PORTALE:
             with self.subTest(portal=portal):
                 self.assertIn(portal, Portal.values)
 
@@ -2332,6 +2667,243 @@ class SchnellerfassungMitSchluesselTests(TestCase):
     def test_ein_integrityerror_ohne_treffer_fuehrt_auf_die_liste(self):
         with mock.patch.object(Objekt.objects, "create", side_effect=IntegrityError):
             self.assertEqual(self._einwerfen(self.ERSTE)["Location"], "/")
+
+
+class MigrationsstandTests(TestCase):
+    """Die Auswahlliste und die Migrationen duerfen nicht auseinanderlaufen.
+
+    Eine Aenderung an `choices` erzeugt eine `AlterField`-Migration. Wird sie
+    vergessen, faellt das im Betrieb nirgends auf - Django prueft `choices`
+    nicht gegen die Datenbank -, aber die naechste beliebige Aenderung am
+    Modell zoege sie stillschweigend mit sich und haengte sie an eine fremde
+    Migration.
+    """
+
+    def test_fuer_objekte_steht_keine_migration_aus(self):
+        """`makemigrations --check`, auf `objekte` verengt.
+
+        Gemessen wird ueber den Autodetector, nicht ueber einen Unterprozess:
+        ein `call_command` mit `--check` beendet den Prozess ueber `SystemExit`
+        und nimmt den ganzen Testlauf mit.
+
+        Geprueft wird AUSDRUECKLICH nur die eigene App. Django bringt eigene
+        ausstehende Migrationen mit (`sessions`), die niemand hier nachzieht -
+        ein Zeuge ueber alle Apps waere von Anfang an rot und damit wertlos.
+        """
+        from django.db.migrations.autodetector import MigrationAutodetector
+        from django.db.migrations.loader import MigrationLoader
+        from django.db.migrations.questioner import NonInteractiveMigrationQuestioner
+        from django.db.migrations.state import ProjectState
+
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        autodetector = MigrationAutodetector(
+            loader.project_state(),
+            ProjectState.from_apps(django_apps),
+            NonInteractiveMigrationQuestioner(specified_apps=set(), dry_run=True),
+        )
+        self.assertNotIn("objekte", autodetector.changes(graph=loader.graph))
+
+    def test_die_auswahlliste_der_letzten_schemamigration_kennt_immowelt(self):
+        """Der Zeuge fuer die `AlterField`-Migration dieser Runde.
+
+        Der Zeuge darueber faellt zwar auch, wenn 0007 fehlt - er sagt aber
+        nicht, WAS fehlt, und er faellt genauso bei jeder anderen vergessenen
+        Migration. Dieser hier benennt die Zusage: der Wert steht in der
+        Spaltendefinition, die die Migrationen aufbauen.
+        """
+        zustand = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", "0007_alter_objekt_portal"))
+            .apps
+        )
+        feld = zustand.get_model("objekte", "Objekt")._meta.get_field("portal")
+        self.assertIn(("immowelt", "Immowelt"), feld.choices)
+
+    def test_der_zustand_davor_kennt_immowelt_noch_nicht(self):
+        """Die Gegenprobe: 0007 traegt die Aenderung wirklich.
+
+        Ohne diesen Zeugen bliebe der darueber auch dann gruen, wenn der Wert
+        schon aus einer frueheren Migration kaeme - dann bezeugte er nicht
+        0007, sondern irgendeine Migration davor.
+        """
+        zustand = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", "0006_preisverlauf_erfasst_am"))
+            .apps
+        )
+        feld = zustand.get_model("objekte", "Objekt")._meta.get_field("portal")
+        self.assertNotIn(("immowelt", "Immowelt"), feld.choices)
+
+
+class EinwurfImmoweltTests(TestCase):
+    """Zusage 6 der Runde vom 07.09.: der Schluessel traegt auch bei Immowelt.
+
+    Bis zu diesem Tag lief jeder Immowelt-Einwurf als `sonstiges` ohne
+    Schluessel; getragen hat ihn allein der schwache URL-Vergleich.
+    """
+
+    KENNUNG = "715825d1-36ac-4c8c-99a0-10312f8c7de6"
+
+    #: Dasselbe Inserat in zwei Schreibweisen. Sie unterscheiden sich
+    #: ABSICHTLICH so, dass `rstrip("/")` sie NICHT zusammenfuehrt - sonst
+    #: machte schon der alte URL-Vergleich die Zusage gruen und der starke
+    #: Vergleich bliebe unbezeugt. Bewacht wird das von
+    #: `test_der_alte_url_vergleich_fuehrt_die_beiden_schreibweisen_nicht_zusammen`.
+    ERSTE = f"https://www.immowelt.de/expose/{KENNUNG}"
+    ZWEITE = f"https://immowelt.de/expose/{KENNUNG}/?serp_view=list"
+
+    #: Dieselbe Kennung in Grossbuchstaben. Der Fall, den `str.lower()` traegt.
+    GROSS = f"https://www.immowelt.de/expose/{KENNUNG.upper()}"
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="ein-langes-passwort", first_name="Steffen", last_name="P."
+        )
+        self.client.force_login(self.person)
+
+    def _einwerfen(self, url, **kwargs):
+        return self.client.post("/einwerfen/", {"url": url}, **kwargs)
+
+    # --- der Einwurf schreibt beide Werte ---------------------------------
+
+    def test_der_einwurf_schreibt_das_portal_ans_objekt(self):
+        self._einwerfen(self.ERSTE)
+        self.assertEqual(Objekt.objects.get().portal, Portal.IMMOWELT)
+
+    def test_der_einwurf_schreibt_die_inserats_id_ans_objekt(self):
+        self._einwerfen(self.ERSTE)
+        self.assertEqual(Objekt.objects.get().inserats_id, self.KENNUNG)
+
+    def test_die_url_bleibt_dabei_unveraendert(self):
+        # Portal und ID werden aus der URL GELESEN, sie wird nicht nach ihnen
+        # umgeschrieben - auch nicht in Kleinschreibung.
+        self._einwerfen(self.GROSS)
+        self.assertEqual(Objekt.objects.get().url, self.GROSS)
+
+    def test_die_gespeicherte_kennung_steht_klein_in_der_datenbank(self):
+        """Die Zusage endet nicht an `portal_und_id()`, sondern an der Spalte.
+
+        Zwischen Parser und Datenbank liegt die View. Schriebe sie die Kennung
+        aus der URL statt aus dem Rueckgabewert, waeren alle Zeugen an der
+        Funktion gruen und der Dublettenschutz trotzdem tot.
+        """
+        self._einwerfen(self.GROSS)
+        self.assertEqual(Objekt.objects.get().inserats_id, self.KENNUNG)
+
+    # --- Zusage 6: kein zweites Objekt ------------------------------------
+
+    def test_zwei_schreibweisen_desselben_inserats_legen_ein_objekt_an(self):
+        self._einwerfen(self.ERSTE)
+        self._einwerfen(self.ZWEITE)
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_die_zweite_schreibweise_leitet_auf_das_bestehende_objekt(self):
+        self._einwerfen(self.ERSTE)
+        bestehendes = Objekt.objects.get()
+        self.assertEqual(
+            self._einwerfen(self.ZWEITE)["Location"], f"/objekt/{bestehendes.pk}/"
+        )
+
+    def test_die_zweite_schreibweise_meldet_die_dublette(self):
+        self._einwerfen(self.ERSTE)
+        self.assertContains(
+            self._einwerfen(self.ZWEITE, follow=True),
+            "Das Inserat liegt schon in der Liste.",
+        )
+
+    def test_der_alte_url_vergleich_fuehrt_die_beiden_schreibweisen_nicht_zusammen(self):
+        """Die Gegenprobe zur Zusage, als Zeuge statt als Handgriff.
+
+        Ohne ihn koennte jemand `ERSTE` und `ZWEITE` irgendwann auf zwei URLs
+        setzen, die sich nur im abschliessenden Schraegstrich unterscheiden.
+        Die Zeugen darueber blieben gruen - und bezeugten von da an den alten
+        URL-Vergleich statt den neuen Schluessel.
+        """
+        Objekt.objects.create(url=self.ERSTE)
+        self.assertIsNone(views.dublette(self.ZWEITE))
+
+    def test_der_starke_vergleich_findet_das_bestehende_objekt(self):
+        bestehendes = Objekt.objects.create(
+            url=self.ERSTE, portal=Portal.IMMOWELT, inserats_id=self.KENNUNG
+        )
+        self.assertEqual(
+            views.dublette_ueber_schluessel(Portal.IMMOWELT, self.KENNUNG), bestehendes
+        )
+
+    # --- Zusage 2 an der Datenbank, nicht nur am Parser -------------------
+
+    def test_die_grossgeschriebene_schreibweise_legt_kein_zweites_objekt_an(self):
+        """Der teuerste Fall dieser Runde, wenn die Kleinschreibung entfiele.
+
+        Zwei Schluessel fuer dasselbe Inserat brechen nichts hoerbar - sie
+        legen still ein zweites Objekt an, und Vota und Notizen verteilen sich
+        auf beide.
+        """
+        self._einwerfen(self.ERSTE)
+        self._einwerfen(self.GROSS)
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_die_grossgeschriebene_schreibweise_meldet_die_dublette(self):
+        self._einwerfen(self.ERSTE)
+        self.assertContains(
+            self._einwerfen(self.GROSS, follow=True),
+            "Das Inserat liegt schon in der Liste.",
+        )
+
+    def test_der_alte_url_vergleich_traegt_diesen_fall_ebenfalls_nicht(self):
+        """Auch hier: der Zeuge darueber muss den SCHLUESSEL messen.
+
+        `rstrip("/")` fuehrt Gross- und Kleinschreibung nicht zusammen - der
+        schwache Vergleich vergliche zwei verschiedene Zeichenketten.
+        """
+        Objekt.objects.create(url=self.ERSTE)
+        self.assertIsNone(views.dublette(self.GROSS))
+
+    # --- der partielle Unique-Index selbst --------------------------------
+
+    def test_der_unique_index_weist_ein_zweites_objekt_am_selben_schluessel_ab(self):
+        """Der Index unter dem Einwurf, gemessen ohne die View.
+
+        Die Zeugen darueber koennten auch von der Vorpruefung allein getragen
+        sein. Dieser hier greift daran vorbei und legt das zweite Objekt
+        direkt an.
+        """
+        Objekt.objects.create(
+            url=self.ERSTE, portal=Portal.IMMOWELT, inserats_id=self.KENNUNG
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Objekt.objects.create(
+                    url=self.ZWEITE, portal=Portal.IMMOWELT, inserats_id=self.KENNUNG
+                )
+
+    def test_zwei_verschiedene_immowelt_inserate_sind_keine_dublette(self):
+        """Die Gegenprobe: das weite Muster fasst nicht alles zusammen."""
+        self._einwerfen(self.ERSTE)
+        self._einwerfen(
+            "https://www.immowelt.de/expose/ecd16e27-fa20-49ce-a28f-57ee676c9eec"
+        )
+        self.assertEqual(Objekt.objects.count(), 2)
+
+    # --- was weiterhin auf `sonstiges` faellt -----------------------------
+
+    def test_eine_immowelt_suchseite_bleibt_ohne_portal(self):
+        self._einwerfen("https://www.immowelt.de/liste/berlin/wohnungen/kaufen")
+        self.assertEqual(Objekt.objects.get().portal, "")
+
+    def test_eine_immowelt_at_adresse_bleibt_ohne_portal(self):
+        self._einwerfen(f"https://www.immowelt.at/expose/{self.KENNUNG}")
+        self.assertEqual(Objekt.objects.get().portal, "")
+
+    def test_zwei_immowelt_at_inserate_sind_keine_dublette(self):
+        """Ohne Schluessel darf Stufe 1 nicht raten.
+
+        Faende sie fuer jedes unerkannte Inserat das erstbeste andere
+        unerkannte, leitete der Einwurf auf ein voellig fremdes Objekt um.
+        """
+        self._einwerfen(f"https://www.immowelt.at/expose/{self.KENNUNG}")
+        self._einwerfen("https://www.immowelt.at/expose/ecd16e27-fa20-49ce-a28f")
+        self.assertEqual(Objekt.objects.count(), 2)
 
 
 class NachtragsmigrationTests(TestCase):
@@ -2572,12 +3144,20 @@ class BestandsnachtragNeuePortaleTests(TestCase):
             (bestand.portal, bestand.inserats_id), (Portal.PISOS, "6109286238_109700")
         )
 
-    def test_das_immowelt_testobjekt_bleibt_ohne_schluessel(self):
-        """Gewollt: es bleibt in der Liste und bleibt "sonstiges".
+    def test_das_immowelt_testobjekt_bekommt_seit_dem_07_09_einen_schluessel(self):
+        """Bis zum 07.09. behauptete dieser Zeuge das GEGENTEIL - zu Recht.
 
-        Immowelt hat kein bekanntes Muster. Ein geratener Schluessel liesse
-        zwei verschiedene Inserate am Unique-Index kollidieren - ein leerer
-        laesst den URL-Vergleich weiterarbeiten.
+        Immowelt hatte kein bekanntes Muster, und ein geratener Schluessel
+        liesse zwei verschiedene Inserate am Unique-Index kollidieren. Seit
+        dem 07.09. ist das Muster an zwei echten URLs belegt.
+
+        Dass 0005 den Schluessel jetzt mitschreibt, ist kein Versehen, sondern
+        die dokumentierte Kopplung dieser Migration: sie liest die Muster ueber
+        `portal_und_id` aus dem ANWENDUNGSCODE, nicht aus einer eingefrorenen
+        Kopie. Auf einer Datenbank, auf der 0005 laengst durchlief, aendert das
+        nichts - dort holt 0008 den Nachtrag nach. Auf einer frischen Datenbank
+        schreibt schon 0005 den Wert, und 0008 findet ihn bereits vergeben.
+        Beide Wege enden am selben Ergebnis, und genau das ist gewollt.
         """
         bestand = Objekt.objects.create(
             url="https://www.immowelt.de/expose/88b946d7-1f96-43d4-925d-4c7ded15b6cb"
@@ -2585,7 +3165,10 @@ class BestandsnachtragNeuePortaleTests(TestCase):
         )
         self._nachtragen()
         bestand.refresh_from_db()
-        self.assertEqual((bestand.portal, bestand.inserats_id), ("", ""))
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id),
+            (Portal.IMMOWELT, "88b946d7-1f96-43d4-925d-4c7ded15b6cb"),
+        )
 
     def test_das_immowelt_testobjekt_bleibt_in_der_datenbank(self):
         Objekt.objects.create(url="https://www.immowelt.de/expose/88b946d7?x=1")
@@ -2665,6 +3248,207 @@ class BestandsnachtragNeuePortaleTests(TestCase):
         self.assertEqual(
             Objekt.objects.values_list("zuletzt_geaendert_am", flat=True).get(), vorher
         )
+
+
+class BestandsnachtragImmoweltTests(TestCase):
+    """Zusagen 7 und 8 der Runde vom 07.09.: der Nachtrag fuer Immowelt.
+
+    Gerechnet wird gegen den historischen Modellzustand aus dem
+    Migrations-Loader, aus demselben Grund wie bei den beiden Nachtraegen
+    davor: eine Migration, die nur gegen das heutige Modell bezeugt ist,
+    bleibt gruen, bis das Modell sich bewegt - und faellt dann an einer
+    Stelle, die mit ihr nichts zu tun hat.
+
+    Der Zustand ist der von 0007 - das ist der Stand, auf dem 0008 laeuft, und
+    der erste, auf dem `Portal` den Schluessel `immowelt` ueberhaupt kennt.
+    """
+
+    KENNUNG = "715825d1-36ac-4c8c-99a0-10312f8c7de6"
+    URL = f"https://www.immowelt.de/expose/{KENNUNG}"
+
+    def setUp(self):
+        self.alte_apps = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", "0007_alter_objekt_portal"))
+            .apps
+        )
+
+    def _nachtragen(self):
+        dritter_nachtrag.Migration.operations[0].code(self.alte_apps, None)
+
+    # --- die Verdrahtung --------------------------------------------------
+
+    def test_die_migration_fuehrt_die_funktion_aus_0003_aus(self):
+        """Ohne diesen Zeugen sind alle folgenden blind - und er sagt noch mehr.
+
+        Er haelt fest, dass 0008 die Funktion aus 0003 AUSFUEHRT und nicht
+        nachbaut. Genau daran haengt die Kollisionsregel: das aeltere Objekt
+        bekommt den Schluessel. Ein Nachbau koennte davon abweichen, ohne dass
+        es jemandem auffiele - und dann liefe jeder kuenftige Einwurf auf das
+        juengere Objekt, waehrend Vota und Notizen am aelteren haengen.
+        """
+        (operation,) = dritter_nachtrag.Migration.operations
+        self.assertIs(operation.code, nachtragsmigration.nachtragen)
+
+    def test_die_migration_ist_rueckwaerts_ein_noop(self):
+        (operation,) = dritter_nachtrag.Migration.operations
+        self.assertIs(operation.reverse_code, migrations.RunPython.noop)
+
+    def test_sie_haengt_an_der_schemamigration_der_auswahlliste(self):
+        """Die Reihenfolge ist nicht beliebig.
+
+        Liefe der Nachtrag VOR 0007, schriebe er `immowelt` in eine Spalte,
+        deren Auswahlliste den Wert noch nicht kennt.
+        """
+        self.assertIn(
+            ("objekte", "0007_alter_objekt_portal"),
+            dritter_nachtrag.Migration.dependencies,
+        )
+
+    # --- Zusage 7: der Nachtrag am Bestand --------------------------------
+
+    def test_traegt_das_portal_an_einem_bestandsobjekt_nach(self):
+        bestand = Objekt.objects.create(url=self.URL)
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(bestand.portal, Portal.IMMOWELT)
+
+    def test_traegt_die_inserats_id_an_einem_bestandsobjekt_nach(self):
+        bestand = Objekt.objects.create(url=self.URL)
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(bestand.inserats_id, self.KENNUNG)
+
+    def test_der_nachtrag_traegt_die_kennung_klein_ein(self):
+        """Zusage 2 an der Migration, nicht nur am Einwurf.
+
+        Die Kennung steht in der URL in GROSSBUCHSTABEN. Stuende sie schon
+        klein da, waere der Zeuge blind: `str.lower()` waere ein Nichts und
+        er bliebe gruen, auch wenn die Normalisierung entfiele.
+        """
+        bestand = Objekt.objects.create(
+            url=f"https://www.immowelt.de/expose/{self.KENNUNG.upper()}"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(bestand.inserats_id, self.KENNUNG)
+
+    def test_ein_objekt_ohne_erkennbares_muster_bleibt_leer(self):
+        bestand = Objekt.objects.create(url="https://www.immowelt.de/liste/berlin")
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual((bestand.portal, bestand.inserats_id), ("", ""))
+
+    def test_eine_immowelt_at_adresse_bleibt_leer(self):
+        bestand = Objekt.objects.create(
+            url=f"https://www.immowelt.at/expose/{self.KENNUNG}"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual((bestand.portal, bestand.inserats_id), ("", ""))
+
+    def test_der_nachtrag_ruehrt_die_url_nicht_an(self):
+        Objekt.objects.create(url=self.URL)
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.get().url, self.URL)
+
+    def test_der_nachtrag_schreibt_zuletzt_geaendert_am_nicht_fort(self):
+        # Ein Nachtrag ist keine Aenderung, die jemand vorgenommen hat.
+        Objekt.objects.create(url=self.URL)
+        vorher = Objekt.objects.values_list("zuletzt_geaendert_am", flat=True).get()
+        self._nachtragen()
+        self.assertEqual(
+            Objekt.objects.values_list("zuletzt_geaendert_am", flat=True).get(), vorher
+        )
+
+    def test_ein_zweiter_lauf_aendert_nichts_mehr(self):
+        Objekt.objects.create(url=self.URL)
+        self._nachtragen()
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.get().inserats_id, self.KENNUNG)
+
+    def test_ein_objekt_mit_anderem_portal_wird_nicht_angefasst(self):
+        """"Objekte, die bereits ein anderes Portal tragen, bleiben unberuehrt."
+
+        Der Fall ist konstruiert - eine Immowelt-URL mit `idealista` am
+        Objekt -, aber genau darum traegt er: er erzwingt den Codepfad, statt
+        sich auf eine Datenform zu verlassen, in der er nie vorkommt.
+        """
+        bestand = Objekt.objects.create(
+            url=self.URL, portal=Portal.IDEALISTA, inserats_id="54321"
+        )
+        self._nachtragen()
+        bestand.refresh_from_db()
+        self.assertEqual(
+            (bestand.portal, bestand.inserats_id), (Portal.IDEALISTA, "54321")
+        )
+
+    # --- Zusage 8: die Kollisionsregel ------------------------------------
+
+    def test_bei_zwei_bestandsobjekten_auf_dasselbe_inserat_gewinnt_das_aeltere(self):
+        """Dieselbe Regel wie am 29.08. und am 02.09., und zwar durch DIESELBE
+        Funktion.
+
+        Zwei Schreibweisen desselben Immowelt-Inserats. Bekaeme das juengere
+        den Schluessel, liefe jeder kuenftige Einwurf dorthin - und die Vota
+        und Notizen am aelteren faenden sich nicht mehr.
+
+        Der Zeuge misst BEIDE Seiten. Nur das aeltere zu pruefen liesse offen,
+        ob das juengere den Schluessel vielleicht ebenfalls bekommen hat - und
+        das waere der Abbruch am Unique-Index, nicht die Regel.
+        """
+        aelteres = Objekt.objects.create(url=self.URL)
+        juengeres = Objekt.objects.create(url=f"{self.URL}/?serp_view=list")
+        self._nachtragen()
+        aelteres.refresh_from_db()
+        juengeres.refresh_from_db()
+        self.assertEqual(aelteres.inserats_id, self.KENNUNG)
+        self.assertEqual(juengeres.inserats_id, "")
+
+    def test_das_juengere_behaelt_dabei_auch_kein_portal(self):
+        """Beide Werte oder keiner - ein halbes Paar ist wertlos."""
+        Objekt.objects.create(url=self.URL)
+        juengeres = Objekt.objects.create(url=f"{self.URL}/?serp_view=list")
+        self._nachtragen()
+        juengeres.refresh_from_db()
+        self.assertEqual(juengeres.portal, "")
+
+    def test_die_kollision_entsteht_erst_durch_die_kleinschreibung(self):
+        """Zusage 2 und Zusage 8 in einem Zeugen - und beide werden gemessen.
+
+        Die beiden URLs unterscheiden sich NUR in der Schreibweise der
+        Kennung. Entfiele die Normalisierung, waeren es zwei verschiedene
+        Schluessel, es gaebe gar keine Kollision, und BEIDE Objekte truegen
+        einen Schluessel. Der Zeuge faellt dann an der zweiten Zeile.
+        """
+        aelteres = Objekt.objects.create(url=self.URL)
+        juengeres = Objekt.objects.create(
+            url=f"https://www.immowelt.de/expose/{self.KENNUNG.upper()}"
+        )
+        self._nachtragen()
+        aelteres.refresh_from_db()
+        juengeres.refresh_from_db()
+        self.assertEqual(aelteres.inserats_id, self.KENNUNG)
+        self.assertEqual(juengeres.inserats_id, "")
+
+    def test_zwei_bestandsobjekte_auf_dasselbe_inserat_brechen_den_lauf_nicht_ab(self):
+        Objekt.objects.create(url=self.URL)
+        Objekt.objects.create(url=f"{self.URL}/?serp_view=list")
+        self._nachtragen()
+        self.assertEqual(Objekt.objects.count(), 2)
+        self.assertEqual(Objekt.objects.exclude(portal="").count(), 1)
+
+    def test_ein_bereits_vergebener_schluessel_bleibt_stehen(self):
+        """Was der Einwurf vergeben hat, schreibt 0008 nicht um."""
+        bestand = Objekt.objects.create(
+            url=self.URL, portal=Portal.IMMOWELT, inserats_id=self.KENNUNG
+        )
+        nachzuegler = Objekt.objects.create(url=f"{self.URL}/?serp_view=list")
+        self._nachtragen()
+        bestand.refresh_from_db()
+        nachzuegler.refresh_from_db()
+        self.assertEqual(bestand.inserats_id, self.KENNUNG)
+        self.assertEqual(nachzuegler.inserats_id, "")
 
 
 # Der `SpaltenParser` stand hier bis zum 04.09. Er las Spaltenkoepfe und
@@ -2774,6 +3558,21 @@ class ObjektbezeichnungTests(TestCase):
             inserats_id="12345",
         )
         self.assertEqual(str(o), "ImmoScout24 · 12345")
+
+    def test_ohne_titel_steht_immowelt_mit_grossem_i(self):
+        """Die Beschriftung der Auswahlliste, an der Bezeichnung nachgemessen.
+
+        Aus demselben Grund wie bei ImmoScout24 darueber: Schluessel und
+        Beschriftung sind hier NICHT dasselbe Wort. "immowelt" gegen
+        "Immowelt" macht den Unterschied messbar - ohne diesen Zeugen fiele
+        eine versehentlich kleingeschriebene Beschriftung nirgends auf.
+        """
+        o = Objekt.objects.create(
+            url="https://www.immowelt.de/expose/715825d1-36ac-4c8c-99a0-10312f8c7de6",
+            portal=Portal.IMMOWELT,
+            inserats_id="715825d1-36ac-4c8c-99a0-10312f8c7de6",
+        )
+        self.assertEqual(str(o), "Immowelt · 715825d1-36ac-4c8c-99a0-10312f8c7de6")
 
     def test_ohne_titel_und_ohne_schluessel_steht_die_url(self):
         o = Objekt.objects.create(url="https://www.beispiel.de/x/")
@@ -4184,10 +4983,28 @@ class ListenfilterTests(ListenTestBasis):
         self._objekt(portal=Portal.PISOS)
         self.assertEqual(self._menge("/?portal=fotocasa"), {fotocasa.pk})
 
+    def test_der_portalfilter_kennt_immowelt(self):
+        """Dieselbe Zusage wie fuer die drei vom 02.09., jetzt fuer Immowelt.
+
+        Dass die Auswahl aus `Portal.choices` abgeleitet ist, ist genau die
+        Sorte Annahme, die still ausfaellt: waere der Filter irgendwann auf
+        eine abgeschriebene Liste umgestellt, fiele Immowelt heraus, ohne
+        dass irgendwo etwas rot wuerde. Die Objekte laegen in der Liste und
+        waeren nicht mehr zu finden.
+        """
+        immowelt = self._objekt(portal=Portal.IMMOWELT)
+        self._objekt(portal=Portal.IDEALISTA)
+        self.assertEqual(self._menge("/?portal=immowelt"), {immowelt.pk})
+
     def test_die_portalauswahl_des_filters_steht_vollstaendig_in_der_seite(self):
         """Was sich filtern laesst, muss auch anzuklicken sein."""
         antwort = self._seite()
-        for portal in (Portal.FOTOCASA, Portal.MILANUNCIOS, Portal.PISOS):
+        for portal in (
+            Portal.FOTOCASA,
+            Portal.MILANUNCIOS,
+            Portal.PISOS,
+            Portal.IMMOWELT,
+        ):
             with self.subTest(portal=portal):
                 self.assertContains(antwort, f'value="{portal.value}"')
 
@@ -6697,7 +7514,7 @@ class BekannteDomainTests(SimpleTestCase):
 
     def test_jedes_portal_der_tabelle_gilt_als_bekannt(self):
         """ABGELEITET aus `PORTALE`, nicht abgeschrieben."""
-        for portal, domains, _ in portale.PORTALE:
+        for portal, domains, *_ in portale.PORTALE:
             for domain in domains:
                 with self.subTest(portal=portal, domain=domain):
                     self.assertTrue(portale.ist_bekannte_domain(f"https://{domain}/x"))
@@ -6712,7 +7529,36 @@ class BekannteDomainTests(SimpleTestCase):
         self.assertTrue(portale.ist_bekannte_domain("https://WWW.PISOS.COM/x"))
 
     def test_eine_fremde_domain_gilt_als_unbekannt(self):
-        self.assertFalse(portale.ist_bekannte_domain("https://www.immowelt.de/expose/x"))
+        """Bis zum 07.09. stand hier `immowelt.de`.
+
+        Das Portal ist an diesem Tag aufgenommen worden, die Domain ist damit
+        BEKANNT - der Zeuge maesse an ihr nur noch sich selbst. Ersetzt durch
+        eine Domain, die zu keinem Portal gehoert und zu keinem gehoeren wird.
+        """
+        self.assertFalse(portale.ist_bekannte_domain("https://beispiel.de/inserat/1"))
+
+    def test_immowelt_gilt_seit_dem_07_09_als_bekannt(self):
+        """Die andere Haelfte derselben Aenderung.
+
+        Ohne diesen Zeugen bliebe von der Aufnahme in `ist_bekannte_domain()`
+        nur die Loeschung des alten Zeugen uebrig - und eine geloeschte Zusage
+        ist keine bezeugte.
+        """
+        self.assertTrue(portale.ist_bekannte_domain("https://www.immowelt.de/expose/x"))
+
+    def test_die_warnung_entfaellt_auch_auf_einer_immowelt_suchseite(self):
+        """Die Warnung haengt an der Domain, nicht am Pfadmuster.
+
+        Eine Immowelt-Suchseite liefert kein Paar und ist trotzdem bekannt -
+        derselbe Fall wie bei idealista weiter oben.
+        """
+        adresse = "https://www.immowelt.de/liste/berlin/wohnungen/kaufen"
+        self.assertEqual(portal_und_id(adresse), portale.LEER)
+        self.assertTrue(portale.ist_bekannte_domain(adresse))
+
+    def test_immowelt_at_gilt_weiterhin_als_unbekannt(self):
+        """Aufgenommen ist NUR `immowelt.de`."""
+        self.assertFalse(portale.ist_bekannte_domain("https://www.immowelt.at/expose/x"))
 
     def test_die_eigene_seite_gilt_als_unbekannt(self):
         """Der Anlass fuer diese Runde: das Lesezeichen loest auf JEDER Seite
@@ -6753,7 +7599,14 @@ class VorschauHinweisTests(TestCase):
     """
 
     BEKANNT = "https://www.idealista.com/inmueble/12345/"
-    UNBEKANNT = "https://www.immowelt.de/expose/2xk4c5r"
+
+    #: Bis zum 07.09. stand hier eine Immowelt-Adresse. Das Portal ist an
+    #: diesem Tag aufgenommen worden - die Domain ist damit BEKANNT, und die
+    #: Warnung entfaellt fuer sie von selbst. Genau das ist der angekuendigte
+    #: Nebeneffekt der Aufnahme, und er hat einen eigenen Zeugen weiter unten.
+    #: Als unbekannte Domain steht hier jetzt eine, die zu keinem Portal
+    #: gehoert und zu keinem gehoeren wird.
+    UNBEKANNT = "https://beispiel.de/inserat/2xk4c5r"
 
     def setUp(self):
         self.person = Person.objects.create_user("steffen", password="lang-genug-123")
@@ -6792,6 +7645,39 @@ class VorschauHinweisTests(TestCase):
         """
         adresse = "https://www.idealista.com/venta-viviendas/alicante/"
         self.assertEqual(self._meldungen(self._vorschau(adresse)), [])
+
+    def test_immowelt_erzeugt_seit_dem_07_09_keinen_hinweis_mehr(self):
+        """Der angekuendigte Nebeneffekt der Aufnahme, als Zeuge festgehalten.
+
+        An der Warnung selbst ist am 07.09. NICHTS geaendert worden. Sie
+        entfaellt fuer Immowelt allein deshalb, weil die Domain jetzt in
+        `PORTALE` steht. Ohne diesen Zeugen bliebe von der Aenderung nur der
+        umgeschriebene Wert von `UNBEKANNT` uebrig - und niemand saehe, dass
+        das Absicht war.
+        """
+        self.assertEqual(
+            self._meldungen(
+                self._vorschau("https://www.immowelt.de/expose/2xk4c5r")
+            ),
+            [],
+        )
+
+    def test_auch_eine_immowelt_suchseite_erzeugt_keinen_hinweis(self):
+        """Die Warnung haengt auch bei Immowelt an der DOMAIN, nicht am Pfad."""
+        adresse = "https://www.immowelt.de/liste/berlin/wohnungen/kaufen"
+        self.assertEqual(portal_und_id(adresse), portale.LEER)
+        self.assertEqual(self._meldungen(self._vorschau(adresse)), [])
+
+    def test_immowelt_at_erzeugt_weiterhin_einen_hinweis(self):
+        """Aufgenommen ist NUR `immowelt.de` - `.at` bleibt eine fremde Seite."""
+        self.assertEqual(
+            len(
+                self._meldungen(
+                    self._vorschau("https://www.immowelt.at/expose/2xk4c5r")
+                )
+            ),
+            1,
+        )
 
     # --- Zeuge: unbekannte Domain -> Hinweis erscheint --------------------
 

@@ -17,6 +17,9 @@ class Portal(models.TextChoices):
     FOTOCASA = "fotocasa", "fotocasa"
     MILANUNCIOS = "milanuncios", "milanuncios"
     PISOS = "pisos", "pisos"
+    # Am 07.09. dazugekommen, an zwei echten Bestandsinseraten belegt.
+    # Beschriftung mit grossem I, wie das Portal sich selbst schreibt.
+    IMMOWELT = "immowelt", "Immowelt"
     SONSTIGES = "sonstiges", "sonstiges"
 
 
