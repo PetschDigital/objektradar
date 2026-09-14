@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entwurf · Objektansicht zweispaltig</title>
+
+<!--
+  ENTWURF zur Ansicht, kein Template.
+
+  Die Farbwerte unter :root sind PLATZHALTER, aus der Spezifikation vom
+  29.08. übernommen. Die Oberfläche ist am 05.09. neu gestaltet worden —
+  die echten Werte stehen in objektradar.css und gelten. Beim Bau wird
+  nichts davon neu definiert, es wird auf die vorhandenen Variablen
+  verwiesen.
+
+  Die Statusfarben kenne ich nicht; "neu" ist hier geraten.
+
+  Die Schrift ist hier der Systemstack. Im Werkzeug ist es Archivo als
+  selbst gehostete Variable-Font-Datei.
+
+  ANSEHEN: in einem echten, breiten Browserfenster. In einem schmalen
+  Vorschaubereich löst die Media Query gegen dessen Breite auf und zeigt
+  die einspaltige Fassung — genau der Messfehler vom 03.09.
+-->
+
+<style>
+:root {
+  --grund: #FAF9F6;
+  --flaeche: #F1EFE9;
+  --linie: #DCD8CE;
+  --text: #22262B;
+  --gedaempft: #6B7178;
+  --akzent: #2F5D62;
+  --signal: #B4531F;
+  --fehler: #8C2F2F;
+  --status-neu: #3F5570;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--grund);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.rahmen {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 1rem 1rem 4rem;
+}
+
+.zahl { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+h1 { font-size: 1.5rem; font-weight: 600; margin: 0; line-height: 1.25; }
+h2 { font-size: 1.125rem; font-weight: 600; margin: 0 0 1rem; }
+
+a { color: var(--akzent); }
+
+/* ---------- Kopf, volle Breite ---------- */
+
+.kopf {
+  border-left: 4px solid var(--status-neu);
+  padding: 0.25rem 0 0.25rem 1rem;
+  margin: 1.5rem 0 2rem;
+}
+
+.kopfzeile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.pille {
+  background: var(--status-neu);
+  color: #fff;
+  font-size: 0.8125rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.unterzeile {
+  margin-top: 0.5rem;
+  color: var(--gedaempft);
+  font-size: 0.9375rem;
+}
+
+/* ---------- Zahlenband, volle Breite ---------- */
+
+.zahlen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1.5rem 2rem;
+  background: var(--flaeche);
+  border-radius: 6px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.zahlen .wert { font-size: 1.25rem; font-weight: 600; }
+.zahlen .preis .wert { font-size: 2rem; line-height: 1.1; }
+.zahlen .marke { color: var(--gedaempft); font-size: 0.875rem; margin-top: 0.25rem; }
+.zahlen .leer { color: var(--gedaempft); }
+
+/* ---------- Zwei Spalten ---------- */
+
+.spalten { display: grid; gap: 2rem; }
+
+@media (min-width: 64rem) {
+  .spalten { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 2.5rem; }
+}
+
+.block {
+  border: 1px solid var(--linie);
+  border-radius: 6px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  background: var(--grund);
+}
+
+.block.handeln { background: var(--flaeche); border-color: transparent; }
+
+/* ---------- Bilder ---------- */
+
+.bilder { display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: 0.75rem; }
+.bilder div {
+  aspect-ratio: 4 / 3;
+  background: var(--linie);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: var(--gedaempft);
+  font-size: 0.8125rem;
+}
+
+/* ---------- Daten ---------- */
+
+.daten { margin: 0; display: grid; grid-template-columns: 10rem 1fr; gap: 0.625rem 1rem; }
+.daten dt { color: var(--gedaempft); }
+.daten dd { margin: 0; }
+.fehlt { color: var(--gedaempft); }
+
+/* ---------- Preisverlauf ---------- */
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--gedaempft); font-weight: 400; font-size: 0.875rem; padding-bottom: 0.5rem; }
+td { padding: 0.5rem 0; border-top: 1px solid var(--linie); }
+.senkung { color: var(--signal); }
+
+/* ---------- Formulare: der Punkt, um den es geht ---------- */
+
+label { display: block; color: var(--gedaempft); margin-bottom: 0.375rem; }
+
+textarea, select, input[type="text"] {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--linie);
+  border-radius: 4px;
+  background: var(--grund);
+}
+
+textarea { min-height: 5rem; resize: vertical; }
+
+/* Luft zwischen Feld und Knopf — bisher klebten sie aneinander */
+.knopfzeile { margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.625rem; }
+
+button {
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: 4px;
+  border: 1px solid var(--akzent);
+  background: var(--grund);
+  color: var(--akzent);
+  cursor: pointer;
+}
+
+button.haupt { background: var(--akzent); color: #fff; }
+
+button:focus-visible, a:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--akzent);
+  outline-offset: 2px;
+}
+
+.verdeckt { color: var(--gedaempft); font-size: 0.9375rem; margin: 0; }
+
+/* ---------- Fuß ---------- */
+
+.fuss {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--linie);
+  color: var(--gedaempft);
+  font-size: 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fuss a { color: var(--fehler); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+
+<body>
+<div class="rahmen">
+
+  <header class="kopf">
+    <div class="kopfzeile">
+      <h1>Wohnung zu verkaufen in Carretera a Alcala, 11, Tamaimo-Arguayo, Santiago del Teide</h1>
+      <span class="pille">neu</span>
+    </div>
+    <p class="unterzeile">
+      Tamaimo-Arguayo · Santiago del Teide · Spanien · Zustand unklar
+      &nbsp;&nbsp;<a href="#">zum Inserat</a>
+    </p>
+  </header>
+
+  <section class="zahlen">
+    <div class="preis">
+      <div class="wert zahl">259.000 €</div>
+      <div class="marke">Kaufpreis</div>
+    </div>
+    <div>
+      <div class="wert zahl">2.176 €</div>
+      <div class="marke">je m²</div>
+    </div>
+    <div>
+      <div class="wert zahl">119 m²</div>
+      <div class="marke">Wohnfläche</div>
+    </div>
+    <div>
+      <div class="wert leer">—</div>
+      <div class="marke">Grundstück</div>
+    </div>
+    <div>
+      <div class="wert leer">—</div>
+      <div class="marke">Wert nach Renovierung</div>
+    </div>
+  </section>
+
+  <div class="spalten">
+
+    <!-- ===== Links: das Objekt ===== -->
+    <div>
+
+      <section class="block">
+        <h2>Bilder</h2>
+        <div class="bilder">
+          <div>Bild 1</div><div>Bild 2</div><div>Bild 3</div><div>Bild 4</div>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Daten</h2>
+        <dl class="daten">
+          <dt>Objekttyp</dt><dd class="fehlt">—</dd>
+          <dt>Zimmer</dt><dd>3</dd>
+          <dt>Baujahr</dt><dd class="fehlt">—</dd>
+          <dt>Zustand</dt><dd>unklar</dd>
+          <dt>Stadtteil</dt><dd>Tamaimo-Arguayo</dd>
+          <dt>Region</dt><dd class="fehlt">—</dd>
+          <dt>Portal</dt><dd>idealista</dd>
+          <dt>Inserats-ID</dt><dd class="zahl">112155320</dd>
+          <dt>Quelle</dt><dd>URL eingeworfen</dd>
+          <dt>Beschreibung</dt><dd>Wohnung von 119 m², Carretera a Alcala, 11, Tamaimo-Arguayo, Santiago del Teide</dd>
+        </dl>
+        <div class="knopfzeile">
+          <button type="button">Bearbeiten</button>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Preisverlauf</h2>
+        <table>
+          <thead>
+            <tr><th>Datum</th><th>Preis</th><th>Quelle</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="zahl">14.09.2026</td>
+              <td class="zahl senkung">259.000 €</td>
+              <td>erneuter Abruf</td>
+            </tr>
+            <tr>
+              <td class="zahl">02.08.2026</td>
+              <td class="zahl">275.000 €</td>
+              <td>Suchagent</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+    </div>
+
+    <!-- ===== Rechts: das Handeln ===== -->
+    <div>
+
+      <section class="block handeln">
+        <h2>Dein Votum</h2>
+        <label for="begruendung">Begründung, ein bis zwei Sätze</label>
+        <textarea id="begruendung"></textarea>
+        <div class="knopfzeile">
+          <button type="button">dafür</button>
+          <button type="button">anschauen</button>
+          <button type="button">raus</button>
+        </div>
+        <p class="verdeckt" style="margin-top:1.25rem">
+          Die Vota der anderen erscheinen, sobald du selbst abgestimmt hast.
+        </p>
+      </section>
+
+      <section class="block handeln">
+        <h2>Status</h2>
+        <select aria-label="Status">
+          <option>neu</option>
+          <option>in Prüfung</option>
+          <option>Besichtigung</option>
+          <option>heiße Spur</option>
+          <option>raus</option>
+          <option>vom Markt</option>
+        </select>
+        <div class="knopfzeile">
+          <button type="button" class="haupt">Status setzen</button>
+        </div>
+      </section>
+
+      <section class="block handeln">
+        <h2>Notizen</h2>
+        <p class="verdeckt">Noch keine Notiz.</p>
+        <label for="notiz" style="margin-top:1.25rem">Neue Notiz</label>
+        <textarea id="notiz"></textarea>
+        <div class="knopfzeile">
+          <button type="button" class="haupt">Notiz speichern</button>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <footer class="fuss">
+    <span>Eingestellt von Petsch am 14.09.2026 · zuletzt gesehen 14.09.2026</span>
+    <a href="#">Objekt löschen</a>
+  </footer>
+
+</div>
+</body>
+</html>

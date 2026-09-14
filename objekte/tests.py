@@ -1841,7 +1841,12 @@ class PortalUndIdTests(SimpleTestCase):
     # --- milanuncios ------------------------------------------------------
 
     def test_milanuncios_anzeige(self):
-        """Die URL aus der Spezifikation, woertlich.
+        # Der Docstring nennt ein regulaeres Muster und braucht deshalb das `r`:
+        # `\.` ist in einer gewoehnlichen Zeichenkette keine gueltige
+        # Maskierung, und Python meldet das seit 3.12 als `SyntaxWarning`. Sie
+        # stand hier seit dem 02.09. und war bei jedem Neuuebersetzen der Datei
+        # zu sehen.
+        r"""Die URL aus der Spezifikation, woertlich.
 
         Die ID ist die Zahl nach dem letzten Bindestrich vor `.htm`.
 
@@ -6877,6 +6882,19 @@ class ObjektansichtDatenblockTests(TestCase):
     Feld des Blocks leer, und der Zeuge misst genau den Fall, um den es geht:
     ein leeres Feld ist die Aufforderung, es zu fuellen. Was gar nicht
     dasteht, faellt niemandem auf und wird nie nachgetragen.
+
+    HERAUSGEFALLEN am 14.09.: `test_die_zahlen_des_kopfblocks_stehen_ebenfalls_da`.
+    Er pruefte die vier Beschriftungen des Zahlenbandes mit `assertContains`
+    gegen die ganze Antwort - dieselbe Bauart, die in diesem Projekt schon
+    dreimal blind war, zuletzt bei seinem Geschwister eine Methode weiter
+    unten. Blind war er nicht: keine seiner vier Beschriftungen steht anderswo
+    auf der Seite. Gedeckt ist er dafuer vollstaendig - `ZahlenbandLeerTests`
+    misst dasselbe leere Objekt, eingegrenzt auf `dl.kennzahlen`, mit allen
+    FUENF Angaben in ihrer Reihenfolge und samt der Auszeichnung `fehlt`.
+
+    Ein gedeckter Zeuge mit bekannt blinder Bauart gibt beim naechsten Umbau
+    falsche Sicherheit, und mehr gibt er nicht. Deshalb weg und nicht
+    eingegrenzt.
     """
 
     def setUp(self):
@@ -6906,20 +6924,27 @@ class ObjektansichtDatenblockTests(TestCase):
         self.assertIsNone(self.objekt.zimmer)
         self.assertIsNone(self.objekt.baujahr)
 
-    def test_jedes_feld_des_datenblocks_steht_auf_der_seite(self):
-        antwort = self._seite()
+    def test_jedes_feld_des_datenblocks_steht_im_block(self):
+        """EINGEGRENZT am 14.09., nachdem der Zeuge nachweislich blind war.
+
+        Er hiess `…_steht_auf_der_seite` und pruefte mit `assertContains`
+        gegen die GANZE Antwort. Waehrend des zweispaltigen Umbaus stand der
+        Zustand voruebergehend auch in der Objektzeile - und der Zeuge blieb
+        gruen, obwohl das Feld `Zustand` aus dem Datenblock schon ganz
+        entfernt war: er fand das Wort in der Zeile darueber. Aufgefallen ist
+        das in der Sabotage-Gegenprobe, nicht im Testlauf.
+
+        Die Doppelung ist zurueckgedreht, der Zeuge bleibt es auch nicht:
+        eingegrenzt auf `dl.daten`, wie `02` es seit dem 03.09. fuer jede
+        Behauptung ueber diese Seite verlangt. Er bleibt stehen und wird
+        nicht durch die neuen ersetzt - `ObjektansichtVollstaendigkeitTests`
+        misst am GEFUELLTEN Objekt, und der Fall, um den es dieser Klasse
+        geht, ist der leere.
+        """
+        gefunden = paare(self._seite(), "daten")
         for beschriftung in FELDER_DES_DATENBLOCKS:
             with self.subTest(feld=beschriftung):
-                self.assertContains(antwort, beschriftung)
-
-    def test_die_zahlen_des_kopfblocks_stehen_ebenfalls_da(self):
-        """Abschnitt 2.2: die Vergleichsgrundlage steht oben, nicht in einer
-        Tabellenzeile weiter unten - und auch dann, wenn sie fehlt."""
-        antwort = self._seite()
-        for beschriftung in ("Preis je m²", "Wohnfläche", "Grundstücksgröße",
-                             "Wert nach Renovierung"):
-            with self.subTest(feld=beschriftung):
-                self.assertContains(antwort, beschriftung)
+                self.assertIn(beschriftung, gefunden)
 
 
 class ObjektansichtVotaTests(TestCase):
@@ -12969,3 +12994,1162 @@ class LesezeichenUnveraendertTests(SimpleTestCase):
         for portal in Portal.values:
             with self.subTest(portal=portal):
                 self.assertNotIn(portal, lesezeichen.SKRIPT.lower())
+
+
+# =====================================================================
+# Objektansicht zweispaltig (14.09.) - Teil B der Bauspezifikation
+#
+# Diese Runde aendert Gestalt und Markup, keine Funktion. Sie ist damit die
+# Runde, die kein Test abnimmt: das Abnahmekriterium ist der Blick auf den
+# Bildschirm. Die Zeugen hier bewachen deshalb nicht die Gestalt, sondern
+# das, was ein Markup-Umbau STILL verlieren kann.
+#
+# KEINER von ihnen misst Struktur oder Schreibweise des Stylesheets -
+# Entscheidung vom 03.09. Ein Zeuge auf eine bestimmte Rasterangabe oder auf
+# einen einzigen Media-Block diktierte eine Bauentscheidung, statt eine
+# Zusage zu bewachen.
+#
+# Und keiner prueft gegen die GANZE Antwort. Der Objektname steht im
+# `<title>`, die Statusbezeichnung in der Pille UND in der Auswahl, ein
+# Ortsname im Titel UND in der Objektzeile: eine Behauptung ueber die ganze
+# Seite ist blind - zweimal belegt am 03.09.
+# =====================================================================
+
+#: Elemente ohne Schlusstag. Ohne diese Liste zaehlte jeder Parser unten die
+#: Tiefe falsch, sobald ein `<img>` im Block steht - und griffe dann einen
+#: Block, der laengst zu Ende ist.
+LEERE_ELEMENTE = frozenset(
+    {
+        "area", "base", "br", "col", "embed", "hr", "img",
+        "input", "link", "meta", "param", "source", "track", "wbr",
+    }
+)
+
+
+class BlockParser(HTMLParser):
+    """Was INNERHALB des Elements mit der gesuchten Klasse steht.
+
+    Der Riegel gegen die Falle vom 03.09.: eine Behauptung ueber die ganze
+    Antwort ist blind, weil fast jede Angabe dieser Seite an zwei Stellen
+    steht. Gemessen wird deshalb im Block, um den es geht.
+
+    Gelesen werden Elemente UND Text, damit ein Zeuge wahlweise auf ein
+    `<a href>` oder auf die Wortfolge zugreifen kann. Ueber das ELEMENT und
+    nicht ueber eine `class="…"`-Zeichenkette: ein erweiterter Klassenname
+    lief in diesem Projekt schon einmal an einem Zeugen vorbei - 05.09.
+    """
+
+    def __init__(self, behaelter):
+        super().__init__()
+        self.behaelter = behaelter
+        #: Wie oft der Block ueberhaupt vorkam. Ein Zeuge, der ihn nie fand,
+        #: soll das sehen und nicht stillschweigend mit einer leeren Liste
+        #: gruen werden.
+        self.anzahl = 0
+        self.elemente = []  # [(tag, attributwoerterbuch)]
+        self._tiefe = None
+        self._text = []
+
+    def handle_starttag(self, tag, attrs):
+        werte = dict(attrs)
+        if self._tiefe is None:
+            if self.behaelter in (werte.get("class") or "").split():
+                self._tiefe = 0
+                self.anzahl += 1
+            return
+        self.elemente.append((tag, werte))
+        if tag not in LEERE_ELEMENTE:
+            self._tiefe += 1
+
+    def handle_startendtag(self, tag, attrs):
+        # Selbstschliessend (`<img />`): aufnehmen, aber die Tiefe nicht
+        # anfassen. Die Vorgabe riefe hier Start UND Ende auf und schloesse
+        # den Block eine Ebene zu frueh.
+        if self._tiefe is not None:
+            self.elemente.append((tag, dict(attrs)))
+
+    def handle_endtag(self, tag):
+        if self._tiefe is None or tag in LEERE_ELEMENTE:
+            return
+        if self._tiefe == 0:
+            self._tiefe = None
+        else:
+            self._tiefe -= 1
+
+    def handle_data(self, daten):
+        if self._tiefe is not None:
+            self._text.append(daten)
+
+    @property
+    def text(self):
+        return " ".join("".join(self._text).split())
+
+    def verweise(self):
+        """`[(ziel, …)]` jedes `<a href>` im Block."""
+        return [w.get("href", "") for tag, w in self.elemente if tag == "a"]
+
+    def bilder(self):
+        return [w for tag, w in self.elemente if tag == "img"]
+
+
+def block(antwort, behaelter):
+    parser = BlockParser(behaelter)
+    parser.feed(antwort.content.decode())
+    return parser
+
+
+class PaarParser(HTMLParser):
+    """`<dt>`/`<dd>`-Paare einer bestimmten `<dl>`, samt Klassen IM Wert.
+
+    Dasselbe Verfahren wie `DatenblockParser`, nur ueber die Klasse der Liste
+    gesteuert - der Datenblock ist seit dem 14.09. nicht mehr die einzige
+    Beschreibungsliste der Seite: das Zahlenband ist auch eine.
+
+    Gemessen wird, was neben einem Feldnamen WIRKLICH steht. Ein Zeuge auf
+    die blosse Anwesenheit einer Zeichenkette faende einen Strich auch dann,
+    wenn er zu einem ganz anderen Feld gehoert.
+    """
+
+    def __init__(self, klasse):
+        super().__init__()
+        self.klasse = klasse
+        self.paare = {}
+        self.klassen = {}
+        self.reihenfolge = []
+        self._im_block = False
+        self._marke = None
+        self._text = ""
+        self._klassen = []
+        self._name = None
+
+    def handle_starttag(self, tag, attrs):
+        werte = dict(attrs)
+        if tag == "dl" and self.klasse in (werte.get("class") or "").split():
+            self._im_block = True
+        elif self._im_block and tag in ("dt", "dd"):
+            self._marke = tag
+            self._text = ""
+            self._klassen = []
+        elif self._im_block and self._marke == "dd":
+            self._klassen += (werte.get("class") or "").split()
+
+    def handle_endtag(self, tag):
+        if tag == "dl":
+            self._im_block = False
+        elif self._im_block and tag == self._marke:
+            text = " ".join(self._text.split())
+            if tag == "dt":
+                self._name = text
+            elif self._name is not None:
+                self.paare[self._name] = text
+                self.klassen[self._name] = self._klassen
+                self.reihenfolge.append(self._name)
+                self._name = None
+            self._marke = None
+
+    def handle_data(self, daten):
+        if self._marke:
+            self._text += daten
+
+    # Damit ein Zeuge `paare(antwort, "daten")["Stadtteil"]` schreiben kann und
+    # nicht `.paare["Stadtteil"]`. Der Parser IST die Paarliste; die zweite
+    # Sicht (`klassen`) steht daneben und nicht darin - genau die Aufteilung,
+    # die `DatenblockParser` am 05.09. bekommen hat, damit ein Zeuge auf den
+    # Text weiter gegen einen Text vergleicht.
+    def __getitem__(self, beschriftung):
+        return self.paare[beschriftung]
+
+    def __contains__(self, beschriftung):
+        return beschriftung in self.paare
+
+    def get(self, beschriftung, vorgabe=None):
+        return self.paare.get(beschriftung, vorgabe)
+
+
+def paare(antwort, klasse):
+    parser = PaarParser(klasse)
+    parser.feed(antwort.content.decode())
+    return parser
+
+
+class AbschnittParser(HTMLParser):
+    """Jeden `<section>` der Seite EINZELN: sein Text und seine Elemente.
+
+    `BlockParser` haengt gleichnamige Bloecke aneinander - drei Kaesten mit
+    derselben Klasse ergeben dort einen Text. Fuer die Frage "steht der
+    Hinweis im SELBEN Kasten wie das Formular" genuegt das nicht: er stuende
+    auch dann im zusammengehaengten Text, wenn er in den Notizblock
+    gerutscht waere.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.abschnitte = []
+        self._offen = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "section":
+            self._offen.append({"text": [], "elemente": [], "tiefe": 0})
+            return
+        if not self._offen:
+            return
+        self._offen[-1]["elemente"].append((tag, dict(attrs)))
+        if tag not in LEERE_ELEMENTE:
+            self._offen[-1]["tiefe"] += 1
+
+    def handle_startendtag(self, tag, attrs):
+        if self._offen:
+            self._offen[-1]["elemente"].append((tag, dict(attrs)))
+
+    def handle_endtag(self, tag):
+        if not self._offen or tag in LEERE_ELEMENTE:
+            return
+        if tag == "section" and self._offen[-1]["tiefe"] == 0:
+            fertig = self._offen.pop()
+            self.abschnitte.append(
+                {
+                    "text": " ".join("".join(fertig["text"]).split()),
+                    "elemente": fertig["elemente"],
+                }
+            )
+        elif self._offen[-1]["tiefe"]:
+            self._offen[-1]["tiefe"] -= 1
+
+    def handle_data(self, daten):
+        if self._offen:
+            self._offen[-1]["text"].append(daten)
+
+
+def abschnitte(antwort):
+    parser = AbschnittParser()
+    parser.feed(antwort.content.decode())
+    return parser.abschnitte
+
+
+class BeschriftungsParser(HTMLParser):
+    """Jedes SICHTBARE Element, dessen Text genau das gesuchte Wort ist.
+
+    Fuer Zusage 6: das Wort "Status" stand bis zum 14.09. zweimal
+    untereinander - als Ueberschrift und als Feldbeschriftung. Gezaehlt wird
+    ueber die Elemente, die ein Mensch als Beschriftung liest, und der
+    Rueckgabewert nennt das Tag mit: damit faellt der Zeuge auch dann, wenn
+    die Ueberschrift verschwindet und nur die Beschriftung bleibt.
+
+    `aria-label` steht in einem ATTRIBUT und ist damit nicht sichtbar - es
+    zaehlt hier ausdruecklich nicht mit. Genau darauf beruht die Zusage.
+    """
+
+    BESCHRIFTENDE = ("h1", "h2", "h3", "label", "legend", "caption", "th", "dt")
+
+    def __init__(self, wort):
+        super().__init__()
+        self.wort = wort
+        self.gefunden = []
+        self._tag = None
+        self._text = ""
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.BESCHRIFTENDE:
+            self._tag = tag
+            self._text = ""
+
+    def handle_endtag(self, tag):
+        if tag == self._tag:
+            if " ".join(self._text.split()) == self.wort:
+                self.gefunden.append(tag)
+            self._tag = None
+
+    def handle_data(self, daten):
+        if self._tag:
+            self._text += daten
+
+
+def beschriftungen(antwort, wort):
+    parser = BeschriftungsParser(wort)
+    parser.feed(antwort.content.decode())
+    return parser.gefunden
+
+
+class FormularParser(HTMLParser):
+    """Jedes `<form>` der Seite mit Adresse, Verfahren und seinen Feldern.
+
+    Gebaut fuer Zusage 8. Ein Zeuge, der die Adresse und die Feldnamen selbst
+    hinschreibt, prueft die ANSICHT und nicht die Seite: verschoebe der Umbau
+    das `action`, benennte er ein Feld um oder verloere ein Knopf sein
+    `name`, bliebe er gruen, waehrend das Formular auf dem Bildschirm nichts
+    mehr tut.
+
+    Abgeschickt wird deshalb, was die SEITE anbietet - an die Adresse, die
+    sie nennt, mit den Namen, die sie fuehrt.
+
+    Eingegrenzt auf `<main>`. Die Grundvorlage traegt in ihrer Kopfleiste ein
+    Abmeldeformular, und das steht auf JEDER Seite: ein Zeuge ueber die ganze
+    Antwort zaehlte es mit und maesse damit die Grundvorlage statt der
+    Objektansicht. Dieselbe Blindheit wie am 03.09., nur eine Ebene hoeher.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.formulare = []
+        self._im_inhalt = False
+        self._aktuell = None
+        self._auswahl = None
+
+    def handle_starttag(self, tag, attrs):
+        werte = dict(attrs)
+        if tag == "main":
+            self._im_inhalt = True
+            return
+        if not self._im_inhalt:
+            return
+        if tag == "form":
+            self._aktuell = {
+                "adresse": werte.get("action", ""),
+                "verfahren": (werte.get("method") or "get").lower(),
+                "felder": {},
+                "knoepfe": [],
+                "textbereiche": [],
+                "auswahlen": {},
+            }
+            return
+        if self._aktuell is None:
+            return
+        name = werte.get("name")
+        if tag == "input" and name:
+            self._aktuell["felder"][name] = werte.get("value", "")
+        elif tag == "textarea" and name:
+            self._aktuell["textbereiche"].append(name)
+        elif tag == "select" and name:
+            self._auswahl = name
+            self._aktuell["auswahlen"][name] = []
+        elif tag == "option" and self._auswahl:
+            self._aktuell["auswahlen"][self._auswahl].append(werte.get("value", ""))
+        elif tag == "button" and name:
+            self._aktuell["knoepfe"].append((name, werte.get("value", "")))
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag == "main":
+            self._im_inhalt = False
+        elif tag == "form" and self._aktuell is not None:
+            self.formulare.append(self._aktuell)
+            self._aktuell = None
+        elif tag == "select":
+            self._auswahl = None
+
+
+def formulare(antwort):
+    parser = FormularParser()
+    parser.feed(antwort.content.decode())
+    return parser.formulare
+
+
+class ObjektansichtVollstaendigkeitTests(TestCase):
+    """Zusage 1: der Umbau verliert keine Angabe. Der wichtigste Zeuge der Runde.
+
+    Ein Markup-Umbau verliert leicht ein Feld, und niemand merkt es - die
+    Seite antwortet weiter mit 200 und sieht sogar aufgeraeumter aus. Ein
+    Zeuge, der nur die Seite laedt und den Statuscode prueft, ist blind.
+
+    JE ANGABE EIN ZEUGE, damit beim Ausbau genau der eine faellt. Und jede
+    Behauptung ist auf den Block eingegrenzt, um den es geht: der Objektname
+    steht auch im `<title>`, die Statusbezeichnung auch in der Auswahl, ein
+    Ortsname auch in der Ueberschrift. Eine Behauptung ueber die ganze
+    Antwort waere gruen, egal wo der Wert steht - zweimal belegt am 03.09.
+
+    Das Objekt dieser Klasse traegt JEDES Feld gefuellt. Das ist der
+    Gegenpol zu `ObjektansichtDatenblockTests`, wo alles leer ist: dort wird
+    bezeugt, dass leere Felder dastehen, hier, dass gefuellte ihren Wert
+    tragen.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="lang-genug-123", first_name="Steffen", last_name="P."
+        )
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/112155320/",
+            portal=Portal.IDEALISTA,
+            inserats_id="112155320",
+            titel="Wohnung in Tamaimo-Arguayo",
+            stadtteil="Tamaimo-Arguayo",
+            ort="Santiago del Teide",
+            region="Teneriffa",
+            land=Land.ES,
+            objekttyp=Objekttyp.WOHNUNG,
+            zustand=Zustand.MITTEL,
+            zimmer=Decimal("3"),
+            baujahr=1998,
+            wohnflaeche=Decimal("119"),
+            grundstuecksgroesse=Decimal("450"),
+            wert_nach_renovierung=Decimal("310000"),
+            beschreibung="Wohnung von 119 m² mit Terrasse",
+            quelle=Quelle.SUCHAGENT,
+            eingestellt_von=self.person,
+            zuletzt_gesehen=timezone.now(),
+        )
+        # Zwei Eintraege, damit es ueberhaupt eine Preisaenderung gibt: mit
+        # einem bliebe `vorheriger_preis` NULL und der Zweig im Markup waere
+        # nie betreten.
+        self.objekt.preis_setzen(
+            self.person, Decimal("275000"), PreisQuelle.SUCHAGENTEN_MAIL
+        )
+        self.objekt.preis_setzen(
+            self.person, Decimal("259000"), PreisQuelle.ERNEUTER_ABRUF
+        )
+        self.objekt.status_setzen(self.person, Status.BESICHTIGUNG)
+        for nummer in range(3):
+            Bild.objects.create(
+                objekt=self.objekt,
+                url=f"https://bilder.example/{nummer}.jpg",
+                reihenfolge=nummer,
+            )
+        self.objekt.refresh_from_db()
+
+    def _seite(self):
+        return self.client.get(reverse("objekt", args=[self.objekt.pk]))
+
+    # --- Riegel gegen die Zeugen unten im Vakuum -------------------------
+
+    def test_das_objekt_dieser_klasse_ist_wirklich_gefuellt(self):
+        """Ohne ihn maessen die Zeugen unten nicht, dass GEFUELLTE Felder
+        ihren Wert zeigen - sondern nur, dass irgendetwas dasteht."""
+        for name in (
+            "titel", "stadtteil", "ort", "region", "land", "objekttyp",
+            "portal", "inserats_id", "beschreibung",
+        ):
+            with self.subTest(feld=name):
+                self.assertNotEqual(getattr(self.objekt, name), "")
+        for name in (
+            "zimmer", "baujahr", "wohnflaeche", "grundstuecksgroesse",
+            "wert_nach_renovierung", "aktueller_preis", "zuletzt_gesehen",
+        ):
+            with self.subTest(feld=name):
+                self.assertIsNotNone(getattr(self.objekt, name))
+        self.assertEqual(self.objekt.bilder.count(), 3)
+        self.assertEqual(self.objekt.preise.count(), 2)
+        self.assertEqual(self.objekt.statusaenderungen.count(), 1)
+
+    def test_die_parser_finden_ueberhaupt_ihre_bloecke(self):
+        """Ein Parser, der nichts findet, macht jeden `assertIn` unten zu
+        einem Zeugen ueber eine leere Liste."""
+        antwort = self._seite()
+        for behaelter in ("objektzeile", "bilder", "verlaufstabelle", "beleg", "fuss"):
+            with self.subTest(block=behaelter):
+                self.assertEqual(block(antwort, behaelter).anzahl, 1)
+        for liste in ("kennzahlen", "daten"):
+            with self.subTest(liste=liste):
+                self.assertNotEqual(paare(antwort, liste).paare, {})
+
+    # --- Kopf --------------------------------------------------------------
+
+    def test_der_titel_steht_in_der_ueberschrift(self):
+        """Am INHALT der Ueberschrift gemessen. Der Titel steht auch im
+        `<title>` des Dokuments - ein `assertContains` waere dort gruen."""
+        treffer = re.search(r"<h1[^>]*>(.*?)</h1>", self._seite().content.decode(), re.S)
+        self.assertIsNotNone(treffer, "Die Seite hat keine Ueberschrift.")
+        self.assertEqual(
+            htmlwerkzeug.unescape(treffer.group(1)).strip(), self.objekt.titel
+        )
+
+    def test_der_status_steht_als_marke_im_kopf(self):
+        """Die Statusbezeichnung steht auch in der Auswahl des Statusformulars
+        - gemessen wird deshalb an der Marke und an ihrem Text."""
+        marken = MarkenParser.lesen(self._seite(), "statusmarke")
+        self.assertEqual([t for _, t in marken], [Status.BESICHTIGUNG.label])
+
+    def test_der_verweis_zum_inserat_steht_im_kopf(self):
+        """Die Adresse steht auch im Datenblock nicht und im `<title>` nicht -
+        wohl aber koennte sie kuenftig anderswo stehen. Eingegrenzt auf die
+        Objektzeile, in der sie zugesagt ist."""
+        self.assertIn(self.objekt.url, block(self._seite(), "objektzeile").verweise())
+
+    def test_ort_und_land_stehen_im_kopf(self):
+        """Sie sind die einzigen beiden Ortsangaben, die der Datenblock NICHT
+        fuehrt. Stuenden sie auch hier nicht, waeren sie nirgends."""
+        text = block(self._seite(), "objektzeile").text
+        self.assertIn(self.objekt.ort, text)
+        self.assertIn(self.objekt.get_land_display(), text)
+
+    def test_die_objektzeile_doppelt_den_datenblock_nicht(self):
+        """Entscheidung vom 03.09., am 14.09. bestaetigt: derselbe Wert
+        zweimal auf einer Seite sagt nichts Zweites.
+
+        Der Zeuge ist nicht kosmetisch. Waehrend des Umbaus stand die
+        Unterzeile der Liste hier - Stadtteil, Region und Zustand also
+        doppelt - und genau daran ist
+        `ObjektansichtDatenblockTests.test_jedes_feld_des_datenblocks_steht_im_block`
+        erblindet: er fand das Wort "Zustand" in dieser Zeile, waehrend das
+        Feld aus dem Datenblock schon weg war. Die Doppelung ist nicht nur
+        unschoen, sie kostet Zeugen.
+        """
+        text = block(self._seite(), "objektzeile").text
+        for wert in (
+            self.objekt.stadtteil,
+            self.objekt.region,
+            self.objekt.get_zustand_display(),
+        ):
+            with self.subTest(wert=wert):
+                self.assertNotIn(wert, text)
+
+    def test_der_datenblock_doppelt_die_objektzeile_nicht(self):
+        """Die Gegenrichtung. Ohne sie liesse sich die Doppelung einfach
+        andersherum bauen - Ort und Land zusaetzlich in den Datenblock -,
+        und der Zeuge darueber bliebe gruen."""
+        gefunden = paare(self._seite(), "daten")
+        self.assertNotIn("Ort", gefunden)
+        self.assertNotIn("Land", gefunden)
+
+    # --- Zahlenband --------------------------------------------------------
+
+    def test_der_kaufpreis_steht_im_zahlenband(self):
+        self.assertIn("259.000 €", paare(self._seite(), "kennzahlen")["Kaufpreis"])
+
+    def test_der_quadratmeterpreis_steht_im_zahlenband(self):
+        # Die Annotation muss auch hier gezogen werden - es gibt bewusst keine
+        # gleichnamige Property am Modell.
+        self.assertEqual(
+            paare(self._seite(), "kennzahlen")["Preis je m²"], "2.176 €/m²"
+        )
+
+    def test_die_wohnflaeche_steht_im_zahlenband(self):
+        self.assertEqual(paare(self._seite(), "kennzahlen")["Wohnfläche"], "119 m²")
+
+    def test_die_grundstuecksgroesse_steht_im_zahlenband(self):
+        self.assertEqual(
+            paare(self._seite(), "kennzahlen")["Grundstücksgröße"], "450 m²"
+        )
+
+    def test_der_wert_nach_renovierung_steht_im_zahlenband(self):
+        self.assertEqual(
+            paare(self._seite(), "kennzahlen")["Wert nach Renovierung"], "310.000 €"
+        )
+
+    def test_die_preisaenderung_steht_beim_kaufpreis(self):
+        """NICHT in Zusage 1 aufgezaehlt und trotzdem bezeugt: der Entwurf
+        zeigt sie nicht, weil sein Beispielobjekt keine hat. Sie ersatzlos
+        fallen zu lassen waere ein verlorenes Feld - genau die Fehlerart,
+        gegen die diese Klasse gebaut ist."""
+        text = paare(self._seite(), "kennzahlen")["Kaufpreis"]
+        self.assertIn("16.000 €", text)
+        self.assertIn("275.000 €", text)
+
+    # --- Datenblock: je Feld ein Zeuge ------------------------------------
+
+    def test_jedes_feld_des_datenblocks_traegt_seinen_wert(self):
+        """Am PAAR gemessen, nicht an der Anwesenheit der Beschriftung.
+
+        Dass "Stadtteil" auf der Seite steht, sagt noch nicht, dass daneben
+        etwas steht - und der Stadtteilname steht seit dem 14.09. ausserdem
+        oben in der Objektzeile. Ein Zeuge auf die ganze Antwort bliebe
+        gruen, waehrend das Feld seinen Wert schon verloren haette.
+        """
+        gefunden = paare(self._seite(), "daten").paare
+        erwartet = {
+            "Objekttyp": "Wohnung",
+            "Zimmer": "3",
+            "Baujahr": "1998",
+            "Zustand": "mittel",
+            "Stadtteil": "Tamaimo-Arguayo",
+            "Region": "Teneriffa",
+            "Portal": "idealista",
+            "Inserats-ID": "112155320",
+            "Quelle": "Suchagent",
+            "Beschreibung": "Wohnung von 119 m² mit Terrasse",
+        }
+        for beschriftung, wert in erwartet.items():
+            with self.subTest(feld=beschriftung):
+                self.assertEqual(gefunden.get(beschriftung), wert)
+
+    def test_der_datenblock_fuehrt_genau_diese_felder(self):
+        """Die Gegenrichtung: keins faellt weg, und keins kommt dazu.
+
+        Der Zeuge darueber faellt je Feld, das seinen Wert verliert - aber
+        nicht, wenn ein Feld samt Beschriftung verschwindet und die anderen
+        neun stehen bleiben. Das ist genau die Art, wie ein Umbau ein Feld
+        verliert.
+        """
+        self.assertEqual(
+            paare(self._seite(), "daten").reihenfolge, list(FELDER_DES_DATENBLOCKS)
+        )
+
+    # --- Bilder, Preisverlauf, Herkunft -----------------------------------
+
+    def test_alle_bilder_stehen_im_bilderblock(self):
+        adressen = [bild.get("src") for bild in block(self._seite(), "bilder").bilder()]
+        self.assertEqual(
+            adressen, [f"https://bilder.example/{n}.jpg" for n in range(3)]
+        )
+
+    def test_jeder_eintrag_des_preisverlaufs_steht_in_der_tabelle(self):
+        """Beide Preise UND beide Quellen: die Tabelle hat drei Spalten, und
+        eine davon still zu verlieren faellt an einer Preispruefung nicht
+        auf."""
+        text = block(self._seite(), "verlaufstabelle").text
+        for stueck in ("259.000 €", "275.000 €", "erneuter Abruf", "Suchagenten-Mail"):
+            with self.subTest(stueck=stueck):
+                self.assertIn(stueck, text)
+
+    def test_die_herkunftsangabe_steht_im_fuss(self):
+        """"eingestellt von … am …" und "zuletzt gesehen" - der Beleg, an dem
+        haengt, ob das Inserat noch am Markt ist."""
+        text = block(self._seite(), "beleg").text
+        self.assertIn("Steffen P.", text)
+        self.assertIn("eingestellt von", text)
+        self.assertIn("zuletzt gesehen", text)
+
+    def test_der_statusverlauf_steht_weiterhin_da(self):
+        """Wie die Preisaenderung nicht in Zusage 1 genannt und aus demselben
+        Grund bezeugt: der Entwurf zeigt ihn nicht, weil sein Beispielobjekt
+        keinen Wechsel hinter sich hat."""
+        self.assertIn("neu → Besichtigung", block(self._seite(), "verlauf").text)
+
+
+class ZahlenbandLeerTests(TestCase):
+    """Zusage 2: leere Felder werden ANGEZEIGT, als gedaempfter Strich.
+
+    Fuer den Datenblock haelt das seit dem 03.09. `ObjektansichtDatenblockTests`
+    fest. Das Zahlenband ist am 14.09. dazugekommen - der Kaufpreis stand bis
+    dahin als blosse Zahl ueber dem Block und war die einzige Angabe der Seite
+    ohne Beschriftung. Er faellt damit unter dieselbe Zusage wie die anderen
+    vier.
+
+    Gemessen am PAAR und an der Klasse IM Wert, nicht an der Anwesenheit
+    eines Strichs irgendwo: die Sabotage-Gegenprobe hat am 03.09. genau das
+    aufgedeckt - ein Zeuge auf `assertContains("—")` blieb gruen, waehrend
+    ein Feld seinen Strich schon verloren hatte, weil andere ihre noch
+    trugen.
+    """
+
+    #: Die fuenf Angaben des Bandes, in der Reihenfolge des Entwurfs: der
+    #: Kaufpreis als groesste Zahl, der Preis je m² daneben. Die
+    #: Zahlenhierarchie ist die vom 05.09.
+    ANGABEN = (
+        "Kaufpreis",
+        "Preis je m²",
+        "Wohnfläche",
+        "Grundstücksgröße",
+        "Wert nach Renovierung",
+    )
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1")
+
+    def _seite(self):
+        return self.client.get(reverse("objekt", args=[self.objekt.pk]))
+
+    def test_das_objekt_dieser_klasse_traegt_wirklich_keine_zahl(self):
+        """Riegel gegen einen Zeugen im Vakuum: truege es Werte, maesse er
+        nicht mehr, dass LEERE Angaben dastehen."""
+        for name in (
+            "aktueller_preis", "wohnflaeche", "grundstuecksgroesse",
+            "wert_nach_renovierung",
+        ):
+            with self.subTest(feld=name):
+                self.assertIsNone(getattr(self.objekt, name))
+
+    def test_jede_angabe_des_bandes_steht_da(self):
+        gefunden = paare(self._seite(), "kennzahlen").reihenfolge
+        self.assertEqual(gefunden, list(self.ANGABEN))
+
+    def test_jede_leere_angabe_zeigt_einen_strich(self):
+        gefunden = paare(self._seite(), "kennzahlen")
+        for beschriftung in self.ANGABEN:
+            with self.subTest(angabe=beschriftung):
+                self.assertEqual(gefunden[beschriftung], "—")
+
+    def test_jeder_strich_ist_als_fehlend_ausgezeichnet(self):
+        """Man muss SEHEN, dass die Angabe fehlt - sonst haelt man sie fuer
+        Null. Ein eingetippter Gedankenstrich und ein fehlender Wert sind am
+        Text allein nicht zu unterscheiden."""
+        gefunden = paare(self._seite(), "kennzahlen")
+        for beschriftung in self.ANGABEN:
+            with self.subTest(angabe=beschriftung):
+                self.assertIn("fehlt", gefunden.klassen[beschriftung])
+
+
+class VerdecktesVotumNachDemUmbauTests(VerdecktesVotumBasis):
+    """Zusage 4, erneut bezeugt: der Block ist umgezogen, die Zusage nicht.
+
+    Die Vota der anderen stehen seit dem 14.09. IM Votum-Block der
+    Bedienspalte statt als eigener Abschnitt darunter. Die vorhandenen Zeugen
+    in `VerdecktesVotumInDerObjektansichtTests` bleiben gruen - und genau das
+    ist der Grund fuer diese Klasse: sie messen an `ul.vota`, und ein Umbau,
+    der die Eintraege in einen anderen Behaelter schiebt, liesse sie
+    STRUKTURELL passieren. Der Parser faende die Liste nicht mehr und meldete
+    "nichts verdeckt".
+
+    Gemessen wird deshalb an Dingen, die den Umzug ueberleben: an der Zahl
+    der Wertungs-Elemente auf der Seite und am Antworttext.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.objekt = self._objekt(titel="Finca am Hang")
+        self._votum(self.objekt, self.anna, Wertung.ANSCHAUEN, self.BEGRUENDUNG)
+        self._votum(self.objekt, self.bernd, Wertung.RAUS, "Zu weit weg")
+
+    def _wertungen(self):
+        return _klassen_von(self._seite(self.objekt), "wertung")
+
+    def test_ohne_eigenes_votum_stehen_nur_die_drei_knoepfe(self):
+        """Der strukturelle Zeuge. Die drei Wertungsknoepfe des Formulars
+        tragen dieselbe Klasse wie die Wertung eines fremden Votums - wandern
+        die fremden Eintraege in einen anderen Behaelter, faellt ihre Zahl
+        hier auf, auch wenn `ul.vota` nirgends mehr steht.
+        """
+        self.assertEqual(len(self._wertungen()), len(Wertung.choices))
+
+    def test_mit_eigenem_votum_kommen_die_fremden_dazu(self):
+        """Riegel gegen den Zeugen darueber im Vakuum: zeigte die Seite die
+        fremden Wertungen NIE, waere er gruen, ohne die Verdeckung zu
+        messen."""
+        self._votum(self.objekt, self.person, Wertung.DAFUER)
+        self.assertEqual(len(self._wertungen()), len(Wertung.choices) + 2)
+
+    def test_der_umzug_hat_die_begruendung_nicht_mitgenommen(self):
+        """Am ganzen Antworttext und mit einer Zeichenkette, die auf keiner
+        Seite dieses Projekts sonst vorkommt. Die Begruendung ankert am
+        staerksten: eine Zahl laesst sich uebersehen, ein Satz nicht."""
+        self.assertNotContains(self._seite(self.objekt), self.BEGRUENDUNG)
+
+    def test_der_umzug_hat_die_namen_nicht_mitgenommen(self):
+        antwort = self._seite(self.objekt)
+        self.assertNotContains(antwort, "Anna Beispiel")
+        self.assertNotContains(antwort, "Bernd Beispiel")
+
+    def test_der_votumblock_verraet_keinen_zaehlstand(self):
+        """Wer weiss, DASS zwei gestimmt haben, weiss zwar nicht wie - aber er
+        weiss, dass die Abstimmung laeuft, und genau das ist ein
+        Zaehlstand."""
+        text = block(self._seite(self.objekt), "votumformular").text
+        for zahl in ("1", "2"):
+            with self.subTest(zahl=zahl):
+                self.assertNotIn(zahl, text)
+
+    def test_der_hinweis_steht_im_selben_abschnitt_wie_das_formular(self):
+        """Er ersetzt die Eintraege und gehoert deshalb dorthin, wo sie
+        stuenden. Rutschte er in einen anderen Kasten, saehe der Votumblock
+        aus, als habe niemand abgestimmt - eine Falschaussage ueber den
+        Stand, keine Verdeckung.
+
+        Gemessen am EINZELNEN `<section>` und nicht an allen Bedienkaesten
+        zusammen: deren Text aneinandergehaengt enthielte den Hinweis auch
+        dann, wenn er unter den Notizen stuende.
+        """
+        ziel = reverse("votum_setzen", args=[self.objekt.pk])
+        passend = [
+            a
+            for a in abschnitte(self._seite(self.objekt))
+            if any(
+                tag == "form" and w.get("action") == ziel for tag, w in a["elemente"]
+            )
+        ]
+        self.assertEqual(len(passend), 1, "erwartet wird genau ein Votum-Abschnitt")
+        self.assertIn("Sichtbar, sobald du selbst abgestimmt hast.", passend[0]["text"])
+
+
+class StatusbeschriftungTests(TestCase):
+    """Zusagen 5 und 6: eine Beschriftung, und zwar genau eine sichtbare.
+
+    Das Wort "Status" stand bis zum 14.09. zweimal untereinander - als
+    Ueberschrift ueber dem Block und als Beschriftung am Feld darunter.
+    Zweimal dasselbe Wort sagt nichts Zweites.
+
+    Ersatzlos streichen war keine Option: ein Bedienelement ohne jede
+    Beschriftung ist fuer eine Vorlesehilfe eine Auswahl ohne Namen. Die
+    Auswahl traegt sie deshalb weiter, nur unsichtbar.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1")
+
+    def _seite(self):
+        return self.client.get(reverse("objekt", args=[self.objekt.pk]))
+
+    def _auswahl(self):
+        """Das `<select name="status">` als Attributwoerterbuch."""
+        inhalt = self._seite().content.decode()
+        treffer = re.search(r"<select\b([^>]*\bname=\"status\"[^>]*)>", inhalt)
+        self.assertIsNotNone(treffer, "Die Seite hat keine Statusauswahl.")
+        return dict(re.findall(r'([a-z-]+)="([^"]*)"', treffer.group(1)))
+
+    def test_die_seite_hat_ueberhaupt_eine_statusauswahl(self):
+        """Riegel gegen die Zeugen unten im Vakuum. Faende der Ausdruck sie
+        nie, waere "genau eine sichtbare Beschriftung" von selbst gruen."""
+        self.assertIn("status", self._auswahl().get("name", ""))
+
+    # --- Zusage 5 ---------------------------------------------------------
+
+    def test_die_statusauswahl_traegt_eine_zugaengliche_beschriftung(self):
+        """Ueber IRGENDEINEN der drei Wege, nicht ueber einen bestimmten.
+
+        Zugesagt ist eine zugaengliche Beschriftung und nicht `aria-label`.
+        Ein Zeuge auf die Schreibweise diktierte die Bauentscheidung; dieser
+        faellt, wenn die Beschriftung auf JEDEM Weg verschwindet.
+        """
+        auswahl = self._auswahl()
+        antwort = self._seite()
+        wege = [
+            auswahl.get("aria-label", "").strip(),
+            auswahl.get("aria-labelledby", "").strip(),
+            "".join(
+                re.findall(
+                    r'<label[^>]*\bfor="%s"[^>]*>(.*?)</label>'
+                    % re.escape(auswahl.get("id", "\0")),
+                    antwort.content.decode(),
+                    re.S,
+                )
+            ).strip(),
+        ]
+        self.assertTrue(any(wege), "Die Statusauswahl hat keinen Namen.")
+
+    def test_die_beschriftung_ist_nicht_leer_hingeschrieben(self):
+        """Ein `aria-label=""` waere derselbe Fehlstand in anderer
+        Schreibweise: das Attribut stuende da und die Auswahl haette weiter
+        keinen Namen."""
+        auswahl = self._auswahl()
+        if "aria-label" in auswahl:
+            self.assertNotEqual(auswahl["aria-label"].strip(), "")
+
+    # --- Zusage 6 ---------------------------------------------------------
+
+    def test_das_wort_status_steht_genau_einmal_sichtbar(self):
+        """Als Ueberschrift, und sonst als keine Beschriftung der Seite.
+
+        Das Tag wird mitgemessen: verschwaende die Ueberschrift und bliebe
+        die Feldbeschriftung, waere die Zahl weiterhin eins - und die Zusage
+        trotzdem gebrochen, denn dann staende das Wort wieder unmittelbar am
+        Feld statt ueber dem Block.
+
+        `aria-label` steht in einem Attribut und ist nicht sichtbar. Es
+        zaehlt hier ausdruecklich nicht mit; darauf beruht die Zusage.
+        """
+        self.assertEqual(beschriftungen(self._seite(), "Status"), ["h2"])
+
+    def test_die_auswahl_traegt_keine_sichtbare_beschriftung_mehr(self):
+        """Die Gegenrichtung, an der ID des Feldes gemessen: ein `<label
+        for>` waere die Doppelung, um die es geht - egal, welches Wort
+        darinstuende."""
+        kennung = self._auswahl().get("id", "")
+        self.assertNotEqual(kennung, "", "Die Auswahl hat keine Kennung.")
+        self.assertNotContains(self._seite(), 'for="%s"' % kennung)
+
+
+class LoeschenImFussTests(TestCase):
+    """Zusage 7: der Einstieg ins Loeschen steht im Fuss, nicht in der Bedienspalte.
+
+    Bis zum 14.09. stand er am Seitenende unter dem Beleg und damit in
+    derselben Kolonne wie Votum, Status und Notiz. Jetzt trennt die Seite
+    Information (links), Bedienung (rechts) und Beleg (unten) raeumlich - und
+    Loeschen ist keine Bedienung des Objekts, sondern sein Ende.
+
+    Er bleibt derselbe Weg ueber die Bestaetigungsseite, Entscheidung vom
+    03.09.: ein Verweis und kein Formular. Geloescht wird erst durch den POST
+    von dort.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1")
+
+    def _seite(self):
+        return self.client.get(reverse("objekt", args=[self.objekt.pk]))
+
+    def _ziel(self):
+        return reverse("objekt_loeschen", args=[self.objekt.pk])
+
+    def test_die_seite_hat_ueberhaupt_einen_fuss_und_eine_bedienspalte(self):
+        """Riegel gegen beide Zeugen unten im Vakuum: ohne die Bloecke waere
+        "steht im Fuss" rot und "steht nicht in der Spalte" gruen, und keiner
+        von beiden maesse etwas."""
+        antwort = self._seite()
+        self.assertEqual(block(antwort, "fuss").anzahl, 1)
+        self.assertEqual(block(antwort, "bedienspalte").anzahl, 1)
+
+    def test_der_einstieg_steht_im_fuss(self):
+        self.assertIn(self._ziel(), block(self._seite(), "fuss").verweise())
+
+    def test_der_einstieg_steht_nicht_in_der_bedienspalte(self):
+        self.assertNotIn(self._ziel(), block(self._seite(), "bedienspalte").verweise())
+
+    def test_der_einstieg_steht_auch_nicht_in_der_objektspalte(self):
+        """Die zweite Haelfte derselben Aussage. Ohne sie liesse sich der
+        Verweis in die linke Spalte schieben und der Zeuge darueber bliebe
+        gruen."""
+        self.assertNotIn(self._ziel(), block(self._seite(), "objektspalte").verweise())
+
+    def test_der_beleg_steht_im_selben_fuss(self):
+        """Beleg und Loeschen sind EIN Abschnitt, durch eine Linie abgesetzt.
+        Stuende der Beleg woanders, waere der Fuss nur noch der Ort fuer das
+        Loeschen - und das saehe aus wie eine Handlung, die man anbietet."""
+        self.assertIn("eingestellt von", block(self._seite(), "fuss").text)
+
+
+class BedienelementeNachDemUmbauTests(TestCase):
+    """Zusage 8: Votum, Statuswechsel und Notiz funktionieren unveraendert.
+
+    JE EIN ZEUGE, DER ABSENDET - nicht einer, der das Vorhandensein des
+    Formulars prueft. Ein Formular, das dasteht und nichts tut, hat dasselbe
+    Markup.
+
+    Und abgeschickt wird, was die SEITE anbietet: die Adresse aus ihrem
+    `action`, die Feldnamen aus ihren Feldern, der Wert aus ihrem Knopf. Die
+    vorhandenen Zeugen in `VotumOberflaecheTests`, `StatusOberflaecheTests`
+    und `NotizOberflaecheTests` schreiben die Adresse selbst hin und messen
+    damit die ANSICHT, nicht die Seite. Sie bleiben gruen, wenn der Umbau das
+    `action` verschiebt, ein Feld umbenennt oder ein Knopf sein `name`
+    verliert - und auf dem Bildschirm tut das Formular dann nichts mehr.
+
+    Genau das ist die Fehlerart, die ein Markup-Umbau erzeugt.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="lang-genug-123", first_name="Steffen", last_name="P."
+        )
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1", titel="Finca")
+
+    def _seite(self):
+        return self.client.get(reverse("objekt", args=[self.objekt.pk]))
+
+    def _formular(self, teil):
+        """Das EINE Formular der Seite, dessen Adresse `teil` enthaelt."""
+        passend = [f for f in formulare(self._seite()) if teil in f["adresse"]]
+        self.assertEqual(
+            len(passend), 1, f"erwartet wird genau ein Formular auf {teil}"
+        )
+        return passend[0]
+
+    # --- Riegel gegen die Zeugen unten im Vakuum -------------------------
+
+    def test_die_seite_fuehrt_genau_die_drei_formulare(self):
+        """Faende der Parser keines, waere jeder Zeuge unten schon am Aufbau
+        rot statt an seiner Zusage - und faende er zu viele, schickte ein
+        Zeuge an das falsche."""
+        adressen = sorted(f["adresse"] for f in formulare(self._seite()))
+        self.assertEqual(
+            adressen,
+            sorted(
+                reverse(name, args=[self.objekt.pk])
+                for name in ("notiz_anlegen", "status_setzen", "votum_setzen")
+            ),
+        )
+
+    def test_jedes_der_drei_formulare_schickt_per_post(self):
+        """Ein `GET`-Formular liefe in den 405 der Ansicht - sichtbar waere
+        eine Seite, die nichts tut."""
+        for teil in ("/votum/", "/status/", "/notiz/"):
+            with self.subTest(formular=teil):
+                self.assertEqual(self._formular(teil)["verfahren"], "post")
+
+    def test_jedes_der_drei_formulare_traegt_das_csrf_feld(self):
+        """Ohne es antwortet Django mit 403. Der Testclient prueft es nicht -
+        ein Zeuge, der nur absendet, merkte den Verlust deshalb nicht, und
+        auf dem Bildschirm waeren alle drei Knoepfe tot."""
+        for teil in ("/votum/", "/status/", "/notiz/"):
+            with self.subTest(formular=teil):
+                self.assertIn("csrfmiddlewaretoken", self._formular(teil)["felder"])
+
+    # --- Votum -------------------------------------------------------------
+
+    def test_das_votumformular_der_seite_speichert_ein_votum(self):
+        formular = self._formular("/votum/")
+        self.assertEqual(len(formular["textbereiche"]), 1, formular)
+        knoepfe = dict(formular["knoepfe"])
+        self.assertIn("wertung", knoepfe, formular)
+        daten = dict(formular["felder"])
+        daten[formular["textbereiche"][0]] = "Lage stimmt"
+        # Die Wertung kommt aus dem Knopf der Seite, nicht aus `Wertung`:
+        # verloere er sein `value`, schickte der Browser nichts, und genau das
+        # soll hier auffallen.
+        wert = next(w for n, w in formular["knoepfe"] if n == "wertung" and w == Wertung.DAFUER)
+        daten["wertung"] = wert
+        self.client.post(formular["adresse"], daten)
+        votum = Votum.objects.get(objekt=self.objekt, person=self.person)
+        self.assertEqual(votum.wertung, Wertung.DAFUER)
+
+    def test_das_votumformular_der_seite_speichert_die_begruendung(self):
+        """Eigener Zeuge: ein Formular, das die Wertung ankommen laesst und
+        das Textfeld verliert, bliebe am Zeugen darueber gruen."""
+        formular = self._formular("/votum/")
+        daten = dict(formular["felder"])
+        daten[formular["textbereiche"][0]] = "Zisterne unter der Terrasse"
+        daten["wertung"] = Wertung.ANSCHAUEN
+        self.client.post(formular["adresse"], daten)
+        votum = Votum.objects.get(objekt=self.objekt, person=self.person)
+        self.assertEqual(votum.begruendung, "Zisterne unter der Terrasse")
+
+    def test_das_votumformular_bietet_alle_drei_wertungen_an(self):
+        """Eine Wahl aus dreien - faellt eine weg, laesst sie sich nicht mehr
+        treffen, und die Ansicht wuerde es nie melden."""
+        formular = self._formular("/votum/")
+        self.assertEqual(
+            sorted(w for n, w in formular["knoepfe"] if n == "wertung"),
+            sorted(w for w, _ in Wertung.choices),
+        )
+
+    # --- Statuswechsel -----------------------------------------------------
+
+    def test_das_statusformular_der_seite_setzt_den_status(self):
+        formular = self._formular("/status/")
+        self.assertEqual(list(formular["auswahlen"]), ["status"], formular)
+        ziel = next(
+            w for w in formular["auswahlen"]["status"] if w != self.objekt.status
+        )
+        daten = dict(formular["felder"])
+        daten["status"] = ziel
+        self.client.post(formular["adresse"], daten)
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.status, ziel)
+
+    def test_der_wechsel_ueber_das_formular_der_seite_wird_protokolliert(self):
+        """Die zweite Haelfte der Wirkung. Ein Wechsel ohne Eintrag liesse
+        sich spaeter nicht mehr nachlesen, und der Zeuge darueber saehe
+        nichts davon."""
+        formular = self._formular("/status/")
+        ziel = next(
+            w for w in formular["auswahlen"]["status"] if w != self.objekt.status
+        )
+        daten = dict(formular["felder"])
+        daten["status"] = ziel
+        self.client.post(formular["adresse"], daten)
+        self.assertEqual(self.objekt.statusaenderungen.count(), 1)
+
+    def test_das_statusformular_bietet_alle_sechs_status_an(self):
+        formular = self._formular("/status/")
+        self.assertEqual(
+            sorted(formular["auswahlen"]["status"]), sorted(s.value for s in Status)
+        )
+
+    def test_die_auswahl_zeigt_den_gespeicherten_status_vorgewaehlt(self):
+        """Die Auswahl IST die Anzeige des aktuellen Status an diesem
+        Formular. Ohne `selected` stuende dort immer der erste Eintrag, und
+        wer den Status nur ablesen wollte, laese den falschen."""
+        self.objekt.status_setzen(self.person, Status.HEISSE_SPUR)
+        inhalt = self._seite().content.decode()
+        treffer = re.search(
+            r'<option value="([^"]*)"\s+selected', inhalt
+        )
+        self.assertIsNotNone(treffer, "Kein Eintrag ist vorgewaehlt.")
+        self.assertEqual(treffer.group(1), Status.HEISSE_SPUR)
+
+    # --- Notiz -------------------------------------------------------------
+
+    def test_das_notizformular_der_seite_speichert_eine_notiz(self):
+        formular = self._formular("/notiz/")
+        self.assertEqual(len(formular["textbereiche"]), 1, formular)
+        daten = dict(formular["felder"])
+        daten[formular["textbereiche"][0]] = "Dach sieht neu aus"
+        self.client.post(formular["adresse"], daten)
+        self.assertEqual(
+            Notiz.objects.get(objekt=self.objekt).text, "Dach sieht neu aus"
+        )
+
+    def test_die_gespeicherte_notiz_steht_danach_auf_der_seite(self):
+        """Die andere Haelfte: gespeichert und nicht angezeigt waere eine
+        Notiz, die niemand wiederfindet."""
+        formular = self._formular("/notiz/")
+        daten = dict(formular["felder"])
+        daten[formular["textbereiche"][0]] = "Dach sieht neu aus"
+        self.client.post(formular["adresse"], daten)
+        self.assertIn("Dach sieht neu aus", block(self._seite(), "notizen").text)
+
+    # --- Bearbeiten --------------------------------------------------------
+
+    def test_der_bearbeiten_verweis_fuehrt_auf_das_formular(self):
+        """Kein Formular, aber die haeufigste Handlung der Seite - und beim
+        Umzug in den Datenblock genauso leicht zu verlieren.
+
+        Eingegrenzt auf die Objektspalte: dort ist er zugesagt.
+        """
+        ziel = reverse("objekt_bearbeiten", args=[self.objekt.pk])
+        self.assertIn(ziel, block(self._seite(), "objektspalte").verweise())
+        self.assertEqual(self.client.get(ziel).status_code, 200)
+
+
+class FokusumrissTests(TestCase):
+    """Zusage 9: `:focus-visible` ist sichtbar, an Knoepfen, Links und Feldern.
+
+    Der Qualitaetsboden aus `01` vom 29.08., und bis zum 14.09. ohne Zeugen.
+    Wer die Seite mit der Tastatur bedient, sieht ohne ihn nicht, wo er steht -
+    und genau das faellt niemandem auf, der mit der Maus prueft.
+
+    DIESER ZEUGE MISST KEINE STRUKTUR. Er sagt nicht, wie viele Regeln es gibt,
+    wo sie stehen, ob sie in einem Media-Block liegen oder ob eine einzige alle
+    Faelle traegt - die Datei darf das halten, wie sie will. Gemessen wird die
+    Zusage an den Nutzer: fuer jede bedienbare Art gibt es eine Regel, die
+    greift, und sie zeichnet einen Umriss mit Versatz. Das ist dasselbe
+    Kriterium, nach dem `StylesheetKorrekturenTests` am 02.09. durchgesehen
+    worden ist.
+    """
+
+    #: Alles, was auf der Objektansicht den Fokus bekommen kann. `a` fuer den
+    #: Verweis aufs Inserat und das Loeschen, `button` fuer Votum, Status und
+    #: Notiz, die drei Feldarten fuer Auswahl und Textfelder.
+    BEDIENBAR = ("a", "button", "input", "select", "textarea")
+
+    def _quelle(self):
+        # Kommentare zuerst weg: sie enthalten geschweifte Klammern und
+        # Beispielregeln, und beides verwirrt jede Zerlegung darunter.
+        roh = (settings.BASE_DIR / "static" / "objektradar.css").read_text(encoding="utf-8")
+        return re.sub(r"/\*.*?\*/", " ", roh, flags=re.S)
+
+    def _regel_fuer(self, art):
+        """Die Angaben der ersten Regel, die den Fokus DIESER Art zeichnet."""
+        for waehler, angaben in re.findall(
+            r"([^{}]*:focus-visible[^{}]*)\{([^{}]*)\}", self._quelle()
+        ):
+            for teil in (t.strip() for t in waehler.split(",")):
+                trifft = teil == ":focus-visible" or re.search(
+                    r"(^|[\s>+~])%s:focus-visible$" % re.escape(art), teil
+                )
+                if trifft and "outline" in angaben:
+                    return angaben
+        return None
+
+    def test_die_datei_fuehrt_ueberhaupt_eine_fokusregel(self):
+        """Riegel gegen die Zeugen unten im Vakuum: fände die Zerlegung nie
+        etwas, waere jedes `assertIsNone` von selbst aussagelos."""
+        self.assertIn(":focus-visible", self._quelle())
+
+    def test_jede_bedienbare_art_bekommt_einen_umriss(self):
+        for art in self.BEDIENBAR:
+            with self.subTest(art=art):
+                angaben = self._regel_fuer(art)
+                self.assertIsNotNone(angaben, f"{art} bekommt keinen Fokusumriss")
+                self.assertRegex(angaben, r"outline:[^;]*[1-9]")
+
+    def test_der_umriss_steht_mit_versatz(self):
+        """Ohne Versatz liegt er auf dem Rand des Elements und ist an einem
+        Feld mit eigenem Rahmen kaum vom Rahmen zu unterscheiden."""
+        for art in self.BEDIENBAR:
+            with self.subTest(art=art):
+                treffer = re.search(
+                    r"outline-offset:\s*([\d.]+)", self._regel_fuer(art) or ""
+                )
+                self.assertIsNotNone(treffer, f"{art} bekommt keinen Versatz")
+                self.assertGreater(float(treffer.group(1)), 0)
+
+    def test_der_standardumriss_wird_nirgends_ersatzlos_entfernt(self):
+        """Der haeufigste Weg, die Zusage zu verlieren: irgendwo steht
+        `outline: none`, um einen Rahmen zu glaetten, und die Tastaturbedienung
+        ist an dieser Stelle still weg.
+
+        Erlaubt bleibt es dort, wo dieselbe Regel einen Ersatz setzt.
+        """
+        for waehler, angaben in re.findall(
+            r"([^{}]+)\{([^{}]*)\}", self._quelle()
+        ):
+            if re.search(r"outline:\s*(none|0)\b", angaben):
+                with self.subTest(waehler=waehler.strip()):
+                    self.assertRegex(angaben, r"(box-shadow|border|background):")

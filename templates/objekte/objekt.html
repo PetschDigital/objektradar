@@ -4,9 +4,34 @@
 {% block titel %}{{ objekt }} · Objektradar{% endblock %}
 
 {% block inhalt %}
+  {% comment %}
+    ZWEISPALTIG seit dem 14.09., nach `Entwurf_Objektansicht.html`. Die
+    Ordnung der Seite ist die vom 03.09. und stimmt - sie beantwortet zwei
+    Fragen: lohnt das Objekt, und was tue ich damit. Was nicht stimmte, war
+    die Gestalt: zwei Drittel der Breite blieben leer, weil alles in einer
+    Kolonne von 30rem untereinander stand.
+
+    Jetzt beantwortet die FLAECHE dieselben zwei Fragen. Oben ueber die volle
+    Breite, was das Objekt ist; darunter links das Objekt, rechts das
+    Handeln; im Fuss der Beleg und das Loeschen.
+
+    Diese Runde aendert Gestalt und Markup, KEINE Funktion. Kein Feld kommt
+    dazu, keins faellt weg, keine Ansicht aendert ihr Verhalten. Was der
+    Entwurf weglaesst, der Bestand aber fuehrt - Preisaenderung,
+    Statusverlauf, die Ueberschrift ueber den fremden Vota -, bleibt: der
+    Entwurf ist an EINEM Beispielobjekt gezeichnet und laesst weg, was dort
+    nicht vorkam. Ein Umbau, der ein Feld verliert, faellt niemandem auf.
+
+    Die Reihenfolge im Markup ist zugleich die Reihenfolge auf dem Handy,
+    denn das Raster ordnet nicht um. Damit rueckt der PREISVERLAUF vor das
+    Votum. Das ist gewollt - erst beurteilen, dann handeln - und eine
+    Aenderung, keine Nebenwirkung.
+  {% endcomment %}
   <p class="zurueck"><a href="{% url 'objektliste' %}">zurück zur Liste</a></p>
 
   {% comment %}
+    --- Kopf, volle Breite ---------------------------------------------
+
     Die Bezeichnung kommt als `{{ objekt }}` aus dem Modell - Titel,
     ersatzweise Portal und Inserats-ID, ersatzweise die URL - und wird hier
     nicht nachgebaut. Zwei Formeln fuer eine Regel driften auseinander.
@@ -16,84 +41,116 @@
     die Breite, und eine waagerecht scrollende Seite ist am Handy nicht mehr
     zu lesen. Das `title` haelt den vollen Text fuer den Fall bereit, dass die
     Kappung wirklich greift.
-  {% endcomment %}
-  {% comment %}
-    Bezeichnung und Zeile darunter stecken seit dem 04.09. in einem gemeinsamen
-    Block, und der traegt die Statusklasse. Damit bekommt die Objektansicht
-    dieselbe FARBKANTE wie die Zeile in der Liste - eines der Bauteile, die
-    aus dem Entwurf uebernommen werden, damit Liste und Ansicht nicht
-    auseinanderlaufen.
 
-    Das Huellelement ist der einzige Eingriff in die Ordnung dieser Seite. Die
-    Reihenfolge der Bloecke bleibt unveraendert: sie ist am 03.09. gebaut
-    worden und stimmt.
+    Der Kopfblock traegt seit dem 04.09. die Statusklasse und bekommt damit
+    dieselbe FARBKANTE wie die Zeile in der Liste. Er bleibt ein `<div>` und
+    wird KEIN `<header>`, obwohl der Entwurf eines zeichnet: die Regeln fuer
+    `header`, `header form` und `header button` im Stylesheet stehen
+    ungeschuetzt und gelten fuer jedes `<header>` der Seite. Ein zweites im
+    Inhalt bekaeme Rahmen, Grund und die flachgelegten Knoepfe der
+    Seitenleiste.
+
+    Die Statusmarke steht seit dem 14.09. NEBEN der Bezeichnung und nicht
+    mehr in der Zeile darunter: sie ist die erste Frage an ein Objekt, und in
+    der Zeile mit Ort und Verweis stand sie eine Stufe zu tief. Bauteil und
+    Klasse sind unveraendert - dieselbe Pille wie in der Liste.
   {% endcomment %}
   <div class="kopfblock status-{{ objekt.status }}">
-  <h1 class="bezeichnung" title="{{ objekt }}">{{ objekt }}</h1>
+    <div class="kopfzeile">
+      <h1 class="bezeichnung" title="{{ objekt }}">{{ objekt }}</h1>
+      <span class="statusmarke status-{{ objekt.status }}">{{ objekt.get_status_display }}</span>
+    </div>
 
-  {% comment %}
-    Die ruhige Zeile unter der Bezeichnung. Der Status ist eine MARKE und kein
-    Fliesstext: er wird gesucht, nicht gelesen, und in einem Satz mit Ort und
-    Link findet ihn das Auge nicht wieder.
+    {% comment %}
+      Die ruhige Zeile unter der Bezeichnung. Sie traegt GENAU die beiden
+      Ortsangaben, die der Datenblock nicht fuehrt - Ort und Land -, dazu den
+      Verweis aufs Inserat. Sonst nichts.
 
-    Die Klasse kommt aus dem GESPEICHERTEN Wert (`objekt.status`), nicht aus
-    der Beschriftung: die Beschriftung darf sich ändern, der Schlüssel nicht.
-    Damit gibt es keine zweite Zuordnungstabelle zwischen Status und Farbe —
-    das Stylesheet führt je Schlüssel genau eine Regel.
-  {% endcomment %}
-  <p class="objektzeile">
-    <span class="ort">{{ objekt.ort|default:"—" }}{% if objekt.land %} · {{ objekt.get_land_display }}{% endif %}</span>
-    <span class="statusmarke status-{{ objekt.status }}">{{ objekt.get_status_display }}</span>
-    <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
-  </p>
+      ZURUECKGEDREHT am 14.09., noch in derselben Runde. Zwischenzeitlich
+      stand hier die Unterzeile der Liste: Stadtteil, Ort, Region, Land,
+      Zustand. Das war ein Fehler in der Bauspezifikation, und der Schaden
+      ist belegt - `test_jedes_feld_des_datenblocks_steht_auf_der_seite`
+      wurde dadurch BLIND: der Zeuge prueft gegen die ganze Antwort, fand
+      das Wort "Zustand" in dieser Zeile und blieb gruen, waehrend das Feld
+      aus dem Datenblock schon entfernt war. Aufgefallen ist das in der
+      Sabotage-Gegenprobe.
+
+      Die Entscheidung vom 03.09. gilt: derselbe Wert zweimal auf einer
+      Seite sagt nichts Zweites. In der LISTE ist die Unterzeile die einzige
+      Quelle und traegt deshalb alles; in der ANSICHT steht der Datenblock
+      daneben, und Stadtteil, Region und Zustand gehoeren allein dorthin -
+      dort ist ein leeres Feld die Aufforderung, es zu fuellen.
+
+      Ort und Land stehen im Datenblock NICHT und gehoeren deshalb hierher.
+      Der Ort traegt seinen Strich, wenn er fehlt: diese Zeile ist seine
+      einzige Stelle auf der Seite, und eine Luecke liest sich wie eine
+      Angabe.
+
+      Sie heisst `objektzeile` und nicht `unterzeile`: so heisst die Zeile
+      der LISTE, und deren Regel setzt Trennpunkte ueber `::after`. Derselbe
+      Name an zwei Stellen trifft frueher oder spaeter die falsche.
+    {% endcomment %}
+    <p class="objektzeile">
+      <span class="ort">{{ objekt.ort|default:"—" }}{% if objekt.land %} · {{ objekt.get_land_display }}{% endif %}</span>
+      <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
+    </p>
   </div>
 
   {% comment %}
-    Zahlen zuerst: der Block, der die Kaufentscheidung traegt. Der Kaufpreis
-    steht groesser als alles andere auf der Seite, die Preisaenderung
-    darunter und kleiner - dieselbe Bauform und dieselben Klassen wie in der
-    Liste, damit eine Senkung an beiden Stellen gleich aussieht.
+    --- Zahlenband, volle Breite ----------------------------------------
+
+    Der Block, der die Kaufentscheidung traegt. Der Kaufpreis steht als
+    groesste Zahl der Seite, der Preis je m² daneben - die Zahlenhierarchie
+    vom 05.09., dieselbe wie in der Liste.
+
+    NEU am 14.09. ist, dass der Kaufpreis seine Beschriftung bekommt und mit
+    in die Kennzahlenreihe rueckt. Er stand bis dahin als blosse Zahl ueber
+    dem Block; unter vier beschrifteten Angaben war er die einzige ohne.
 
     Geprueft wird auf `is not None` und NICHT auf den Wahrheitswert: ein
     Kaufpreis von 0 faellt sonst als "kein Preis erfasst" durch, und die
     Angabe verschwaende wortlos.
 
     Fehlt ein Wert, steht ein gedaempfter Strich da und nicht nichts. Eine
-    leere Stelle liest sich wie eine Null, und eine Null ist etwas anderes als
-    "nicht bekannt".
-  {% endcomment %}
-  {% comment %}
+    leere Stelle liest sich wie eine Null, und eine Null ist etwas anderes
+    als "nicht bekannt".
+
     Der Block heisst `zahlenblock` und nicht `zahlen`: so heisst seit dem
-    04.09. die Zahlenreihe einer LISTENZEILE, und die ist etwas anderes -
-    vier Werte nebeneinander statt eines grossen Preises mit Kennzahlen
-    darunter. Ein Klassenname mit zwei Bedeutungen trifft frueher oder
-    spaeter die falsche Stelle; hier hat er es sofort getan.
+    04.09. die Zahlenreihe einer LISTENZEILE. Unter EINEM Namen trug er ihr
+    Flaeche und Innenabstand mit ein - jede Listenzeile bekam einen getoenten
+    Kasten, den niemand bestellt hatte. Der Entwurf schreibt `zahlen`; genau
+    hier wird ihm nicht gefolgt.
   {% endcomment %}
   <div class="zahlenblock">
-    <p class="kaufpreis">
-      {% if objekt.aktueller_preis is not None %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}<span class="fehlt">—</span>{% endif %}
-    </p>
-    {% comment %}
-      Dieselbe Bauform und dieselben Klassen wie in der Liste, damit eine
-      Senkung an beiden Stellen gleich aussieht: Pfeil, Betrag, dieselbe
-      Farbe. Die Ansicht hat Platz und zeigt deshalb MEHR als die Liste - den
-      vorherigen Preis, den Prozentwert und das volle Datum. Die Liste kuerzt
-      auf Betrag und Tag; hier ist der Ort, an dem der Vorgang nachlesbar
-      steht.
-
-      Gerechnet wird an beiden Stellen aus DEMSELBEN `preisaenderung()`. Zwei
-      Rechenwege fuer dieselbe Regel driften auseinander.
-    {% endcomment %}
-    {% if preisaenderung %}
-      <p class="preisaenderung{% if preisaenderung.senkung %} senkung{% endif %}">
-        {% if preisaenderung.senkung %}↓{% else %}↑{% endif %} {{ preisaenderung.betrag|floatformat:0 }} €
-        · <s>{{ preisaenderung.vorher|floatformat:0 }} €</s>
-        · {% if preisaenderung.prozent > 0 %}+{% endif %}{{ preisaenderung.prozent|floatformat:"-1" }} %
-        · {{ preisaenderung.datum|date:"d.m.Y" }}
-      </p>
-    {% endif %}
-
     <dl class="kennzahlen">
+      <div class="preis">
+        <dt>Kaufpreis</dt>
+        <dd class="kaufpreis">
+          {% if objekt.aktueller_preis is not None %}{{ objekt.aktueller_preis|floatformat:0 }} €{% else %}<span class="fehlt">—</span>{% endif %}
+          {% comment %}
+            Dieselbe Bauform und dieselben Klassen wie in der Liste, damit
+            eine Senkung an beiden Stellen gleich aussieht: Pfeil, Betrag,
+            dieselbe Farbe. Die Ansicht hat Platz und zeigt deshalb MEHR als
+            die Liste - den vorherigen Preis, den Prozentwert und das volle
+            Datum.
+
+            Sie steht IM Kaufpreisfeld und nicht unter dem ganzen Band: sie
+            ist eine Aussage ueber diese eine Zahl. Der Entwurf zeigt sie
+            gar nicht - sein Beispielobjekt hat keine.
+
+            Gerechnet wird an beiden Stellen aus DEMSELBEN
+            `preisaenderung()`. Zwei Rechenwege fuer dieselbe Regel driften.
+          {% endcomment %}
+          {% if preisaenderung %}
+            <p class="preisaenderung{% if preisaenderung.senkung %} senkung{% endif %}">
+              {% if preisaenderung.senkung %}↓{% else %}↑{% endif %} {{ preisaenderung.betrag|floatformat:0 }} €
+              · <s>{{ preisaenderung.vorher|floatformat:0 }} €</s>
+              · {% if preisaenderung.prozent > 0 %}+{% endif %}{{ preisaenderung.prozent|floatformat:"-1" }} %
+              · {{ preisaenderung.datum|date:"d.m.Y" }}
+            </p>
+          {% endif %}
+        </dd>
+      </div>
       <div>
         <dt>Preis je m²</dt>
         <dd>{% if objekt.qm_preis %}{{ objekt.qm_preis|floatformat:0 }} €/m²{% else %}<span class="fehlt">—</span>{% endif %}</dd>
@@ -114,247 +171,328 @@
   </div>
 
   {% comment %}
-    Bilder sind nur verlinkt, nie gespeichert. Daraus folgt beides hier:
-    `loading="lazy"`, damit der Browser beim Portal nur holt, was sichtbar
-    ist, und `referrerpolicy="no-referrer"`, weil Portale Bildadressen an den
-    Verweis binden.
+    --- Zwei Spalten ab 64rem -------------------------------------------
 
-    Ein einfaches Raster, keine Galerie und kein Vergroessern: das braeuchte
-    JavaScript, und wer gross sehen will, klickt aufs Inserat. Verschwindet
-    ein Inserat, bleibt eine ruhige Flaeche - kein `onerror`, kein kaputtes
-    Symbol.
+    Links das Objekt, rechts das Handeln. Die rechte Spalte ist flaechig
+    hinterlegt, die linke nicht - das trennt Information von Bedienung, ohne
+    es zu beschriften.
 
-    Ohne Bilder steht der Block gar nicht da. Die Platzhalterflaeche aus 4.4
-    haelt die Zeilenhoehe der LISTE gleich; hier gibt es keine Zeile, die
-    springen koennte, und ein leerer Kasten unter einer Ueberschrift "Bilder"
-    waere eine Angabe ueber nichts.
+    Der Umbruchpunkt liegt im Stylesheet und nicht hier. Das Markup weiss
+    nichts davon: unter der Grenze faellt dasselbe Markup untereinander.
   {% endcomment %}
-  {% if objekt.bilder.all %}
-    <h2>Bilder</h2>
-    <div class="bilder">
-      {% for bild in objekt.bilder.all %}
-        <img src="{{ bild.url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
-      {% endfor %}
+  <div class="spalten">
+
+    {# ===== Links: das Objekt ===== #}
+    <div class="objektspalte">
+
+      {% comment %}
+        Bilder sind nur verlinkt, nie gespeichert. Daraus folgt beides hier:
+        `loading="lazy"`, damit der Browser beim Portal nur holt, was
+        sichtbar ist, und `referrerpolicy="no-referrer"`, weil Portale
+        Bildadressen an den Verweis binden.
+
+        Ein einfaches Raster, keine Galerie und kein Vergroessern: das
+        braeuchte JavaScript, und wer gross sehen will, klickt aufs Inserat.
+        Verschwindet ein Inserat, bleibt eine ruhige Flaeche - kein
+        `onerror`, kein kaputtes Symbol.
+
+        Ohne Bilder steht der Block gar nicht da, anders als im Entwurf: ein
+        leerer Kasten unter einer Ueberschrift "Bilder" waere eine Angabe
+        ueber nichts. Der Entwurf ist an einem Objekt mit vier Bildern
+        gezeichnet und kennt den Fall nicht.
+      {% endcomment %}
+      {% if objekt.bilder.all %}
+        <section class="block">
+          <h2>Bilder</h2>
+          <div class="bilder">
+            {% for bild in objekt.bilder.all %}
+              <img src="{{ bild.url }}" alt="" loading="lazy" referrerpolicy="no-referrer">
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+
+      {% comment %}
+        ALLE am Objekt hinterlegten Felder, auch die leeren. Ein leeres Feld
+        ist die Aufforderung, es zu fuellen - genau dafuer gibt es diese
+        Ansicht, und ein ausgeblendetes Feld faellt niemandem auf.
+
+        Ort, Land und die Zahlen stehen nicht noch einmal hier: die einen
+        tragen die Zeile unter der Bezeichnung, die anderen das Band
+        darueber. Stadtteil, Region und Zustand stehen dafuer ALLEIN hier
+        und nicht auch oben. Derselbe Wert zweimal sagt nichts Zweites -
+        Entscheidung vom 03.09., am 14.09. bestaetigt, nachdem die
+        zwischenzeitliche Doppelung einen Zeugen blind gemacht hatte.
+      {% endcomment %}
+      <section class="block">
+        <h2>Daten</h2>
+        <dl class="daten">
+          <dt>Objekttyp</dt>
+          <dd>{% if objekt.objekttyp %}{{ objekt.get_objekttyp_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Zimmer</dt>
+          <dd>{% if objekt.zimmer is not None %}{{ objekt.zimmer|floatformat:"-1" }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Baujahr</dt>
+          <dd>{% if objekt.baujahr %}{{ objekt.baujahr|unlocalize }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Zustand</dt>
+          <dd>{{ objekt.get_zustand_display }}</dd>
+          {% comment %}
+            Der Stadtteil steht HIER und nicht oben in der Objektzeile: die
+            Objektzeile traegt nur, was der Datenblock nicht fuehrt. Und er
+            steht VOR der Region, weil die Ortsebenen von fein nach grob
+            stehen: Stadtteil (Lage in der Gemeinde), dann Region
+            (Teneriffa, Costa del Sol). Leer ist er bei jedem Portal ausser
+            Idealista - und leer ist er hier die Aufforderung.
+          {% endcomment %}
+          <dt>Stadtteil</dt>
+          <dd>{% if objekt.stadtteil %}{{ objekt.stadtteil }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Region</dt>
+          <dd>{% if objekt.region %}{{ objekt.region }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Portal</dt>
+          <dd>{% if objekt.portal %}{{ objekt.get_portal_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Inserats-ID</dt>
+          <dd>{% if objekt.inserats_id %}{{ objekt.inserats_id }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Quelle</dt>
+          <dd>{{ objekt.get_quelle_display }}</dd>
+          <dt>Beschreibung</dt>
+          <dd>{% if objekt.beschreibung %}{{ objekt.beschreibung|linebreaksbr }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+        </dl>
+
+        {% comment %}
+          Bearbeiten ist die haeufigste Handlung dieser Seite und steht
+          deshalb als Knopf am Datenblock. Als kleiner Textlink neben "Notiz
+          speichern" wurde er uebersehen - und damit sah die seltenere
+          Handlung wichtiger aus als die haeufigere.
+
+          Ein `<a>` und kein `<button>`: es fuehrt auf eine andere Seite und
+          veraendert nichts. Der Entwurf zeichnet einen `<button>`, weil in
+          einem Entwurf nichts irgendwohin fuehrt. Wie es aussieht,
+          entscheidet die Klasse.
+
+          `knopfzeile` traegt seit dem 14.09. den Abstand zwischen Feld und
+          Knopf - EINE Regel fuer alle vier Stellen dieser Seite, nicht
+          viermal dieselbe Zahl. Hier steht kein Feld darueber, aber
+          dieselbe Zeile: ein zweites Bauteil fuer denselben Zweck waere ein
+          zweites Aussehen.
+        {% endcomment %}
+        <div class="knopfzeile">
+          <a class="knopf" href="{% url 'objekt_bearbeiten' objekt.pk %}">Bearbeiten</a>
+        </div>
+      </section>
+
+      {% comment %}
+        Der Preisverlauf ist Beleg, keine Vergleichsliste - eine Tabelle mit
+        Linien, mehr nicht.
+
+        Er steht seit dem 14.09. VOR dem Votum statt hinter den Notizen.
+        Damit ist er auf dem Handy die letzte Angabe zum Objekt, bevor das
+        Handeln beginnt.
+
+        Ob eine Preissenkung in dieser Tabelle farbig markiert wird, zeigt
+        der Entwurf - entschieden ist es NICHT. Bleibt wie im Bestand, bis
+        Steffen es entscheidet.
+      {% endcomment %}
+      {% if objekt.preise.all %}
+        <section class="block">
+          <h2>Preisverlauf</h2>
+          <table class="verlaufstabelle">
+            <thead><tr><th>Datum</th><th>Preis</th><th>Quelle</th></tr></thead>
+            <tbody>
+              {% for eintrag in objekt.preise.all %}
+                <tr>
+                  <td>{{ eintrag.datum|date:"d.m.Y" }}</td>
+                  <td>{{ eintrag.preis|floatformat:0 }} €</td>
+                  <td>{{ eintrag.get_quelle_display }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
     </div>
-  {% endif %}
 
-  {% comment %}
-    ALLE am Objekt hinterlegten Felder, auch die leeren. Ein leeres Feld ist
-    die Aufforderung, es zu fuellen - genau dafuer gibt es diese Ansicht, und
-    ein ausgeblendetes Feld faellt niemandem auf.
+    {# ===== Rechts: das Handeln ===== #}
+    <div class="bedienspalte">
 
-    Ort, Land und die Zahlen stehen nicht noch einmal hier: die einen tragen
-    die Zeile unter der Bezeichnung, die anderen den Block darueber. Derselbe
-    Wert zweimal sagt nichts Zweites.
-  {% endcomment %}
-  <h2>Daten</h2>
-  <dl class="daten">
-    <dt>Objekttyp</dt>
-    <dd>{% if objekt.objekttyp %}{{ objekt.get_objekttyp_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Zimmer</dt>
-    <dd>{% if objekt.zimmer is not None %}{{ objekt.zimmer|floatformat:"-1" }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Baujahr</dt>
-    <dd>{% if objekt.baujahr %}{{ objekt.baujahr|unlocalize }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Zustand</dt>
-    <dd>{{ objekt.get_zustand_display }}</dd>
-    {% comment %}
-      Der Stadtteil steht HIER und nicht oben in der Objektzeile neben dem
-      Ort: die Objektzeile ist die ruhige Zeile unter der Bezeichnung und
-      traegt nur, was die Liste auch traegt. Der Datenblock ist der Ort, an
-      dem ein LEERES Feld die Aufforderung ist, es zu fuellen - und leer ist
-      der Stadtteil bei jedem Portal ausser Idealista.
+      {% comment %}
+        Das Votum ist die Kernfunktion der Gruppe und bekommt deshalb den
+        ersten Block der Bedienspalte. Die drei Wertungen stehen als drei
+        getrennte Knoepfe da, nicht in einer Auswahlliste: eine Wahl aus
+        dreien liest man auf einen Blick, eine zugeklappte Liste nicht.
 
-      Vor `Region`, weil die Ortsebenen von fein nach grob stehen: Stadtteil
-      (Lage in der Gemeinde), dann Region (Teneriffa, Costa del Sol). Der Ort
-      selbst steht als Gemeinde oben in der Objektzeile und wird von dort
-      NICHT hierher geholt - das waere dieselbe Angabe zweimal auf einer
-      Seite.
-    {% endcomment %}
-    <dt>Stadtteil</dt>
-    <dd>{% if objekt.stadtteil %}{{ objekt.stadtteil }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Region</dt>
-    <dd>{% if objekt.region %}{{ objekt.region }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Portal</dt>
-    <dd>{% if objekt.portal %}{{ objekt.get_portal_display }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Inserats-ID</dt>
-    <dd>{% if objekt.inserats_id %}{{ objekt.inserats_id }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-    <dt>Quelle</dt>
-    <dd>{{ objekt.get_quelle_display }}</dd>
-    <dt>Beschreibung</dt>
-    <dd>{% if objekt.beschreibung %}{{ objekt.beschreibung|linebreaksbr }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
-  </dl>
+        Reihenfolge und Schreibweise von `value` und `aria-pressed` sind
+        unveraendert - `test_das_eigene_votum_ist_erkennbar` misst genau
+        daran, dass die eigene Wertung markiert ist.
+      {% endcomment %}
+      <section class="block handeln">
+        <h2>Votum</h2>
+        <form method="post" action="{% url 'votum_setzen' objekt.pk %}" class="votumformular">
+          {% csrf_token %}
+          <label for="id_begruendung">Begründung</label>
+          <textarea name="begruendung" id="id_begruendung" rows="2">{{ eigenes_votum.begruendung|default:"" }}</textarea>
+          <div class="knopfzeile wertungen">
+            {% for wert, beschriftung in wertungen %}
+              <button type="submit" name="wertung" value="{{ wert }}"{% if eigenes_votum.wertung == wert %} aria-pressed="true"{% endif %} class="wertung{% if eigenes_votum.wertung == wert %} gewaehlt{% endif %}">{{ beschriftung }}{% if eigenes_votum.wertung == wert %} ✓{% endif %}</button>
+            {% endfor %}
+          </div>
+        </form>
 
-  {% comment %}
-    Bearbeiten ist die haeufigste Handlung dieser Seite und steht deshalb als
-    Knopf am Datenblock. Als kleiner Textlink neben "Notiz speichern" wurde er
-    uebersehen - und damit sah die seltenere Handlung wichtiger aus als die
-    haeufigere.
+        {% comment %}
+          UMGEDREHT am 04.09. Bis dahin galt: alle sehen alle Vota, kein
+          verdecktes Abstimmen. Jetzt sieht die Vota der anderen nur, wer an
+          DIESEM Objekt selbst gestimmt hat. Der Grund ist der Ankereffekt:
+          wer "3 dafuer" liest, stimmt eher zu, und dann misst das Votum
+          eine Meinung plus vier Bestaetigungen.
 
-    Ein `<a>` und kein `<button>`: es fuehrt auf eine andere Seite und
-    veraendert nichts. Wie es aussieht, entscheidet die Klasse.
-  {% endcomment %}
-  <p class="handlung"><a class="knopf" href="{% url 'objekt_bearbeiten' objekt.pk %}">Bearbeiten</a></p>
+          Das eigene Votum steht oben im Formular und ist dort markiert -
+          immer, auch vor der Freischaltung. Es ist die Voraussetzung dafuer,
+          es aendern zu koennen, und es anzuzeigen verraet niemandem etwas,
+          das er nicht selbst geschrieben hat.
 
-  {% comment %}
-    Das Votum ist die Kernfunktion der Gruppe und bekommt deshalb einen
-    eigenen Block. Die drei Wertungen stehen als drei getrennte Knoepfe da,
-    nicht in einer Auswahlliste: eine Wahl aus dreien liest man auf einen
-    Blick, eine zugeklappte Liste nicht.
+          Verdeckt heisst NICHT gerendert: weder Wertung noch Begruendung
+          noch Person stehen im ausgelieferten Markup. Kein `hidden`, keine
+          Klasse, kein Stylesheet - wer den Quelltext ansieht, findet sie
+          nicht. Der Block ist am 14.09. UMGEZOGEN und steht jetzt im selben
+          Kasten wie das Formular; die Zusage haengt an den drei Zweigen und
+          nicht an der Stelle, und die Zweige sind unveraendert.
 
-    Reihenfolge und Schreibweise von `value` und `aria-pressed` sind
-    unveraendert - `test_das_eigene_votum_ist_erkennbar` misst genau daran,
-    dass die eigene Wertung markiert ist.
-  {% endcomment %}
-  <h2>Votum</h2>
-  <form method="post" action="{% url 'votum_setzen' objekt.pk %}" class="votumformular">
-    {% csrf_token %}
-    <label for="id_begruendung">Begründung</label>
-    <textarea name="begruendung" id="id_begruendung" rows="2">{{ eigenes_votum.begruendung|default:"" }}</textarea>
-    <div class="wertungen">
-      {% for wert, beschriftung in wertungen %}
-        <button type="submit" name="wertung" value="{{ wert }}"{% if eigenes_votum.wertung == wert %} aria-pressed="true"{% endif %} class="wertung{% if eigenes_votum.wertung == wert %} gewaehlt{% endif %}">{{ beschriftung }}{% if eigenes_votum.wertung == wert %} ✓{% endif %}</button>
-      {% endfor %}
+          Die Ueberschrift bleibt stehen, obwohl der Entwurf keine zeichnet.
+          Er zeigt den Zustand VOR der eigenen Stimme, in dem der Hinweis
+          sich selbst beschriftet; sobald jemand gestimmt hat, staende die
+          Liste ohne Beschriftung unter den Wertungsknoepfen.
+
+          Der dritte Zweig ("noch niemand") gehoert AUSDRUECKLICH hinter die
+          Freischaltung: er ist selbst eine Aussage ueber die Vota der
+          anderen - naemlich dass es keine gibt - und stuende er vorn, waere
+          er entweder ein verratener Zaehlstand oder, wenn drei gestimmt
+          haben, schlicht falsch.
+
+          `eigenes_votum` entscheidet, und nur es. Die Ansicht legt
+          `andere_vota` weiter fuer jeden Aufruf in den Kontext: zwei
+          Mechanismen fuer dieselbe Entscheidung verdecken sich gegenseitig,
+          und faellt der eine aus, haelt der andere den Zeugen gruen,
+          waehrend die Zusage schon weg ist.
+        {% endcomment %}
+        <h3>Vota der anderen</h3>
+        {% if not eigenes_votum %}
+          <p class="nichts">Sichtbar, sobald du selbst abgestimmt hast.</p>
+        {% elif andere_vota %}
+          <ul class="vota">
+            {% for votum in andere_vota %}
+              <li>
+                <span class="person">{{ votum.person.anzeigename }}</span>
+                <span class="wertung">{{ votum.get_wertung_display }}</span>
+                {% if votum.begruendung %}<span class="begruendung">{{ votum.begruendung }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="nichts">Von den anderen hat noch niemand abgestimmt.</p>
+        {% endif %}
+      </section>
+
+      {% comment %}
+        Die Statusauswahl hat seit dem 14.09. KEINE sichtbare Beschriftung
+        mehr. Sie trug bis dahin das Wort "Status" ein zweites Mal, direkt
+        unter der Ueberschrift, die dasselbe Wort traegt - zweimal dasselbe
+        Wort untereinander sagt nichts Zweites.
+
+        Ersatzlos gestrichen ist sie nicht: `aria-label` traegt sie weiter.
+        Ein Bedienelement ohne jede Beschriftung ist fuer eine Vorlesehilfe
+        eine Auswahl ohne Namen.
+
+        Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular -
+        der gespeicherte Wert steht als `selected` darin. Sie traegt deshalb
+        dieselbe Statusklasse wie die Marke oben und die Zellen der Liste.
+        Kein zweiter Marker daneben.
+      {% endcomment %}
+      <section class="block handeln">
+        <h2>Status</h2>
+        <form method="post" action="{% url 'status_setzen' objekt.pk %}" class="statuswechsel">
+          {% csrf_token %}
+          <select name="status" id="id_status" aria-label="Status" class="statuswahl status-{{ objekt.status }}">
+            {% for wert, beschriftung in statusauswahl %}
+              <option value="{{ wert }}"{% if objekt.status == wert %} selected{% endif %}>{{ beschriftung }}</option>
+            {% endfor %}
+          </select>
+          <div class="knopfzeile">
+            <button type="submit" class="ruhig">Status setzen</button>
+          </div>
+        </form>
+
+        {% comment %}
+          Der Statusverlauf gehoert zum Statusblock und steht darin. Der
+          Entwurf zeigt ihn nicht - sein Beispielobjekt hat keinen Wechsel
+          hinter sich.
+        {% endcomment %}
+        {% if statusaenderungen %}
+          <ul class="verlauf">
+            {% for aenderung in statusaenderungen %}
+              <li>{{ aenderung.datum|date:"d.m.Y H:i" }} — {{ aenderung.person.anzeigename|default:"—" }}: {{ aenderung.get_alter_status_display }} → {{ aenderung.get_neuer_status_display }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </section>
+
+      {% comment %}
+        Erst die bestehenden Notizen, dann das Eingabefeld. Andersherum stand
+        das Feld ueber dem, worauf es antwortet.
+      {% endcomment %}
+      <section class="block handeln">
+        <h2>Notizen</h2>
+        {% if notizen %}
+          <ul class="notizen">
+            {% for notiz in notizen %}
+              <li>
+                <span class="wann">{{ notiz.erstellt_am|date:"d.m.Y H:i" }} — {{ notiz.person.anzeigename }}</span>
+                <span class="text">{{ notiz.text|linebreaksbr }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="nichts">Noch keine Notiz.</p>
+        {% endif %}
+
+        <form method="post" action="{% url 'notiz_anlegen' objekt.pk %}" class="notizform">
+          {% csrf_token %}
+          <label for="id_text">Neue Notiz</label>
+          <textarea name="text" id="id_text" rows="3" required></textarea>
+          <div class="knopfzeile">
+            <button type="submit" class="ruhig">Notiz speichern</button>
+          </div>
+        </form>
+      </section>
+
     </div>
-  </form>
+  </div>
 
   {% comment %}
-    UMGEDREHT am 04.09. Bis dahin galt: alle sehen alle Vota, kein verdecktes
-    Abstimmen. Jetzt sieht die Vota der anderen nur, wer an DIESEM Objekt
-    selbst gestimmt hat. Der Grund ist der Ankereffekt: wer "3 dafuer" liest,
-    stimmt eher zu, und dann misst das Votum eine Meinung plus vier
-    Bestaetigungen.
+    --- Fuss, volle Breite ----------------------------------------------
 
-    Das eigene Votum steht oben im Formular und ist dort markiert - immer,
-    auch vor der Freischaltung. Es ist die Voraussetzung dafuer, es aendern zu
-    koennen, und es anzuzeigen verraet niemandem etwas, das er nicht selbst
-    geschrieben hat.
+    Beleg und Loeschen, durch eine Linie abgesetzt. Die Linie traegt seit dem
+    14.09. der Fuss selbst und nicht mehr ein `<hr>` davor: ein `<hr>` ist
+    ein inhaltlicher Themenwechsel, und der Fuss ist keiner.
 
-    Verdeckt heisst NICHT gerendert: weder Wertung noch Begruendung noch
-    Person stehen im ausgelieferten Markup. Kein `hidden`, keine Klasse, kein
-    Stylesheet - wer den Quelltext ansieht, findet sie nicht.
+    "Zuletzt gesehen" beantwortet die Frage, ob das Inserat noch am Markt
+    ist, und bleibt bis Schritt 2 leer - dann steht dort ein Strich und nicht
+    nichts.
 
-    Die Ueberschrift bleibt stehen. Sie sagt, was hier steht, sobald
-    freigeschaltet ist, und ohne sie haenge der Hinweis in der Luft.
+    Das LOESCHEN steht damit nicht mehr zwischen den Bedienelementen,
+    sondern unter der Seite. Es bleibt derselbe Weg ueber die
+    Bestaetigungsseite, Entscheidung vom 03.09.: ein `<a>` und kein
+    Formular, der Verweis fuehrt auf die Bestaetigung und veraendert nichts.
+    Geloescht wird erst durch den POST von dort.
 
-    Der dritte Zweig ("noch niemand") gehoert AUSDRUECKLICH hinter die
-    Freischaltung: er ist selbst eine Aussage ueber die Vota der anderen -
-    naemlich dass es keine gibt - und stuende er vorn, waere er entweder ein
-    verratener Zaehlstand oder, wenn drei gestimmt haben, schlicht falsch.
-
-    `eigenes_votum` entscheidet, und nur es. Die Ansicht legt `andere_vota`
-    weiter fuer jeden Aufruf in den Kontext: zwei Mechanismen fuer dieselbe
-    Entscheidung verdecken sich gegenseitig, und faellt der eine aus, haelt
-    der andere den Zeugen gruen, waehrend die Zusage schon weg ist.
+    Deutlich schwaecher gewichtet als "Bearbeiten" - kein Knopf in derselben
+    Groesse, sondern ein gedaempfter Textlink. Loeschen ist die seltenste
+    Handlung dieser Seite und darf nicht aussehen wie die haeufigste.
   {% endcomment %}
-  <h3>Vota der anderen</h3>
-  {% if not eigenes_votum %}
-    <p class="nichts">Sichtbar, sobald du selbst abgestimmt hast.</p>
-  {% elif andere_vota %}
-    <ul class="vota">
-      {% for votum in andere_vota %}
-        <li>
-          <span class="person">{{ votum.person.anzeigename }}</span>
-          <span class="wertung">{{ votum.get_wertung_display }}</span>
-          {% if votum.begruendung %}<span class="begruendung">{{ votum.begruendung }}</span>{% endif %}
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="nichts">Von den anderen hat noch niemand abgestimmt.</p>
-  {% endif %}
-
-  <h2>Status</h2>
-  <form method="post" action="{% url 'status_setzen' objekt.pk %}" class="statuswechsel">
-    {% csrf_token %}
-    {% comment %}
-      Die Auswahl IST die Anzeige des aktuellen Status an diesem Formular -
-      der gespeicherte Wert steht als `selected` darin. Sie trägt deshalb
-      dieselbe Statusklasse wie die Marke oben und die Zellen der Liste. Kein
-      zweiter Marker daneben: derselbe Wert zweimal auf einer Seite sagt
-      nichts Zweites.
-    {% endcomment %}
-    <label for="id_status">Status</label>
-    <select name="status" id="id_status" class="statuswahl status-{{ objekt.status }}">
-      {% for wert, beschriftung in statusauswahl %}
-        <option value="{{ wert }}"{% if objekt.status == wert %} selected{% endif %}>{{ beschriftung }}</option>
-      {% endfor %}
-    </select>
-    <button type="submit" class="ruhig">Status setzen</button>
-  </form>
-
-  {% if statusaenderungen %}
-    <ul class="verlauf">
-      {% for aenderung in statusaenderungen %}
-        <li>{{ aenderung.datum|date:"d.m.Y H:i" }} — {{ aenderung.person.anzeigename|default:"—" }}: {{ aenderung.get_alter_status_display }} → {{ aenderung.get_neuer_status_display }}</li>
-      {% endfor %}
-    </ul>
-  {% endif %}
-
-  {% comment %}
-    Erst die bestehenden Notizen, dann das Eingabefeld. Andersherum stand das
-    Feld ueber dem, worauf es antwortet - und "Notiz speichern" war der
-    fetteste Knopf der Seite, waehrend "Bearbeiten" als Textlink danebenstand.
-  {% endcomment %}
-  <h2>Notizen</h2>
-  {% if notizen %}
-    <ul class="notizen">
-      {% for notiz in notizen %}
-        <li>
-          <span class="wann">{{ notiz.erstellt_am|date:"d.m.Y H:i" }} — {{ notiz.person.anzeigename }}</span>
-          <span class="text">{{ notiz.text|linebreaksbr }}</span>
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="nichts">Noch keine Notiz.</p>
-  {% endif %}
-
-  <form method="post" action="{% url 'notiz_anlegen' objekt.pk %}" class="notizform">
-    {% csrf_token %}
-    <label for="id_text">Neue Notiz</label>
-    <textarea name="text" id="id_text" rows="3" required></textarea>
-    <button type="submit" class="ruhig">Notiz speichern</button>
-  </form>
-
-  {% if objekt.preise.all %}
-    <h2>Preisverlauf</h2>
-    <table class="verlaufstabelle">
-      <thead><tr><th>Datum</th><th>Preis</th><th>Quelle</th></tr></thead>
-      <tbody>
-        {% for eintrag in objekt.preise.all %}
-          <tr>
-            <td>{{ eintrag.datum|date:"d.m.Y" }}</td>
-            <td>{{ eintrag.preis|floatformat:0 }} €</td>
-            <td>{{ eintrag.get_quelle_display }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
-
-  {% comment %}
-    Beleg, nicht Inhalt: klein und gedaempft am Seitenende. "Zuletzt gesehen"
-    beantwortet die Frage, ob das Inserat noch am Markt ist, und bleibt bis
-    Schritt 2 leer - dann steht dort ein Strich und nicht nichts.
-  {% endcomment %}
-  <hr>
-  <p class="beleg">
-    eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
-    · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
-    · zuletzt gesehen {{ objekt.zuletzt_gesehen|date:"d.m.Y H:i"|default:"—" }}
-  </p>
-
-  {% comment %}
-    Der Einstieg ins Löschen. Er liegt HIER und nicht in der Liste: dort wäre
-    er ein Fehlklick neben dem Öffnen.
-
-    Deutlich schwächer gewichtet als „Bearbeiten" — kein Knopf in derselben
-    Größe, sondern ein gedämpfter Textlink, abgesetzt am Seitenende beim
-    Beleg. Löschen ist die seltenste Handlung dieser Seite und darf nicht
-    aussehen wie die häufigste.
-
-    Ein `<a>` und kein Formular: der Link führt auf die Bestätigungsseite und
-    verändert nichts. Gelöscht wird erst durch den POST von dort.
-  {% endcomment %}
-  <p class="loeschen"><a href="{% url 'objekt_loeschen' objekt.pk %}">Objekt löschen</a></p>
+  <footer class="fuss">
+    <p class="beleg">
+      eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
+      · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
+      · zuletzt gesehen {{ objekt.zuletzt_gesehen|date:"d.m.Y H:i"|default:"—" }}
+    </p>
+    <p class="loeschen"><a href="{% url 'objekt_loeschen' objekt.pk %}">Objekt löschen</a></p>
+  </footer>
 {% endblock %}

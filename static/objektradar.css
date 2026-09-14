@@ -164,7 +164,21 @@
   --griff:  2.75rem;
 
   /* Die Eckenrundung des Entwurfs. Klein und ueberall gleich: eine
-     Oberflaeche mit drei verschiedenen Radien sieht zusammengesucht aus. */
+     Oberflaeche mit drei verschiedenen Radien sieht zusammengesucht aus.
+
+     DURCHGESETZT am 14.09. Die Regel stand hier seit dem 04.09., und die
+     Datei hielt sie nicht ein: sechs Stellen trugen `4px` von Hand -
+     Eingabefelder, Knoepfe, der Bearbeiten-Knopf, die Bilder, das
+     Lesezeichen und die Abgrenzung der Loeschbestaetigung. Der Unterschied
+     war fuer niemanden einer, die zweite Zahl aber schon: sie wanderte in
+     jede neue Regel weiter, und der Entwurf zur Objektansicht schlaegt jetzt
+     eine dritte (`6px`) vor. Drei Radien waeren genau das, wogegen dieser
+     Kommentar geschrieben ist.
+
+     NICHT hierher gehoeren die Rundungen, die keine Ecke abrunden, sondern
+     eine FORM machen: die Pille (`100px`), die Punkte der Votum-Reihe
+     (`50%`) und die Kante am Zeilenanfang (`2px` auf drei Pixel Breite).
+     Sie folgen keiner Ecke und richten sich deshalb nicht nach ihr. */
   --radius: 3px;
 }
 
@@ -345,7 +359,7 @@ main textarea {
   min-height: var(--griff);
   padding: var(--knapp);
   border: 1px solid var(--linie);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--flaeche);
   color: var(--text);
   font: inherit;
@@ -356,7 +370,7 @@ main button {
   min-height: var(--griff);
   padding: var(--knapp) var(--mittel);
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--akzent);
   color: #fff;
   font: inherit;
@@ -995,7 +1009,7 @@ main input[type="checkbox"] {
   display: inline-block;
   padding: var(--knapp) var(--mittel);
   border: 1px solid var(--akzent);
-  border-radius: 4px;
+  border-radius: var(--radius);
   text-decoration: none;
   cursor: grab;
 }
@@ -1036,7 +1050,7 @@ dd { margin: 0; }
   flex-wrap: wrap;
   align-items: center;
   gap: var(--eng) var(--mittel);
-  margin: 0 0 var(--weit);
+  margin: var(--knapp) 0 0;
   color: var(--gedaempft);
 }
 
@@ -1101,9 +1115,38 @@ dd { margin: 0; }
    kein zweiter Block unmittelbar darunter, an dessen Kante die eigene
    stiesse. */
 .kopfblock {
+  margin-bottom: var(--weit);
   padding-left: var(--mittel);
   border-left: 3px solid var(--status, var(--linie));
 }
+
+/* Bezeichnung und Statuspille in EINER Zeile, seit dem 14.09. Die Pille stand
+   bis dahin in der Zeile darunter, zwischen Ort und Verweis - eine Stufe zu
+   tief fuer die erste Frage an ein Objekt.
+
+   Die Bezeichnung darf schrumpfen (`min-width: 0`), damit die Pille neben ihr
+   stehen bleibt: `.bezeichnung` kappt auf eine Zeile, und ohne die Erlaubnis
+   zu schrumpfen setzte das Rasterfeld seine Mindestbreite auf die des Inhalts
+   und schoebe die Pille heraus. Dieselbe Falle wie bei `.feld`.
+
+   `align-items: center` und nicht `baseline` wie im Entwurf: `.bezeichnung`
+   traegt `overflow: hidden` und ist damit ein Scrollbehaelter - dessen
+   Grundlinie ist nicht die seiner ersten Textzeile, sondern seine Unterkante,
+   und die Pille rutschte an den oberen Rand. */
+.kopfzeile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--eng) var(--mittel);
+}
+
+/* `flex: 0 1 auto` und nicht `1 1 auto`: die Bezeichnung nimmt die Breite, die
+   sie braucht, und die Pille steht DANEBEN. Waechst die Bezeichnung auf die
+   ganze Zeile, wird die Pille an den rechten Seitenrand geschoben und sieht
+   aus, als gehoere sie nicht dazu - so stand sie bei der ersten
+   Sichtpruefung. Schrumpfen darf sie weiterhin: `min-width: 0` laesst
+   `.bezeichnung` unter ihre Textbreite und damit in die Kappung. */
+.kopfzeile h1 { flex: 0 1 auto; min-width: 0; margin: 0; }
 
 /* Die Auswahl am Statusformular zeigt den gespeicherten Status. Sie bekommt
    die Farbe als linken Rand und nicht als Grund: ein `<select>` mit
@@ -1136,25 +1179,137 @@ dd { margin: 0; }
   background: var(--flaeche);
 }
 
-/* Deutlich groesser als alles andere auf der Seite - groesser als `h1`. Das
-   ist die Zahl, wegen der die Seite aufgemacht wird. */
-.kaufpreis { margin: 0; font-size: 2rem; line-height: 1.2; }
+/* FUENF Angaben nebeneinander, solange sie nebeneinander passen. Es waren bis
+   zum 14.09. vier, und der Kaufpreis stand als blosse Zahl darueber - die
+   einzige Angabe der Seite ohne Beschriftung. Jetzt steht er als erste im
+   Band und traegt seine eigene.
 
-/* Die Preisaenderung erbt Groesse und Farbe von `.preisaenderung` weiter
-   oben - dieselbe Regel wie in der Liste, damit eine Senkung an beiden
-   Stellen gleich aussieht. Hier steht nur der Abstand zum Preis darueber. */
-.zahlenblock .preisaenderung { margin: var(--eng) 0 0; }
-
-/* Vier Kennzahlen nebeneinander, solange sie nebeneinander passen. Nicht das
-   `auto 1fr`-Raster der Datenliste: hier ist die Beschriftung eine Ueberschrift
-   ueber ihrer Zahl und steht nicht daneben. */
+   Nicht das `auto 1fr`-Raster der Datenliste: dort steht die Beschriftung
+   NEBEN ihrem Wert, hier gehoert sie zu ihm. */
 .kennzahlen {
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: var(--mittel);
-  margin-top: var(--mittel);
 }
+
+/* Die Beschriftung steht UNTER der Zahl, seit dem 14.09.
+
+   Hier stand vorher das Gegenteil ("die Beschriftung ist eine Ueberschrift
+   ueber ihrer Zahl"). Die Begruendung ist umgedreht worden, und zwar
+   ausdruecklich: die LISTE stellt die Zahl schon immer ueber ihr Etikett, und
+   zwei Ansichten desselben Werkzeugs duerfen dieselbe Angabe nicht verschieden
+   aufbauen. Wer von der Liste in die Ansicht klickt, sucht die Zahl sonst
+   jedesmal eine Zeile daneben.
+
+   Gedreht wird die ANZEIGE, nicht das Markup: im `<dl>` steht `<dt>` vor
+   `<dd>`, weil die Beschriftung ihren Wert einleitet - daran haengt, dass eine
+   Vorlesehilfe das Paar als Paar liest. `column-reverse` dreht die beiden nur
+   uebereinander. */
+.kennzahlen > div { display: flex; flex-direction: column-reverse; }
+
+/* Der Kaufpreis bekommt ZWEI Spalten. Er traegt als einziger drei Zeilen -
+   die grosse Zahl, die Preisaenderung, die Beschriftung -, und die mittlere
+   ist die laengste Angabe des Bandes: Betrag, vorheriger Preis, Prozentwert
+   und volles Datum. In einer Spalte von neun Zeichenbreiten lief sie bei der
+   Sichtpruefung quer ueber den Preis je m² daneben; `white-space: nowrap`
+   gehoert zur Preisaenderung und haelt sie zusammen, also braucht sie den
+   Platz statt des Umbruchs.
+
+   Aufgefallen ist das im Browser und nicht im Testlauf - dieselbe Art Fehler
+   wie der getoente Kasten um die Zahlen jeder Listenzeile am 04.09. */
+.kennzahlen .preis { grid-column: span 2; }
+
 .kennzahlen dt { font-size: .875rem; }
-.kennzahlen dd { font-size: 1.125rem; }
+.kennzahlen dd { font-size: 1.125rem; font-weight: 600; }
+
+/* Deutlich groesser als alles andere auf der Seite - groesser als `h1`. Das
+   ist die Zahl, wegen der die Seite aufgemacht wird.
+
+   Als `.kennzahlen .kaufpreis` und nicht als `.kaufpreis`: seit der Preis im
+   Band steht, traefe ihn sonst `.kennzahlen dd` mit der hoeheren Gewichtung,
+   und die groesste Zahl der Seite waere so gross wie die vier daneben. */
+.kennzahlen .kaufpreis { font-size: 2rem; line-height: 1.2; }
+
+/* Die Preisaenderung erbt Groesse und Farbe von `.preisaenderung` weiter
+   oben - dieselbe Regel wie in der Liste, damit eine Senkung an beiden
+   Stellen gleich aussieht. Hier stehen nur der Abstand zum Preis darueber und
+   die eigene Zeilenhoehe: ohne sie erbte die kleine Zeile die 1.2 der grossen
+   Zahl, in der sie steht. */
+.zahlenblock .preisaenderung { margin: var(--eng) 0 0; line-height: 1.5; }
+
+/* --- Zwei Spalten --------------------------------------------------------
+   Links das Objekt, rechts das Handeln. Die Seite beantwortet damit ihre zwei
+   Fragen raeumlich, und niemand muss sie beschriften.
+
+   Bis zum 14.09. stand alles in EINER Kolonne: der Inhaltsrahmen lief bis
+   70rem, die Formularfelder waren auf 30rem gekappt, und zwei Drittel der
+   Breite blieben leer, waehrend die Seite entsprechend lang scrollte.
+
+   Der Umbruchpunkt steht im Media-Block am Dateiende. Unter ihm faellt
+   dasselbe Markup untereinander - das Raster ordnet NICHT um, und die
+   Reihenfolge der Bloecke im Markup ist deshalb zugleich die auf dem Handy.
+
+   Kein `position: sticky` an der rechten Spalte. Es ginge ohne JavaScript und
+   ist bewusst weggelassen: bei kleinen Fenstern stoert eine Spalte, die
+   stehenbleibt. Nachruestbar. */
+.spalten { display: grid; gap: var(--weit); }
+
+/* Ein Block ist ein Kasten mit Linie; ein Block der BEDIENSPALTE ist eine
+   Flaeche ohne Linie. Das ist die ganze Unterscheidung zwischen Information
+   und Bedienung, und wie beim Filterblock der Liste reicht die Flaeche allein.
+
+   Der Abstand steht auf `+` und nicht als `margin-bottom`: der Bilderblock
+   faellt ohne Bilder ganz weg, der Preisverlauf ohne Verlauf, und ein unterer
+   Aussenabstand am letzten Block haenge dann unter der Spalte.
+
+   `h2` traegt innerhalb eines Blocks keinen oberen Abstand mehr. Die Vorgabe
+   (`--weit`) trennt zwei Bloecke voneinander; INNEN ist die Ueberschrift die
+   erste Zeile, und der Abstand nach oben macht dort der Innenabstand. */
+.block {
+  padding: var(--mittel);
+  border: 1px solid var(--linie);
+  border-radius: var(--radius);
+  background: var(--papier);
+}
+
+.block + .block { margin-top: var(--mittel); }
+.block h2 { margin: 0 0 var(--mittel); }
+.block.handeln { background: var(--flaeche); border-color: transparent; }
+
+/* Die Felder der Bedienspalte fuellen ihren Block.
+
+   `main input, main select, main textarea` kappt auf 30rem, und das ist dort
+   richtig, wo ein Formular ueber die ganze Seitenbreite laeuft - beim
+   Bearbeiten, beim Anmelden, im Filterblock: eine Zeile ueber 70rem ist nicht
+   mehr zu ueberblicken. In einem Block von 26rem kappt sie nichts; unter dem
+   Umbruchpunkt aber steht derselbe Block ueber die volle Breite, und dann
+   stuende ein Feld von 30rem in einem Kasten von 68rem. Deshalb hier
+   aufgehoben und NICHT in der allgemeinen Regel geaendert.
+
+   Und `--papier` statt `--flaeche` als Grund: auf der getoenten Flaeche des
+   Blocks waere ein getoentes Feld kein Feld mehr, sondern ein Fleck. Dieselbe
+   Ueberlegung wie bei den Grundtoenen vom 04.09. - anderthalb Prozent
+   Helligkeit sind keine Gliederung. */
+.handeln input,
+.handeln select,
+.handeln textarea {
+  max-width: none;
+  background: var(--papier);
+}
+
+/* Nur der Zeilenabstand, die Spalten bleiben die der Vorgabe (`auto 1fr`).
+
+   Der Entwurf setzt hier `10rem 1fr`, und das ist voruebergehend auch so
+   gebaut worden - mit der Begruendung, `auto` richte sich nach dem laengsten
+   Wort und die Werte begaennen bei jedem Objekt woanders. Die Begruendung
+   stimmt nicht: der Datenblock fuehrt auf JEDER Objektansicht dieselben zehn
+   Beschriftungen, also ist `auto` schon von sich aus ueberall gleich breit.
+   Was die feste Angabe wirklich bewirkte, sah man erst am Handy - eine
+   Beschriftungsspalte von 10rem neben einer Wertspalte von 9rem, mit einer
+   Luecke dazwischen, die nichts trennt.
+
+   Groesser ist nur der ZEILENABSTAND: `--eng` ist die Stufe innerhalb einer
+   Zeile, und zehn Zeilen untereinander brauchen die naechste. */
+.daten { gap: var(--knapp) var(--mittel); }
 
 /* --- Bilder in der Objektansicht ----------------------------------------
    Ein einfaches Raster, mehr nicht. Keine Galerie, kein Vergroessern - beides
@@ -1173,7 +1328,7 @@ dd { margin: 0; }
   width: 100%;
   aspect-ratio: 3 / 2;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--flaeche);
 }
 
@@ -1183,14 +1338,37 @@ dd { margin: 0; }
    nichts -, und die Klasse traegt nur das Aussehen. Die Masse kommen aus
    derselben Skala wie bei `main button`; `--griff` ist die Flaeche, die am
    Daumen sicher zu treffen ist. */
-.handlung { margin: var(--mittel) 0 0; }
+
+/* Zwischen einem Feld und dem Knopf darunter liegt LUFT. Sie klebten bis zum
+   14.09. an drei Stellen aneinander - Votum, Status, Notiz -, und es war eine
+   fehlende Regel und nicht dreimal dieselbe.
+
+   Deshalb EINE Zeile fuer alle vier Stellen der Seite, die vierte ist
+   "Bearbeiten" am Datenblock. Dort steht kein Feld darueber; das Bauteil ist
+   trotzdem dasselbe, denn ein zweites fuer denselben Zweck waere ein zweites
+   Aussehen.
+
+   `--mittel` und nicht die 1.25rem des Entwurfs: Abstaende kommen aus der
+   Skala, sonst ist es wieder eine handverlesene Zahl je Stelle.
+
+   `margin-left: 0` an den Knoepfen: `main button + button` setzt einen
+   Abstand fuer Knoepfe, die ohne Raster nebeneinanderstehen. Hier traegt ihn
+   das `gap`, und beide zusammen ergaeben den doppelten. */
+.knopfzeile {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--knapp);
+  margin-top: var(--mittel);
+}
+.knopfzeile button + button { margin-left: 0; }
 
 .knopf {
   display: inline-flex;
   align-items: center;
   min-height: var(--griff);
   padding: 0 var(--mittel);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--akzent);
   color: #fff;
   text-decoration: none;
@@ -1208,9 +1386,12 @@ main button.ruhig {
 
 /* Die drei Wertungen als klar unterscheidbare Wahl. Die eigene ist gefuellt,
    die beiden anderen sind es nicht - man muss auf einen Blick sehen, wo man
-   selbst steht. `margin-left` faellt weg, den Abstand traegt das Flexraster. */
-.wertungen { display: flex; flex-wrap: wrap; gap: var(--knapp); margin-top: var(--knapp); }
-.wertungen button + button { margin-left: 0; }
+   selbst steht.
+
+   Die Lage der Reihe steht seit dem 14.09. nicht mehr hier: das Element traegt
+   `knopfzeile wertungen`, und die Zeile kommt von dort. Was bleibt, ist das
+   Aussehen der drei Knoepfe - `.wertungen` ist eine Abwandlung und kein
+   zweites Raster daneben. */
 .wertungen .wertung {
   background: none;
   border: 1px solid var(--akzent);
@@ -1238,6 +1419,14 @@ main button.ruhig {
 }
 .vota .person,
 .notizen .wann { color: var(--gedaempft); font-size: .875rem; }
+
+/* Auf der getoenten Flaeche der Bedienspalte ist `--linie` keine Linie mehr:
+   sie liegt anderthalb Helligkeitsprozent ueber `--flaeche` und verschwindet
+   darin. Genau der Fehler, den die Grundtoene am 04.09. behoben haben, nur
+   eine Ebene tiefer. Hier traegt `--linie-stark` - dieselbe Stufe, die auch
+   die Feldraender tragen, und die ist auf dieser Flaeche gedacht. */
+.handeln .vota li,
+.handeln .notizen li { border-bottom-color: var(--linie-stark); }
 .vota .wertung { color: var(--text); }
 .vota .begruendung { color: var(--gedaempft); }
 
@@ -1257,9 +1446,12 @@ h3 { font-weight: normal; font-size: 1rem; margin: var(--mittel) 0 0; color: var
 /* Der Preisverlauf ist Beleg, keine Vergleichsliste. Er bleibt eine Tabelle
    und bekommt nichts weiter als Linien; die Tabellenziffern stehen seit dem
    04.09. am `body` und gelten hier ohne eigene Angabe. */
+/* Die Kappung auf 30rem ist am 14.09. gefallen. Sie stammte aus der Zeit, in
+   der die Tabelle ueber die ganze Seitenbreite lief; jetzt steht sie in einem
+   Block der linken Spalte und wird von dessen Breite gehalten. Innerhalb des
+   Blocks auf halber Breite zu enden sah aus wie ein Fehler. */
 .verlaufstabelle {
   width: 100%;
-  max-width: 30rem;
   border-collapse: collapse;
 }
 .verlaufstabelle th {
@@ -1273,9 +1465,30 @@ h3 { font-weight: normal; font-size: 1rem; margin: var(--mittel) 0 0; color: var
 .verlaufstabelle td { padding: var(--eng) var(--knapp) var(--eng) 0; }
 .verlaufstabelle td { border-bottom: 1px solid var(--linie); }
 
-/* Der Fusstext ("eingestellt von … am …"). Ueber `hr +` angesprochen, damit
-   das Template dafuer keine Klasse braucht. */
-main hr + p { color: var(--gedaempft); font-size: .875rem; }
+/* --- Fuss ----------------------------------------------------------------
+   Beleg und Loeschen ueber die volle Breite, durch eine Linie abgesetzt.
+
+   Die Linie traegt seit dem 14.09. der Fuss selbst. Vorher stand ein `<hr>`
+   davor und der Belegtext wurde ueber `main hr + p` angesprochen - "damit das
+   Template dafuer keine Klasse braucht", obwohl es die Klasse `beleg` die
+   ganze Zeit trug. Ein Nachbarschaftswaehler auf ein Element, das nur noch als
+   Traeger einer Linie dastand: die Linie gehoert an den Block, den sie
+   abgrenzt, und das `<hr>` ist mit ihr weggefallen.
+
+   `space-between`: der Beleg links, das Loeschen rechts. Bei schmalem Fenster
+   bricht es um und steht darunter. */
+.fuss {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mittel);
+  margin-top: var(--weit);
+  padding-top: var(--mittel);
+  border-top: 1px solid var(--linie);
+}
+
+.fuss .beleg { margin: 0; color: var(--gedaempft); font-size: .875rem; }
 
 .leer { color: var(--gedaempft); text-align: center; margin: var(--weit) 0; }
 
@@ -1289,7 +1502,7 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
    Bedeutung ab, die sie tragen. Die Bestaetigungsseite traegt die Warnung in
    Worten, und dort gehoert sie hin - eine rote Schrift beantwortet die Frage
    "Loeschen oder raus setzen?" nicht. */
-.loeschen { margin: var(--knapp) 0 0; font-size: .875rem; }
+.loeschen { margin: 0; font-size: .875rem; }
 .loeschen a { color: var(--gedaempft); }
 
 /* Die Abgrenzung "Loeschen ist nicht raus" auf der Bestaetigungsseite. Ueber
@@ -1299,7 +1512,7 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
 .abgrenzung {
   margin: 0 0 var(--weit);
   padding: var(--mittel);
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: var(--flaeche);
 }
 .abgrenzung p { margin: 0 0 var(--knapp); }
@@ -1399,6 +1612,28 @@ main hr + p { color: var(--gedaempft); font-size: .875rem; }
   main form:has(> input[type="url"]) label { flex: 0 0 100%; }
   main form:has(> input[type="url"]) input[type="url"] { flex: 1 1 20rem; width: auto; }
   main input[type="url"] + button { margin-top: 0; }
+}
+
+/* --- Ab 64rem ------------------------------------------------------------
+   Die Objektansicht wird zweispaltig. Der einzige Umbruchpunkt dieser Datei
+   neben den 48rem darueber, und er hat einen eigenen, weil er eine andere
+   Frage beantwortet: 48rem ist die Breite, ab der eine Listenzeile ihre Zahlen
+   neben die Mitte stellt; 64rem die, ab der zwei Spalten nebeneinander noch
+   beide lesbar sind.
+
+   ZWEI SPALTEN ERST HIER und nicht schon bei 48rem: dort waeren 3fr rund
+   28rem und 2fr rund 19rem - fuer den Datenblock mit seiner festen
+   Beschriftungsspalte zu eng und fuer die Bedienspalte auch.
+
+   `minmax(0, …)` an beiden Spalten: ohne das setzt ein Rasterfeld seine
+   Mindestbreite auf die seines Inhalts, und eine lange Beschreibung im
+   Datenblock oder eine breite Tabelle schoebe die rechte Spalte hinaus.
+
+   Der Punkt ist GESETZT und nicht gemessen. Ein 13-Zoll-Rechner liegt knapp
+   darueber; ob die zweispaltige Fassung dort noch traegt, zeigt der Blick auf
+   den Bildschirm und kein Testlauf. */
+@media (min-width: 64rem) {
+  .spalten { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 }
 
 /* --- Qualitaetsboden ---------------------------------------------------- */
