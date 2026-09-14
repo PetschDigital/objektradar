@@ -82,16 +82,35 @@
       dort ist ein leeres Feld die Aufforderung, es zu fuellen.
 
       Ort und Land stehen im Datenblock NICHT und gehoeren deshalb hierher.
-      Der Ort traegt seinen Strich, wenn er fehlt: diese Zeile ist seine
+      BEIDE tragen ihren Strich, wenn sie fehlen: diese Zeile ist ihre
       einzige Stelle auf der Seite, und eine Luecke liest sich wie eine
       Angabe.
+
+      ANGEGLICHEN am 14.09. Bis dahin trug nur der Ort den Strich; das Land
+      stand in einem bedingten Zweig und verschwand spurlos samt seinem
+      Trennpunkt. Zwei Werte in EINER Zeile nach zwei Regeln - der eine
+      fordert zum Fuellen auf, der andere verschweigt sich. Es gilt die
+      Entscheidung vom 03.09.: in der Objektansicht werden leere Felder
+      angezeigt, in der Liste nicht. Das Land ist ueber das
+      Bearbeiten-Formular setzbar, die Aufforderung fuehrt also irgendwohin.
+
+      Sind beide leer, steht `— · —` da und die Zeile faellt NICHT weg. Auch
+      das ist entschieden: gerade das frisch eingeworfene Objekt, das noch
+      nichts traegt, soll die beiden Luecken sehen.
+
+      Die Gegenregel der LISTE bleibt unberuehrt - `views.unterzeile()` laesst
+      Leeres WEGFALLEN, nachzulesen in ihrem Docstring. Die beiden Zeilen
+      werden auch nicht ueber einen gemeinsamen Aufruf zusammengelegt: sie
+      fuehren verschiedene Felder (die Liste fasst Region und Land zu einem
+      Teil, der Kopf fuehrt Ort und Land, die Region steht hier im
+      Datenblock) und gegenlaeufige Regeln fuer leere Werte.
 
       Sie heisst `objektzeile` und nicht `unterzeile`: so heisst die Zeile
       der LISTE, und deren Regel setzt Trennpunkte ueber `::after`. Derselbe
       Name an zwei Stellen trifft frueher oder spaeter die falsche.
     {% endcomment %}
     <p class="objektzeile">
-      <span class="ort">{{ objekt.ort|default:"—" }}{% if objekt.land %} · {{ objekt.get_land_display }}{% endif %}</span>
+      <span class="ort">{{ objekt.ort|default:"—" }} · {{ objekt.get_land_display|default:"—" }}</span>
       <a href="{{ objekt.url }}" target="_blank" rel="noopener noreferrer">zum Inserat</a>
     </p>
   </div>

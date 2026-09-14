@@ -13673,6 +13673,101 @@ class ZahlenbandLeerTests(TestCase):
                 self.assertIn("fehlt", gefunden.klassen[beschriftung])
 
 
+class ObjektzeileLeerTests(TestCase):
+    """Zusage 2, auch fuer den KOPF: Ort und Land zeigen ihren Strich.
+
+    Die Objektzeile fuehrt die beiden einzigen Ortsangaben, die der
+    Datenblock nicht traegt. Fuer sie gilt dieselbe Entscheidung vom 03.09.
+    wie fuer den Datenblock und das Zahlenband: in der Objektansicht werden
+    leere Felder ANGEZEIGT, in der Liste nicht. Ein leeres Feld ist die
+    Aufforderung, es zu fuellen; das Land ist ueber das Bearbeiten-Formular
+    setzbar, die Aufforderung fuehrt also irgendwohin.
+
+    Bis zum 14.09. trug nur der Ort seinen Strich - das Land stand in einem
+    bedingten Zweig und verschwand samt Trennpunkt. Gefallen ist das keinem
+    Zeugen auf: `ObjektansichtVollstaendigkeitTests` misst den Kopf am
+    GEFUELLTEN Objekt, und fuer den leeren Fall gab es hier kein Gegenstueck
+    zu `ObjektansichtDatenblockTests` und `ZahlenbandLeerTests`. Diese Klasse
+    ist es.
+
+    Eingegrenzt auf `p.objektzeile` und NICHT gegen die ganze Antwort
+    gemessen - Entscheidung vom 03.09., an dem zwei Zeugen ihre Zeichenkette
+    im Basis-Template fanden. Ein Gedankenstrich steht auf dieser Seite
+    ausserdem fuenfmal im Zahlenband.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(url="https://beispiel.de/1")
+
+    def _zeile(self):
+        return block(
+            self.client.get(reverse("objekt", args=[self.objekt.pk])), "objektzeile"
+        )
+
+    # --- Riegel gegen die Zeugen unten im Vakuum -------------------------
+
+    def test_das_objekt_dieser_klasse_traegt_wirklich_weder_ort_noch_land(self):
+        """Truege es Werte, maessen die Zeugen unten nicht mehr, dass LEERE
+        Angaben ihren Strich zeigen."""
+        self.assertEqual(self.objekt.ort, "")
+        self.assertEqual(self.objekt.land, "")
+
+    def test_der_parser_findet_die_zeile_ueberhaupt(self):
+        """Ein Parser, der nichts findet, gibt einen leeren Text zurueck - und
+        `assertIn` daraufhin faende auch den Strich nicht, waehrend
+        `assertEqual` gegen eine leere Zeichenkette gruen bliebe."""
+        self.assertEqual(self._zeile().anzahl, 1)
+
+    # --- Der Kern ---------------------------------------------------------
+
+    def test_ohne_land_steht_im_kopf_der_platzhalter(self):
+        """Der Zeuge der Runde.
+
+        Gemessen wird an BEIDEN Strichen samt Trennpunkt und nicht an der
+        blossen Anwesenheit eines Strichs: die Sabotage-Gegenprobe hat am
+        03.09. aufgedeckt, dass ein Zeuge auf `assertIn("—")` gruen bleibt,
+        waehrend eine Angabe ihren Strich schon verloren hat - weil die
+        andere ihren noch traegt. Genau dieser Fall liegt hier vor.
+        """
+        self.assertIn("— · —", self._zeile().text)
+
+    def test_die_zeile_faellt_bei_zwei_leeren_werten_nicht_weg(self):
+        """Ausdruecklich entschieden. Gerade das frisch eingeworfene Objekt,
+        das noch gar nichts traegt, soll die beiden Luecken sehen - und nicht
+        eine Zeile, die es gar nicht gibt.
+
+        Der Riegel oben misst den BEHAELTER; dass er auch etwas enthaelt,
+        misst dieser hier. Ein leeres `<p class="objektzeile"></p>` wuerde
+        dort gezaehlt.
+        """
+        self.assertNotEqual(self._zeile().text, "")
+
+    def test_ein_gesetztes_land_verdraengt_den_platzhalter(self):
+        """Gegenrichtung: ohne sie waere ein fest eingetippter Strich gruen.
+
+        Genommen wird `sonstiges` und nicht `ES`. Der Wert ist gesetzt und
+        wird angezeigt - er ist die Auswahl "keines der beiden", nicht die
+        Abwesenheit einer Auswahl. Faende ihn jemand mit dem leeren Feld
+        zusammen, verloere das Feld seine dritte Antwort.
+        """
+        self.objekt.land = Land.SONSTIGES
+        self.objekt.save(update_fields=["land"])
+        text = self._zeile().text
+        self.assertIn(Land.SONSTIGES.label, text)
+        self.assertNotIn("— · —", text)
+
+    def test_ein_gesetzter_ort_verdraengt_seinen_platzhalter(self):
+        """Dieselbe Gegenrichtung fuer den Ort, damit der Zeuge oben nicht
+        auch dann gruen bliebe, wenn die Zeile IMMER zwei Striche zeigte."""
+        self.objekt.ort = "Ronda"
+        self.objekt.save(update_fields=["ort"])
+        text = self._zeile().text
+        self.assertIn("Ronda", text)
+        self.assertNotIn("— · —", text)
+
+
 class VerdecktesVotumNachDemUmbauTests(VerdecktesVotumBasis):
     """Zusage 4, erneut bezeugt: der Block ist umgezogen, die Zusage nicht.
 
