@@ -157,6 +157,21 @@
     <dd>{% if objekt.baujahr %}{{ objekt.baujahr|unlocalize }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
     <dt>Zustand</dt>
     <dd>{{ objekt.get_zustand_display }}</dd>
+    {% comment %}
+      Der Stadtteil steht HIER und nicht oben in der Objektzeile neben dem
+      Ort: die Objektzeile ist die ruhige Zeile unter der Bezeichnung und
+      traegt nur, was die Liste auch traegt. Der Datenblock ist der Ort, an
+      dem ein LEERES Feld die Aufforderung ist, es zu fuellen - und leer ist
+      der Stadtteil bei jedem Portal ausser Idealista.
+
+      Vor `Region`, weil die Ortsebenen von fein nach grob stehen: Stadtteil
+      (Lage in der Gemeinde), dann Region (Teneriffa, Costa del Sol). Der Ort
+      selbst steht als Gemeinde oben in der Objektzeile und wird von dort
+      NICHT hierher geholt - das waere dieselbe Angabe zweimal auf einer
+      Seite.
+    {% endcomment %}
+    <dt>Stadtteil</dt>
+    <dd>{% if objekt.stadtteil %}{{ objekt.stadtteil }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
     <dt>Region</dt>
     <dd>{% if objekt.region %}{{ objekt.region }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
     <dt>Portal</dt>

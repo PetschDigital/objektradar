@@ -69,6 +69,9 @@ class ObjektForm(forms.ModelForm):
             "portal",
             "inserats_id",
             "titel",
+            # Vor `ort`, weil die Ortsebenen von fein nach grob stehen -
+            # dieselbe Reihenfolge wie in der Unterzeile der Liste.
+            "stadtteil",
             "ort",
             "land",
             "region",
@@ -135,7 +138,13 @@ EINFACHE_FILTER = {
 }
 
 #: Spalten, die der Freitext absucht - ODER-verknuepft, `icontains`.
-SUCHSPALTEN = ("titel", "ort", "region", "beschreibung")
+#:
+#: `stadtteil` ist am 14.09. dazugekommen. Ohne ihn waere `Puerto de Santiago`
+#: nicht auffindbar gewesen, obwohl genau dieser Wert der Grund ist, aus dem
+#: das Feld ueberhaupt entstand: er unterscheidet zwei Lagen derselben
+#: Gemeinde. Ein Feld, das die Liste zeigt und die Suche nicht kennt, laesst
+#: sich nur durch Blaettern finden.
+SUCHSPALTEN = ("titel", "stadtteil", "ort", "region", "beschreibung")
 
 #: Parameter, die keine Filterung sind. Sie loesen die Trefferanzeige nicht
 #: aus - wer nur blaettert oder sortiert, filtert nicht.

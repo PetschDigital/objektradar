@@ -54,7 +54,7 @@ from .choices import (
 )
 from .forms import STATUS_VORBELEGUNG, ObjektForm
 from .models import Bild, Notiz, Objekt, Preisverlauf, Statusaenderung, Votum
-from .portale import portal_und_id
+from .portale import land_aus_portal, ort_und_stadtteil, portal_und_id
 
 #: Der Modulname faengt mit einer Ziffer an - ein `import` schreibt sich dafuer
 #: nicht hin. Der Zugriff ist noetig, weil die Zeugen unten die Funktion der
@@ -1061,9 +1061,15 @@ class DatenblockParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.paare = {}
+        #: Die Klassen der Elemente IM Wert, je Beschriftung. Ein leeres Feld
+        #: traegt seinen Strich in einem `<span class="fehlt">`; ein
+        #: Gedankenstrich, den jemand eingetippt hat, traegt nichts. Am Text
+        #: allein sind die beiden nicht zu unterscheiden.
+        self.klassen = {}
         self._im_block = False
         self._marke = None
         self._text = ""
+        self._klassen = []
         self._name = None
 
     def handle_starttag(self, tag, attrs):
@@ -1073,6 +1079,9 @@ class DatenblockParser(HTMLParser):
         elif self._im_block and tag in ("dt", "dd"):
             self._marke = tag
             self._text = ""
+            self._klassen = []
+        elif self._im_block and self._marke == "dd":
+            self._klassen += (werte.get("class") or "").split()
 
     def handle_endtag(self, tag):
         if tag == "dl":
@@ -1083,6 +1092,7 @@ class DatenblockParser(HTMLParser):
                 self._name = text
             elif self._name is not None:
                 self.paare[self._name] = text
+                self.klassen[self._name] = self._klassen
                 self._name = None
             self._marke = None
 
@@ -1091,10 +1101,24 @@ class DatenblockParser(HTMLParser):
             self._text += daten
 
 
-def daten_paare(antwort):
+def _datenblock(antwort):
     parser = DatenblockParser()
     parser.feed(antwort.content.decode())
-    return parser.paare
+    return parser
+
+
+def daten_paare(antwort):
+    return _datenblock(antwort).paare
+
+
+def daten_klassen(antwort):
+    """Die Klassen im Wert je Beschriftung - `daten_paare()` daneben, nicht darin.
+
+    Getrennt, damit die vorhandenen Zeugen auf `daten_paare()` unveraendert
+    gegen einen Text vergleichen. Ein Rueckgabewert, der sich von einem Text
+    in ein Paar verwandelt, bewegte jeden von ihnen.
+    """
+    return _datenblock(antwort).klassen
 
 
 class ObjektansichtTests(TestCase):
@@ -2289,6 +2313,19 @@ class PortalModulTests(TestCase):
         with self.assertNumQueries(0):
             portal_und_id("https://www.idealista.com/inmueble/12345/")
 
+    def test_ort_und_stadtteil_fragt_die_datenbank_nicht(self):
+        """Wie `portal_und_id()`: aus dem Mail-Parser aufrufbar."""
+        with self.assertNumQueries(0):
+            ort_und_stadtteil(
+                portale.PORTAL_IDEALISTA,
+                "Wohnung zu verkaufen in Zona Puerto Deportivo, "
+                "Fuengirola — idealista",
+            )
+
+    def test_land_aus_portal_fragt_die_datenbank_nicht(self):
+        with self.assertNumQueries(0):
+            land_aus_portal(portale.PORTAL_IDEALISTA)
+
     def test_der_idealista_schluessel_passt_zu_den_auswahllisten(self):
         """Riegel gegen eine stille Umbenennung in `choices.py`.
 
@@ -2355,19 +2392,24 @@ class PortalModulTests(TestCase):
 
     # --- die vierte Spalte: Normalisierung der Kennung (07.09.) -----------
 
-    def test_jede_zeile_der_portaltabelle_traegt_vier_spalten(self):
+    def test_jede_zeile_der_portaltabelle_traegt_fuenf_spalten(self):
         """Riegel gegen eine halb nachgezogene Zeile.
 
-        Ein spaeteres Portal, das nur drei Spalten mitbringt, liesse
+        Ein spaeteres Portal, das nur vier Spalten mitbringt, liesse
         `portal_und_id()` beim Entpacken auflaufen - und zwar erst zur
         Laufzeit an der ersten URL dieses Portals, nicht beim Import.
-        """
+
+        Am 14.09. von vier auf fuenf Spalten gegangen: das Land ist
+        dazugekommen. Dass es eine SPALTE ist und keine eigene Zuordnung, ist
+        genau der Grund, warum dieser Zeuge zaehlt - ein Portal ohne Land
+        faellt hier auf, ein Portal, das in einer getrennten Tabelle fehlt,
+        nirgends."""
         for zeile in portale.PORTALE:
             with self.subTest(portal=zeile[0]):
-                self.assertEqual(len(zeile), 4)
+                self.assertEqual(len(zeile), 5)
 
     def test_jede_normalisierung_ist_aufrufbar(self):
-        for portal, _, _, normalisieren in portale.PORTALE:
+        for portal, _, _, normalisieren, _ in portale.PORTALE:
             with self.subTest(portal=portal):
                 self.assertTrue(callable(normalisieren))
 
@@ -2380,7 +2422,7 @@ class PortalModulTests(TestCase):
         das naechste Portal sie nicht wieder.
         """
         (normalisieren,) = [
-            n for p, _, _, n in portale.PORTALE if p == portale.PORTAL_IMMOWELT
+            n for p, _, _, n, _ in portale.PORTALE if p == portale.PORTAL_IMMOWELT
         ]
         self.assertEqual(normalisieren("ABC-def"), "abc-def")
 
@@ -2395,8 +2437,8 @@ class PortalModulTests(TestCase):
         aufgerufen, kommt der Wert unveraendert zurueck.
         """
         eigene = tuple(
-            (p, d, m, (lambda k: "GEMESSEN") if p == portale.PORTAL_IMMOWELT else n)
-            for p, d, m, n in portale.PORTALE
+            (p, d, m, (lambda k: "GEMESSEN") if p == portale.PORTAL_IMMOWELT else n, l)
+            for p, d, m, n, l in portale.PORTALE
         )
         with mock.patch.object(portale, "PORTALE", eigene):
             self.assertEqual(
@@ -2411,7 +2453,7 @@ class PortalModulTests(TestCase):
         aelteren Portalen nie an einer echten URL nachgemessen - dieselbe
         vorgetaeuschte Abdeckung wie eine Domain ohne belegtes Pfadmuster.
         """
-        for portal, _, _, normalisieren in portale.PORTALE:
+        for portal, _, _, normalisieren, _ in portale.PORTALE:
             if portal == portale.PORTAL_IMMOWELT:
                 continue
             with self.subTest(portal=portal):
@@ -2733,6 +2775,748 @@ class MigrationsstandTests(TestCase):
         )
         feld = zustand.get_model("objekte", "Objekt")._meta.get_field("portal")
         self.assertNotIn(("immowelt", "Immowelt"), feld.choices)
+
+
+class StadtteilFeldTests(TestCase):
+    """Zusage 15: die Migration legt `stadtteil` an und traegt NICHTS nach.
+
+    Gemessen wird am historischen Modellzustand aus dem Migrations-Loader und
+    nicht an `objekte.models.Objekt`. Am heutigen Modell gemessen bliebe der
+    Zeuge auch dann gruen, wenn die Migration fehlte - das Feld stuende in
+    `models.py`, die Spalte fehlte in der Datenbank, und aufgefallen waere es
+    erst im Betrieb.
+    """
+
+    def _feldnamen(self, migration):
+        zustand = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", migration))
+            .apps
+        )
+        modell = zustand.get_model("objekte", "Objekt")
+        return {f.name for f in modell._meta.get_fields()}
+
+    # --- die Schemaaenderung ---------------------------------------------
+
+    def test_die_migration_legt_stadtteil_an(self):
+        self.assertIn("stadtteil", self._feldnamen("0009_objekt_stadtteil"))
+
+    def test_der_zustand_davor_kennt_stadtteil_noch_nicht(self):
+        """Die Gegenprobe: 0009 traegt die Aenderung wirklich.
+
+        Ohne diesen Zeugen bliebe der darueber auch dann gruen, wenn das Feld
+        schon aus einer frueheren Migration kaeme - dann bezeugte er nicht
+        0009, sondern irgendeine Migration davor.
+        """
+        self.assertNotIn(
+            "stadtteil", self._feldnamen("0008_bestand_immowelt_nachtragen")
+        )
+
+    def test_stadtteil_ist_zeichengleich_zu_ort_angelegt(self):
+        """Typ, Laenge und `blank`-Verhalten identisch - nicht nur aehnlich.
+
+        Gemessen im Migrationszustand und nicht am Modell: was die Spalte
+        haelt, entscheidet die Migration. Eine abweichende Laenge liesse den
+        Riegel gegen zu lange Werte fuer das eine Feld anders greifen als fuer
+        das andere.
+        """
+        zustand = (
+            MigrationExecutor(connection)
+            .loader.project_state(("objekte", "0009_objekt_stadtteil"))
+            .apps
+        )
+        modell = zustand.get_model("objekte", "Objekt")
+        stadtteil = modell._meta.get_field("stadtteil")
+        ort = modell._meta.get_field("ort")
+        self.assertEqual(
+            (type(stadtteil), stadtteil.max_length, stadtteil.blank, stadtteil.default),
+            (type(ort), ort.max_length, ort.blank, ort.default),
+        )
+
+    # --- und ausdruecklich KEINE Datenmigration ---------------------------
+
+    def test_die_migration_traegt_an_einem_bestandsobjekt_nichts_nach(self):
+        """Zusage 15, unmittelbar gemessen: Bestand rein, Bestand unveraendert raus.
+
+        Der Zeuge gegen die Falle dieser Runde: am 07.09. war ein
+        Bestandsnachtrag richtig (0008), hier ist er es nicht.
+
+        Gemessen wird die ZUSAGE und nicht ihre Bauform. Ein Zeuge, der
+        stattdessen abfragt, welche Migrationen `RunPython` fuehren, misst
+        Struktur: er faellt auch bei jeder legitimen spaeteren Datenmigration -
+        Schritt 3 bringt welche mit -, und dann zieht jemand die erwartete
+        Liste nach, ohne zu pruefen, was die neue Migration eigentlich tut.
+
+        Der Weg ist der von `test_der_zustand_davor_kennt_stadtteil_noch_nicht`,
+        eine Stufe weiter gefuehrt: das Objekt entsteht im Zustand VOR 0009,
+        wo es die Spalte noch gar nicht gibt, und wird durch die Migration
+        hindurchgefuehrt. Der Titel steht im belegten Idealista-Aufbau - genau
+        das, woraus ein Nachtrag den Stadtteil zerlegen wuerde. Bliebe der
+        Titel unauffaellig, haette der Zeuge nach dem Einbau eines Nachtrags
+        nichts zu melden.
+
+        `TestCase` haelt den ganzen Test in einer Transaktion, und Postgres
+        kann Schemaaenderungen zuruecknehmen: der Ruecksprung auf 0008 gilt
+        nur innerhalb dieses Tests. Am Ende steht die Datenbank wieder auf
+        0009, weil der Test selbst dorthin vorwaerts migriert.
+        """
+        davor = ("objekte", "0008_bestand_immowelt_nachtragen")
+        danach = ("objekte", "0009_objekt_stadtteil")
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([davor])
+
+        altes_modell = executor.loader.project_state(davor).apps.get_model(
+            "objekte", "Objekt"
+        )
+        self.assertNotIn(
+            "stadtteil", {f.name for f in altes_modell._meta.get_fields()}
+        )
+        altes_modell.objects.create(
+            url="https://www.idealista.com/inmueble/98765/",
+            titel=(
+                "Landhaus zu verkaufen in Calle los Ángeles, 5, "
+                "Puerto de Santiago, Santiago del Teide — idealista"
+            ),
+        )
+
+        # Der `INSERT` hinterlaesst in der offenen Transaktion aufgeschobene
+        # Fremdschluesselpruefungen, und Postgres verweigert ein `ALTER TABLE`,
+        # solange die anstehen. `check_constraints()` zieht sie sofort - es ist
+        # derselbe Aufruf, mit dem `TestCase` sonst am Testende prueft.
+        connection.check_constraints()
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([danach])
+
+        neues_modell = executor.loader.project_state(danach).apps.get_model(
+            "objekte", "Objekt"
+        )
+        self.assertEqual(neues_modell.objects.get().stadtteil, "")
+
+
+class OrtUndStadtteilTests(SimpleTestCase):
+    """Zusagen 1 bis 8: die Zerlegung des Idealista-Titels.
+
+    Die Titel sind die BELEGTEN vom 14.09., wo immer einer passt. Ein
+    erfundener Titel misst die Regel gegen sich selbst; die acht Belege sind
+    das einzige, woran sie sich pruefen laesst.
+    """
+
+    #: Die acht Belege, deutsche Sprachfassung, ohne Browser-Uebersetzung.
+    BELEGE = (
+        "Wohnung zu verkaufen in Calle San Pancracio, 5, Zona Puerto Deportivo, Fuengirola — idealista",
+        "Wohnung zu verkaufen in Calle Colina Blanca, 4, Torreblanca del Sol, Fuengirola — idealista",
+        "Penthouse zu verkaufen in CL Mirasierra, Centro Ciudad, Fuengirola — idealista",
+        "Wohnung zu verkaufen in Avenida de Mijas, 10, Centro Ciudad, Fuengirola — idealista",
+        "Wohnung zu verkaufen in Zona Puerto Deportivo, Fuengirola — idealista",
+        "Wohnung zu verkaufen in CL Maria Vega Sanchez, Zona Puerto Deportivo, Fuengirola — idealista",
+        "Landhaus zu verkaufen in Calle los Ángeles, 5, Puerto de Santiago, Santiago del Teide — idealista",
+        "Casa terrera zu verkaufen in Tamaimo-Arguayo, Santiago del Teide — idealista",
+    )
+
+    # --- Zusage 1 ---------------------------------------------------------
+
+    def test_vier_segmente_ergeben_ort_und_stadtteil(self):
+        """Strasse, Hausnummer, Lage, Gemeinde - der laengste belegte Aufbau."""
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Calle San Pancracio, 5, "
+                "Zona Puerto Deportivo, Fuengirola — idealista",
+            ),
+            ("Fuengirola", "Zona Puerto Deportivo"),
+        )
+
+    def test_alle_acht_belege_zerfallen_wie_erhoben(self):
+        """Der Zeuge ueber die ganze Erhebung, nicht ueber einen Fall.
+
+        Die Regel ruht auf diesen acht Titeln. Ein Zeuge je Sonderfall
+        koennte gruen bleiben, waehrend die Regel an einem der uebrigen
+        stillschweigend etwas anderes liefert.
+        """
+        erwartet = (
+            ("Fuengirola", "Zona Puerto Deportivo"),
+            ("Fuengirola", "Torreblanca del Sol"),
+            ("Fuengirola", "Centro Ciudad"),
+            ("Fuengirola", "Centro Ciudad"),
+            ("Fuengirola", "Zona Puerto Deportivo"),
+            ("Fuengirola", "Zona Puerto Deportivo"),
+            ("Santiago del Teide", "Puerto de Santiago"),
+            ("Santiago del Teide", "Tamaimo-Arguayo"),
+        )
+        for titel, paar in zip(self.BELEGE, erwartet, strict=True):
+            with self.subTest(titel=titel):
+                self.assertEqual(ort_und_stadtteil(Portal.IDEALISTA, titel), paar)
+
+    # --- Zusage 2 ---------------------------------------------------------
+
+    def test_zwei_segmente_liefern_beide_werte(self):
+        """Der laendliche Beleg: keine Strasse, keine Hausnummer.
+
+        Ein eigener Zeuge und keine Zeile im Reihentest darueber: `Tamaimo-
+        Arguayo` ist der Fall, an dem sich zeigt, dass die Zerlegung nicht an
+        einer festen Segmentzahl haengt.
+        """
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Casa terrera zu verkaufen in Tamaimo-Arguayo, "
+                "Santiago del Teide — idealista",
+            ),
+            ("Santiago del Teide", "Tamaimo-Arguayo"),
+        )
+
+    # --- Zusage 3 ---------------------------------------------------------
+
+    def test_ein_segment_liefert_nur_den_ort(self):
+        """Halb gefuellt ist hier RICHTIG - anders als bei `portal_und_id()`.
+
+        Ein Titel ohne Stadtteil ist der Normalfall, und der Ort allein ist
+        brauchbar. Die beiden Werte haengen an keinem gemeinsamen Index.
+        """
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Fuengirola — idealista",
+            ),
+            ("Fuengirola", ""),
+        )
+
+    # --- Zusage 4 ---------------------------------------------------------
+
+    def test_ohne_geviertstrich_bleibt_alles_leer(self):
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Zona Puerto Deportivo, Fuengirola",
+            ),
+            ("", ""),
+        )
+
+    def test_ein_bindestrich_ist_kein_geviertstrich(self):
+        """Die Falle, die kein Auge sieht.
+
+        Im Editor sind `-`, `–` und `—` kaum zu unterscheiden. Ein Muster, das
+        am falschen Strich haengt, trifft nie - und liefert stumm leere
+        Felder, was von "das Portal hat nichts hergegeben" nicht zu
+        unterscheiden waere.
+        """
+        for strich in ("-", "–"):
+            with self.subTest(strich=strich):
+                self.assertEqual(
+                    ort_und_stadtteil(
+                        Portal.IDEALISTA,
+                        f"Wohnung zu verkaufen in Fuengirola {strich} idealista",
+                    ),
+                    ("", ""),
+                )
+
+    # --- Zusage 5 ---------------------------------------------------------
+
+    def test_ohne_die_marke_bleibt_alles_leer(self):
+        """Die englische Fassung greift nicht - das ist gewollt."""
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Flat for sale in Zona Puerto Deportivo, Fuengirola — idealista",
+            ),
+            ("", ""),
+        )
+
+    # --- Zusage 6 ---------------------------------------------------------
+
+    def test_ein_rein_numerisches_vorletztes_segment_bleibt_weg(self):
+        """Der Riegel gegen die Hausnummer als Stadtteil.
+
+        Das vorletzte Segment IST hier numerisch - ohne diesen Aufbau bliebe
+        der Zeuge nach dem Ausbau des Riegels gruen und bezeugte nichts. Der
+        Ort bleibt gesetzt: ein zu verwerfender Stadtteil ist kein Grund, auch
+        die Gemeinde wegzuwerfen.
+        """
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Calle Mirasierra, 5, Fuengirola — idealista",
+            ),
+            ("Fuengirola", ""),
+        )
+
+    def test_eine_hausnummer_mit_buchstaben_bleibt_stehen(self):
+        """Die Gegenprobe zum Riegel: verworfen wird nur, was NUR Ziffern ist.
+
+        Ohne diesen Zeugen liesse sich der Riegel zu `if not stadtteil[0]
+        .isalpha()` verbreitern, ohne dass etwas rot wuerde - und dann fiele
+        auch ein Stadtteil weg, der mit einer Ziffer beginnt.
+        """
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Calle Mirasierra, 5A, Fuengirola — idealista",
+            ),
+            ("Fuengirola", "5A"),
+        )
+
+    # --- Zusage 7 ---------------------------------------------------------
+
+    def test_ein_zu_langer_ort_bleibt_leer_statt_gekuerzt(self):
+        zu_lang = "F" * (portale.ORTSFELD_LAENGE + 1)
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                f"Wohnung zu verkaufen in Centro Ciudad, {zu_lang} — idealista",
+            ),
+            ("", "Centro Ciudad"),
+        )
+
+    def test_ein_zu_langer_stadtteil_bleibt_leer_und_der_ort_steht(self):
+        """Je Feld einzeln: ein zu langer Stadtteil wirft den Ort nicht weg."""
+        zu_lang = "Z" * (portale.ORTSFELD_LAENGE + 1)
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                f"Wohnung zu verkaufen in {zu_lang}, Fuengirola — idealista",
+            ),
+            ("Fuengirola", ""),
+        )
+
+    def test_genau_die_feldlaenge_geht_noch_durch(self):
+        """Die Gegenprobe: der Riegel greift UEBER der Laenge, nicht ab ihr.
+
+        Ohne diesen Zeugen liesse sich `>` zu `>=` verschieben, ohne dass
+        etwas rot wuerde - und dann fiele ein Wert weg, der passt.
+        """
+        genau = "F" * portale.ORTSFELD_LAENGE
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                f"Wohnung zu verkaufen in {genau} — idealista",
+            ),
+            (genau, ""),
+        )
+
+    def test_nichts_wird_abgeschnitten(self):
+        """Ausdruecklich: kein Wert kommt gekuerzt zurueck.
+
+        Der Zeuge darueber prueft auf leer. Bliebe jemand bei `[:150]`
+        haengen, waere das Ergebnis nicht leer, sondern ein Ortsname, der wie
+        einer aussieht und keiner ist - genau der Fehler, den man nicht sieht.
+        """
+        zu_lang = "F" * (portale.ORTSFELD_LAENGE + 1)
+        ort, _ = ort_und_stadtteil(
+            Portal.IDEALISTA,
+            f"Wohnung zu verkaufen in {zu_lang} — idealista",
+        )
+        self.assertNotEqual(ort, zu_lang[: portale.ORTSFELD_LAENGE])
+
+    # --- Zusage 8 ---------------------------------------------------------
+
+    def test_ein_portal_ohne_titelregel_liefert_nichts(self):
+        """Auch bei einem Titel im Idealista-Aufbau.
+
+        Die Regel haengt am PORTAL und nicht daran, ob ein Titel zufaellig
+        passt. Der Titel ist hier absichtlich ein belegter - ein erfundener,
+        der ohnehin nicht zerfaellt, liesse den Zeugen nach dem Ausbau der
+        Tabellenabfrage gruen.
+        """
+        for portal in (
+            Portal.IMMOWELT,
+            Portal.FOTOCASA,
+            Portal.IMMOSCOUT24,
+            Portal.SONSTIGES,
+            "",
+        ):
+            with self.subTest(portal=portal):
+                self.assertEqual(
+                    ort_und_stadtteil(portal, self.BELEGE[0]), ("", "")
+                )
+
+    def test_nur_idealista_traegt_eine_titelregel(self):
+        """Strukturzeuge: die Tabelle taeuscht keine Abdeckung vor.
+
+        Fuer Fotocasa, Pisos, Milanuncios, ImmoScout24 und Immowelt ist kein
+        einziger Titel belegt. Nach der Lehre vom 07.09. gehoert nichts in die
+        Tabelle, was nicht belegt ist.
+        """
+        self.assertEqual(
+            list(portale.ORT_AUS_TITEL), [portale.PORTAL_IDEALISTA]
+        )
+
+    # --- Randfaelle, die kein Zeuge der Liste abdeckt ---------------------
+
+    def test_ein_leerer_titel_bleibt_leer(self):
+        self.assertEqual(ort_und_stadtteil(Portal.IDEALISTA, ""), ("", ""))
+
+    def test_leere_segmente_fallen_weg(self):
+        """Ein doppeltes Komma darf den Stadtteil nicht auf leer schieben."""
+        self.assertEqual(
+            ort_und_stadtteil(
+                Portal.IDEALISTA,
+                "Wohnung zu verkaufen in Centro Ciudad, , Fuengirola — idealista",
+            ),
+            ("Fuengirola", "Centro Ciudad"),
+        )
+
+
+class OrtsfeldLaengeTests(SimpleTestCase):
+    """Riegel gegen ein Auseinanderdriften von Modell und Riegel.
+
+    `portale.py` darf Django nicht importieren und traegt die Feldlaenge
+    deshalb als nackte Zahl. Ohne diesen Zeugen liefe der Riegel nach einer
+    Aenderung am Modell auf die falsche Grenze - und zwar still.
+    """
+
+    def test_die_zahl_passt_zum_feld_ort(self):
+        self.assertEqual(
+            portale.ORTSFELD_LAENGE, Objekt._meta.get_field("ort").max_length
+        )
+
+    def test_die_zahl_passt_zum_feld_stadtteil(self):
+        """Beide Felder, nicht nur eines.
+
+        Eine Zahl fuer zwei Felder gilt nur, solange die zeichengleich sind.
+        Wuerde `stadtteil` spaeter laenger, verwuerfe der Riegel Werte, die
+        passen.
+        """
+        self.assertEqual(
+            portale.ORTSFELD_LAENGE, Objekt._meta.get_field("stadtteil").max_length
+        )
+
+
+class LandAusPortalTests(SimpleTestCase):
+    """Zusage 11 und die Tabelle dahinter."""
+
+    def test_idealista_liefert_es(self):
+        self.assertEqual(land_aus_portal(Portal.IDEALISTA), Land.ES)
+
+    def test_immowelt_liefert_de(self):
+        self.assertEqual(land_aus_portal(Portal.IMMOWELT), Land.DE)
+
+    def test_ein_leeres_portal_liefert_einen_leeren_wert(self):
+        self.assertEqual(land_aus_portal(""), "")
+
+    def test_sonstiges_liefert_einen_leeren_wert(self):
+        """`sonstiges` ist der Auffangwert der Auswahlliste und keine Domain.
+
+        Ausdruecklich eingeschlossen, wie schon bei `portal_und_id()`: ein
+        geratenes Land waere ein falsches Feld, das niemand sieht.
+        """
+        self.assertEqual(land_aus_portal(Portal.SONSTIGES), "")
+
+    def test_die_ganze_tabelle_stimmt(self):
+        """Alle sechs Portale, nicht nur die zwei aus der Zusage."""
+        self.assertEqual(
+            {p: land_aus_portal(p) for p, *_ in portale.PORTALE},
+            {
+                portale.PORTAL_IDEALISTA: "ES",
+                portale.PORTAL_FOTOCASA: "ES",
+                portale.PORTAL_MILANUNCIOS: "ES",
+                portale.PORTAL_PISOS: "ES",
+                portale.PORTAL_IMMOSCOUT24: "DE",
+                portale.PORTAL_IMMOWELT: "DE",
+            },
+        )
+
+    def test_kein_portal_der_tabelle_bleibt_ohne_land(self):
+        """Der Grund, warum das Land eine SPALTE ist und keine Zuordnung.
+
+        Eine getrennte Tabelle koennte ein Portal auslassen, ohne dass es
+        auffiele. Als Spalte faellt es hier auf - und beim Entpacken in
+        `portal_und_id()` ohnehin.
+        """
+        for portal, _, _, _, land in portale.PORTALE:
+            with self.subTest(portal=portal):
+                self.assertTrue(land)
+
+    def test_das_land_wird_wirklich_aus_der_tabelle_gelesen(self):
+        """Der Zeuge gegen die stillste Sabotage: ein festes Verzeichnis.
+
+        Alle Verhaltenszeugen darueber blieben gruen, wenn `land_aus_portal()`
+        die Paare hart hinschriebe statt die Spalte zu lesen. Dann brauchte
+        ein neu aufgenommenes Portal zwei Aenderungen, und die zweite wuerde
+        vergessen. Gemessen wird mit einer untergeschobenen Tabelle.
+        """
+        eigene = tuple(
+            (p, d, m, n, "GEMESSEN" if p == portale.PORTAL_IDEALISTA else l)
+            for p, d, m, n, l in portale.PORTALE
+        )
+        with mock.patch.object(portale, "PORTALE", eigene):
+            self.assertEqual(land_aus_portal(portale.PORTAL_IDEALISTA), "GEMESSEN")
+
+
+class LandSchluesselTests(SimpleTestCase):
+    """Riegel gegen eine stille Umbenennung in `choices.py`.
+
+    Dasselbe Driftrisiko wie bei den Portalschluesseln: `portale.py` darf
+    Django nicht importieren und traegt die Landschluessel als nackte
+    Zeichenketten. Ohne diesen Zeugen schriebe die View nach einer
+    Umbenennung weiter den alten Wert in ein Auswahlfeld, das ihn nicht mehr
+    kennt - und nichts wuerde rot.
+    """
+
+    def test_der_spanien_schluessel_passt_zur_auswahlliste(self):
+        self.assertEqual(portale.LAND_ES, Land.ES.value)
+
+    def test_der_deutschland_schluessel_passt_zur_auswahlliste(self):
+        self.assertEqual(portale.LAND_DE, Land.DE.value)
+
+
+class VorbelegungOrtStadtteilLandTests(TestCase):
+    """Zusagen 9, 10 und 12: die Ableitung im Vorbelegungspfad von `GET`.
+
+    Gemessen wird am WERT DES FORMULARFELDES und nicht an der gerenderten
+    Seite. Ein `assertContains(antwort, "Fuengirola")` waere blind: der
+    Ortsname steht auch im uebergebenen Titel, und der steht ebenfalls auf der
+    Seite - der Zeuge bliebe gruen, ohne dass je ein Ortsfeld gefuellt wurde.
+    """
+
+    INSERAT = "https://www.idealista.com/inmueble/12345/"
+
+    #: Ein Beleg vom 14.09. Vier Segmente, damit Ort UND Stadtteil anfallen.
+    TITEL = (
+        "Wohnung zu verkaufen in Calle San Pancracio, 5, "
+        "Zona Puerto Deportivo, Fuengirola — idealista"
+    )
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _vorschau(self, **abweichungen):
+        daten = {"url": self.INSERAT, "titel": self.TITEL}
+        daten.update(abweichungen)
+        return self.client.get("/uebernehmen/", daten)
+
+    def _feld(self, antwort, name):
+        return antwort.context["form"][name].value()
+
+    def _bestandsobjekt(self, **abweichungen):
+        werte = {
+            "url": self.INSERAT,
+            "portal": Portal.IDEALISTA,
+            "inserats_id": "12345",
+            "titel": "Finca",
+        }
+        werte.update(abweichungen)
+        return Objekt.objects.create(**werte)
+
+    # --- Zusage 9 ---------------------------------------------------------
+
+    def test_der_ort_steht_vorbelegt_im_formular(self):
+        self.assertEqual(self._feld(self._vorschau(), "ort"), "Fuengirola")
+
+    def test_der_stadtteil_steht_vorbelegt_im_formular(self):
+        """Eigener Zeuge, weil es eine eigene Zusage ist.
+
+        Ein gemeinsamer Zeuge ueber beide Felder maesse das zweite nicht mehr,
+        sobald das erste faellt - und die beiden haengen hier ausdruecklich
+        NICHT aneinander.
+        """
+        self.assertEqual(
+            self._feld(self._vorschau(), "stadtteil"), "Zona Puerto Deportivo"
+        )
+
+    def test_ohne_titel_bleiben_beide_felder_leer(self):
+        """Die Gegenprobe: die Werte kommen aus dem TITEL, nicht von woanders.
+
+        Ohne diesen Zeugen bliebe unbemerkt, wenn die Vorbelegung ihre Werte
+        aus einer anderen Quelle zoege - aus der URL etwa. Dann stuende auch
+        ohne Titel etwas im Feld.
+        """
+        antwort = self._vorschau(titel="")
+        self.assertEqual(
+            (self._feld(antwort, "ort"), self._feld(antwort, "stadtteil")), ("", "")
+        )
+
+    def test_ein_titel_ohne_stadtteil_laesst_nur_das_stadtteilfeld_leer(self):
+        """Halb gefuellt ist im Formular ebenso richtig wie in der Funktion."""
+        antwort = self._vorschau(
+            titel="Wohnung zu verkaufen in Fuengirola — idealista"
+        )
+        self.assertEqual(
+            (self._feld(antwort, "ort"), self._feld(antwort, "stadtteil")),
+            ("Fuengirola", ""),
+        )
+
+    # --- Zusage 10 --------------------------------------------------------
+
+    def test_beim_bestandsobjekt_gewinnt_der_ort_aus_dem_bestand(self):
+        """Bestandswert und abgeleiteter Wert sind VERSCHIEDEN.
+
+        `Palma` gegen `Fuengirola`: waeren sie gleich, passierte der Zeuge
+        strukturell - er kaeme auch dann gruen durch, wenn die Ableitung den
+        Bestand ueberschriebe.
+        """
+        self._bestandsobjekt(ort="Palma")
+        self.assertEqual(self._feld(self._vorschau(), "ort"), "Palma")
+
+    def test_beim_bestandsobjekt_steht_NICHT_der_abgeleitete_ort(self):
+        """Getrennt vom Zeugen darueber, weil er etwas anderes misst.
+
+        Der obere faellt auch, wenn das Feld leer bliebe; dieser faellt genau
+        dann, wenn der abgeleitete Wert den Bestand verdraengt hat.
+        """
+        self._bestandsobjekt(ort="Palma")
+        self.assertNotEqual(self._feld(self._vorschau(), "ort"), "Fuengirola")
+
+    def test_beim_bestandsobjekt_gewinnt_der_stadtteil_aus_dem_bestand(self):
+        self._bestandsobjekt(stadtteil="Santa Catalina")
+        self.assertEqual(self._feld(self._vorschau(), "stadtteil"), "Santa Catalina")
+
+    def test_beim_bestandsobjekt_steht_NICHT_der_abgeleitete_stadtteil(self):
+        self._bestandsobjekt(stadtteil="Santa Catalina")
+        self.assertNotEqual(
+            self._feld(self._vorschau(), "stadtteil"), "Zona Puerto Deportivo"
+        )
+
+    def test_der_abweichende_abgeleitete_ort_steht_als_hinweis_darunter(self):
+        """Die Regel aus Abschnitt 3.1 erbt sich, sie wird nicht neu gebaut.
+
+        Nichts wird stillschweigend ueberschrieben: der abgeleitete Wert geht
+        nicht verloren, er erscheint als Hinweis unter dem Feld.
+        """
+        self._bestandsobjekt(ort="Palma")
+        self.assertContains(self._vorschau(), "gelesen: Fuengirola")
+
+    def test_ein_leeres_bestandsfeld_nimmt_den_abgeleiteten_wert(self):
+        """Die Gegenprobe zu Zusage 10: der Bestand gewinnt nur, wo er steht.
+
+        Ohne diesen Zeugen liesse sich die Ableitung fuer bestehende Objekte
+        ganz abschalten, ohne dass etwas rot wuerde.
+        """
+        self._bestandsobjekt()
+        self.assertEqual(self._feld(self._vorschau(), "ort"), "Fuengirola")
+
+    # --- Zusage 12 --------------------------------------------------------
+
+    def test_das_land_steht_vorbelegt_im_formular(self):
+        self.assertEqual(self._feld(self._vorschau(), "land"), Land.ES)
+
+    def test_das_land_kommt_aus_der_url_und_nicht_aus_dem_titel(self):
+        """Die Gegenprobe: ohne Titel steht das Land trotzdem da.
+
+        Es folgt aus dem Portal und wird gar nicht gelesen. Ein Zeuge, der nur
+        mit Titel misst, bliebe gruen, wenn jemand es an die Titelregel
+        haengte - und dann fehlte es bei jedem Inserat ohne Titel.
+        """
+        self.assertEqual(self._feld(self._vorschau(titel=""), "land"), Land.ES)
+
+    def test_auf_einer_unbekannten_domain_bleibt_das_landfeld_leer(self):
+        antwort = self._vorschau(url="https://beispiel.de/inserat/1", titel="")
+        self.assertEqual(self._feld(antwort, "land"), "")
+
+    def test_beim_bestandsobjekt_gewinnt_das_land_aus_dem_bestand(self):
+        """Dieselbe Regel wie bei Ort und Stadtteil - C2 verlangt sie ausdruecklich.
+
+        `DE` an einem Idealista-Inserat ist unsinnig und genau deshalb der
+        richtige Testwert: es kann nur von Hand dort stehen, und eine
+        Korrektur von Hand darf die Ableitung nicht wegraeumen.
+        """
+        self._bestandsobjekt(land=Land.DE)
+        self.assertEqual(self._feld(self._vorschau(), "land"), Land.DE)
+
+    # --- der Riegel aus B5: NICHT in `_zeigen()` --------------------------
+
+    def test_nach_einem_abgewiesenen_post_bleibt_die_korrektur_von_hand_stehen(self):
+        """Der ausdrueckliche Gegensatz zur Plausibilitaetswarnung vom 07.09.
+
+        Die Warnung wurde damals nach `_zeigen()` verschoben, damit sie nach
+        einem abgewiesenen POST erneut greift. Die Ableitung darf genau das
+        NICHT: sie schreibt einen Wert. Liefe sie in `_zeigen()`, ueberschriebe
+        sie nach einem an anderer Stelle abgewiesenen POST die Korrektur, die
+        der Mensch gerade eingetragen hat.
+
+        Abgewiesen wird hier ueber eine zu lange URL - ein Fehler an einem
+        ANDEREN Feld als den dreien, um die es geht.
+        """
+        antwort = self.client.post(
+            "/uebernehmen/",
+            {
+                "url": self.INSERAT,
+                "titel": self.TITEL,
+                "ort": "Palma",
+                "stadtteil": "Santa Catalina",
+                "land": Land.DE,
+                "zustand": Zustand.UNKLAR,
+                "region": "x" * 1000,
+            },
+        )
+        formular = antwort.context["form"]
+        self.assertEqual(
+            (
+                formular["ort"].value(),
+                formular["stadtteil"].value(),
+                formular["land"].value(),
+            ),
+            ("Palma", "Santa Catalina", Land.DE),
+        )
+
+    def test_der_abgewiesene_post_ist_wirklich_abgewiesen(self):
+        """Ohne diesen Zeugen misst der darueber vielleicht gar keinen POST.
+
+        Waere das Formular gueltig, liefe die Antwort auf eine Umleitung und
+        `antwort.context["form"]` gaebe es nicht - der Zeuge fiele mit einem
+        `TypeError` statt mit einer Aussage. Gruen bliebe er nie, blind aber
+        schon: ein spaeter gelockerter Validator machte den POST gueltig, und
+        dann maesse er den Fall nicht mehr, den er messen soll.
+        """
+        antwort = self.client.post(
+            "/uebernehmen/",
+            {
+                "url": self.INSERAT,
+                "titel": self.TITEL,
+                "zustand": Zustand.UNKLAR,
+                "region": "x" * 1000,
+            },
+        )
+        self.assertEqual(antwort.status_code, 200)
+        self.assertIn("region", antwort.context["form"].errors)
+
+
+class EinwurfLandTests(TestCase):
+    """Zusagen 13 und 14: das Land beim Einwurf ueber die Schnellerfassung."""
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _einwerfen(self, url):
+        return self.client.post("/einwerfen/", {"url": url})
+
+    # --- Zusage 13 --------------------------------------------------------
+
+    def test_der_einwurf_schreibt_das_land_ans_objekt(self):
+        self._einwerfen("https://www.idealista.com/inmueble/12345/")
+        self.assertEqual(Objekt.objects.get().land, Land.ES)
+
+    def test_der_einwurf_eines_deutschen_portals_schreibt_de(self):
+        """Damit der Zeuge darueber nicht bloss eine feste Vorbelegung misst."""
+        self._einwerfen("https://www.immowelt.de/expose/abc-def")
+        self.assertEqual(Objekt.objects.get().land, Land.DE)
+
+    def test_der_einwurf_laesst_den_ort_leer(self):
+        """Die Schnellerfassung kennt die URL, aber keinen Titel.
+
+        Das ist kein Mangel: Ort und Stadtteil stehen im Titel, den erst die
+        Uebernahme hat. Ein geratener Ort waere hier ein falsches Feld.
+        """
+        self._einwerfen("https://www.idealista.com/inmueble/12345/")
+        self.assertEqual(Objekt.objects.get().ort, "")
+
+    def test_der_einwurf_laesst_den_stadtteil_leer(self):
+        self._einwerfen("https://www.idealista.com/inmueble/12345/")
+        self.assertEqual(Objekt.objects.get().stadtteil, "")
+
+    # --- Zusage 14 --------------------------------------------------------
+
+    def test_eine_domain_ohne_muster_legt_weiterhin_ein_objekt_an(self):
+        """Ein Lesefehler darf nie dazu fuehren, dass ein Objekt verloren geht."""
+        self._einwerfen("https://beispiel.de/inserat/1")
+        self.assertEqual(Objekt.objects.count(), 1)
+
+    def test_eine_domain_ohne_muster_traegt_kein_land(self):
+        self._einwerfen("https://beispiel.de/inserat/1")
+        self.assertEqual(Objekt.objects.get().land, "")
 
 
 class EinwurfImmoweltTests(TestCase):
@@ -6077,6 +6861,7 @@ FELDER_DES_DATENBLOCKS = (
     "Zimmer",
     "Baujahr",
     "Zustand",
+    "Stadtteil",
     "Region",
     "Portal",
     "Inserats-ID",
@@ -6108,7 +6893,14 @@ class ObjektansichtDatenblockTests(TestCase):
         Truege das Objekt Werte, maesse der Zeuge unten nicht mehr, dass LEERE
         Felder angezeigt werden - sondern nur, dass gefuellte es tun.
         """
-        for name in ("objekttyp", "region", "portal", "inserats_id", "beschreibung"):
+        for name in (
+            "objekttyp",
+            "stadtteil",
+            "region",
+            "portal",
+            "inserats_id",
+            "beschreibung",
+        ):
             with self.subTest(feld=name):
                 self.assertEqual(getattr(self.objekt, name), "")
         self.assertIsNone(self.objekt.zimmer)
@@ -6462,6 +7254,236 @@ class BearbeitenFormularTests(TestCase):
         nirgends auffindbar - sie steht als `help_text` an der Formklasse und
         muss auch gerendert werden."""
         self.assertContains(self._seite(), "Leer heißt: nicht ändern.")
+
+
+class StadtteilDarstellungTests(TestCase):
+    """Zusagen 16 und 17: der Stadtteil in Liste und Objektansicht.
+
+    Die Liste wird ueber `UnterzeilenParser` gelesen und damit an ELEMENTEN
+    gemessen, nicht an Zeichenketten - die Falle vom 05.09. Der Parser
+    begrenzt sich zudem auf `ul.liste`: ein Stadtteilname steht auch im Titel
+    des Objekts, und der steht anderswo auf derselben Seite. Ein Zeuge gegen
+    die ganze Antwort waere blind.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _teile(self):
+        zeilen = UnterzeilenParser.lesen(self.client.get("/"))
+        self.assertEqual(len(zeilen), 1, "erwartet wird genau eine Listenzeile")
+        return zeilen[0]
+
+    # --- Zusage 16, erste Haelfte: er steht da, und zwar VOR dem Ort ------
+
+    def test_der_stadtteil_steht_in_der_unterzeile(self):
+        Objekt.objects.create(
+            url="https://x/1", stadtteil="Puerto de Santiago", ort="Santiago del Teide"
+        )
+        self.assertIn("Puerto de Santiago", self._teile())
+
+    def test_der_stadtteil_steht_vor_dem_ort(self):
+        """Von fein nach grob - eigener Zeuge, weil es eine eigene Zusage ist.
+
+        Der Zeuge darueber bliebe gruen, stuende der Stadtteil hinter dem Ort
+        oder gar hinter dem Zustand.
+        """
+        Objekt.objects.create(
+            url="https://x/1", stadtteil="Puerto de Santiago", ort="Santiago del Teide"
+        )
+        teile = self._teile()
+        self.assertLess(
+            teile.index("Puerto de Santiago"), teile.index("Santiago del Teide")
+        )
+
+    def test_die_ganze_reihenfolge_steht_von_fein_nach_grob(self):
+        """Stadtteil · Ort · Region, Land · Zustand.
+
+        Region und Land sind EIN Teil ("Teneriffa, Spanien") und keine zwei -
+        Entscheidung vom 04.09., hier nur mitgemessen, damit das neue Feld sie
+        nicht verschiebt.
+        """
+        Objekt.objects.create(
+            url="https://x/1",
+            stadtteil="Puerto de Santiago",
+            ort="Santiago del Teide",
+            region="Teneriffa",
+            land=Land.ES,
+            zustand=Zustand.MITTEL,
+        )
+        self.assertEqual(
+            self._teile(),
+            [
+                "Puerto de Santiago",
+                "Santiago del Teide",
+                "Teneriffa, Spanien",
+                "mittel",
+            ],
+        )
+
+    # --- Zusage 16, zweite Haelfte: leer faellt weg, EINZELN --------------
+
+    def test_ein_leerer_stadtteil_erzeugt_kein_element(self):
+        """Kein leeres Element, kein Gedankenstrich - der Ort bleibt stehen.
+
+        Gemessen wird auf der LISTE der Teile und nicht auf ihrem Text: ein
+        leeres `<span>` traegt keinen Text und faellt an einer Textpruefung
+        nicht auf, an der Zahl der Elemente schon.
+        """
+        Objekt.objects.create(url="https://x/1", ort="Santiago del Teide")
+        self.assertEqual(self._teile(), ["Santiago del Teide"])
+
+    def test_ein_leerer_ort_laesst_den_stadtteil_stehen(self):
+        """Die Gegenrichtung: die beiden fallen EINZELN weg, nicht paarweise.
+
+        Ohne diesen Zeugen liesse sich die Unterzeile so bauen, dass der
+        Stadtteil nur neben einem Ort erscheint - und bei einem Titel, aus dem
+        nur der Stadtteil zu holen war, staende dann nichts.
+        """
+        Objekt.objects.create(url="https://x/1", stadtteil="Puerto de Santiago")
+        self.assertEqual(self._teile(), ["Puerto de Santiago"])
+
+    # --- Zusage 17: die Objektansicht zeigt ihn auch leer -----------------
+
+    def test_die_objektansicht_zeigt_den_leeren_stadtteil(self):
+        """Im Datenblock ist ein leeres Feld die Aufforderung, es zu fuellen.
+
+        Gemessen am Paar aus Beschriftung und Wert im Datenblock, nicht an der
+        ganzen Seite: die Beschriftung allein stuende auch dann da, wenn das
+        Feld gar keinen Wert ausgibt.
+        """
+        antwort = self._objektansicht(Objekt.objects.create(url="https://x/1"))
+        self.assertEqual(
+            (daten_paare(antwort)["Stadtteil"], daten_klassen(antwort)["Stadtteil"]),
+            ("—", ["fehlt"]),
+        )
+
+    def test_die_objektansicht_zeigt_den_gefuellten_stadtteil(self):
+        """Die Gegenprobe: der Wert steht wirklich im Feld.
+
+        Ohne ihn bliebe der Zeuge darueber gruen, wenn das Feld IMMER den
+        Strich zeigte und den Wert nie.
+        """
+        antwort = self._objektansicht(
+            Objekt.objects.create(url="https://x/1", stadtteil="Puerto de Santiago")
+        )
+        self.assertEqual(
+            (daten_paare(antwort)["Stadtteil"], daten_klassen(antwort)["Stadtteil"]),
+            ("Puerto de Santiago", []),
+        )
+
+    def test_der_stadtteil_steht_vor_der_region(self):
+        """Auch hier von fein nach grob."""
+        antwort = self._objektansicht(Objekt.objects.create(url="https://x/1"))
+        namen = list(daten_paare(antwort))
+        self.assertLess(namen.index("Stadtteil"), namen.index("Region"))
+
+    def _objektansicht(self, objekt):
+        antwort = self.client.get(f"/objekt/{objekt.pk}/")
+        self.assertIn(
+            "Stadtteil", daten_paare(antwort), "der Datenblock wurde nicht gelesen"
+        )
+        return antwort
+
+
+class StadtteilBearbeitenTests(TestCase):
+    """Zusage 18: das Bearbeiten-Formular nimmt eine Aenderung an und speichert sie."""
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(
+            url="https://beispiel.de/1", titel="Finca", stadtteil="Centro Ciudad"
+        )
+        self.adresse = f"/objekt/{self.objekt.pk}/bearbeiten/"
+
+    def _formulardaten(self, **abweichungen):
+        """Derselbe Rundlauf wie in `BearbeitenTests`: rendern, zuruecksenden."""
+        formular = self.client.get(self.adresse).context["form"]
+        daten = {}
+        for name, feld in formular.fields.items():
+            gerendert = feld.widget.format_value(formular[name].value())
+            if isinstance(gerendert, list):
+                gerendert = gerendert[0] if gerendert else ""
+            daten[name] = "" if gerendert is None else gerendert
+        daten.update(abweichungen)
+        return daten
+
+    def test_das_feld_ist_mit_dem_bestandswert_vorbelegt(self):
+        """Riegel gegen einen Zeugen im Vakuum.
+
+        Kaeme das Feld leer, maesse der Zeuge unten nicht eine AENDERUNG,
+        sondern ein erstes Befuellen.
+        """
+        formular = self.client.get(self.adresse).context["form"]
+        self.assertEqual(formular["stadtteil"].value(), "Centro Ciudad")
+
+    def test_eine_aenderung_am_stadtteil_wird_gespeichert(self):
+        self.client.post(
+            self.adresse, self._formulardaten(stadtteil="Torreblanca del Sol")
+        )
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.stadtteil, "Torreblanca del Sol")
+
+    def test_der_stadtteil_laesst_sich_auch_leeren(self):
+        """Kein Pflichtfeld: eine falsche Ableitung muss sich zuruecknehmen lassen.
+
+        Das ist der Ausweg, auf den die Spezifikation die Segmentregel stuetzt
+        - stuende bei einem Inserat doch die Provinz hinten an, wanderte die
+        Gemeinde in den Stadtteil, und korrigierbar ist das nur hier.
+        """
+        self.client.post(self.adresse, self._formulardaten(stadtteil=""))
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.stadtteil, "")
+
+    def test_der_rundlauf_ohne_aenderung_laesst_den_wert_stehen(self):
+        """Anzeigen, unveraendert absenden, Wert steht noch."""
+        self.client.post(self.adresse, self._formulardaten())
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.stadtteil, "Centro Ciudad")
+
+
+class StadtteilSucheTests(TestCase):
+    """Der Freitext findet ein Objekt ueber seinen Stadtteil.
+
+    Nicht aus der Spezifikation, sondern aus der Runde vom 14.09.: ein Feld,
+    das die Liste zeigt und die Suche nicht kennt, laesst sich nur durch
+    Blaettern finden - und `Puerto de Santiago` ist genau der Wert, um
+    dessentwillen das Feld entstand.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self.treffer = Objekt.objects.create(
+            url="https://x/1", titel="Landhaus", stadtteil="Puerto de Santiago"
+        )
+        self.daneben = Objekt.objects.create(url="https://x/2", titel="Wohnung")
+
+    def _gefunden(self, suche):
+        antwort = self.client.get("/", {"suche": suche})
+        return [o.pk for o in antwort.context["objekte"]]
+
+    def test_die_suche_findet_ueberhaupt_etwas(self):
+        """Riegel gegen einen Zeugen im Vakuum: findet die Suche grundsaetzlich
+        nichts, waere jeder Vergleich unten bedeutungslos."""
+        self.assertEqual(self._gefunden("Wohnung"), [self.daneben.pk])
+
+    def test_eine_suche_nach_dem_stadtteil_findet_das_objekt(self):
+        self.assertEqual(self._gefunden("Puerto de Santiago"), [self.treffer.pk])
+
+    def test_die_suche_nach_dem_stadtteil_findet_NICHT_die_anderen(self):
+        """Getrennt vom Zeugen darueber: der faellt auch, wenn gar nichts kommt.
+
+        Dieser faellt genau dann, wenn der Stadtteil-Zweig die ODER-Kette so
+        weitet, dass sie alles einsammelt.
+        """
+        self.assertNotIn(self.daneben.pk, self._gefunden("Puerto de Santiago"))
+
+    def test_ein_teil_des_stadtteilnamens_reicht(self):
+        """`icontains`, wie bei den uebrigen vier Spalten."""
+        self.assertEqual(self._gefunden("santiago"), [self.treffer.pk])
 
 
 # =========================================================================

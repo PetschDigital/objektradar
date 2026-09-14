@@ -32,6 +32,14 @@ PORTAL_MILANUNCIOS = "milanuncios"
 PORTAL_PISOS = "pisos"
 PORTAL_IMMOWELT = "immowelt"
 
+#: Die Landschluessel, aus demselben Grund als nackte Zeichenketten wie die
+#: Portalschluessel darueber: dieses Modul darf Django nicht importieren, und
+#: `choices.Land` ist damit ausser Reichweite. Dass die Werte zu `choices.Land`
+#: passen, ist deshalb ebenfalls NICHT strukturell gesichert, sondern nur
+#: zurueckgelesen bezeugt - siehe `LandSchluesselTests`.
+LAND_ES = "ES"
+LAND_DE = "DE"
+
 #: Beide Werte oder keiner. Ein halb gefuelltes Paar ist wertlos - der
 #: partielle Unique-Index greift nur, wenn Portal UND ID gesetzt sind.
 LEER = ("", "")
@@ -147,17 +155,27 @@ def _unveraendert(kennung: str) -> str:
 #: Treffer. Passt die Domain, aber nicht der Pfad, ist die Antwort LEER - es
 #: wird NICHT beim naechsten Eintrag weitergesucht: eine idealista-URL mit
 #: unbekanntem Pfad ist kein fotocasa-Inserat.
+#: Die fuenfte Spalte ist am 14.09. dazugekommen: das Land des Portals.
+#:
+#: Sie steht hier und NICHT in einer eigenen Zuordnung neben `PREIS_AUS_TITEL`,
+#: weil sie etwas anderes ist als eine Leseregel. Eine Leseregel gilt fuer die
+#: Portale, an denen sie belegt wurde, und fehlt bei den uebrigen mit Absicht.
+#: Das Land dagegen ist eine dauerhafte Eigenschaft des Portals: es steht fest,
+#: sobald die Domain feststeht, ganz unabhaengig davon, ob und wie aus dem
+#: Titel gelesen wird. Als Spalte bringt ein neu aufgenommenes Portal sein Land
+#: an derselben Stelle mit wie Domains und Pfadmuster - eine getrennte Tabelle
+#: koennte ein Portal auslassen, ohne dass es auffiele.
 PORTALE = (
-    (PORTAL_IDEALISTA, IDEALISTA_DOMAINS, IDEALISTA_PFAD, _unveraendert),
-    (PORTAL_IMMOSCOUT24, IMMOSCOUT24_DOMAINS, IMMOSCOUT24_PFAD, _unveraendert),
-    (PORTAL_FOTOCASA, FOTOCASA_DOMAINS, FOTOCASA_PFAD, _unveraendert),
-    (PORTAL_MILANUNCIOS, MILANUNCIOS_DOMAINS, MILANUNCIOS_PFAD, _unveraendert),
-    (PORTAL_PISOS, PISOS_DOMAINS, PISOS_PFAD, _unveraendert),
+    (PORTAL_IDEALISTA, IDEALISTA_DOMAINS, IDEALISTA_PFAD, _unveraendert, LAND_ES),
+    (PORTAL_IMMOSCOUT24, IMMOSCOUT24_DOMAINS, IMMOSCOUT24_PFAD, _unveraendert, LAND_DE),
+    (PORTAL_FOTOCASA, FOTOCASA_DOMAINS, FOTOCASA_PFAD, _unveraendert, LAND_ES),
+    (PORTAL_MILANUNCIOS, MILANUNCIOS_DOMAINS, MILANUNCIOS_PFAD, _unveraendert, LAND_ES),
+    (PORTAL_PISOS, PISOS_DOMAINS, PISOS_PFAD, _unveraendert, LAND_ES),
     # `str.lower`, weil dieselbe Kennung in abweichender Gross-/Kleinschreibung
     # sonst zwei verschiedene Schluessel fuer dasselbe Inserat ergaebe. Der
     # Dublettenschutz fiele dabei LAUTLOS aus - dieselbe Fehlerart, gegen die
     # bei `pisos.com` der ganze Zahlenblock genommen wurde.
-    (PORTAL_IMMOWELT, IMMOWELT_DOMAINS, IMMOWELT_PFAD, str.lower),
+    (PORTAL_IMMOWELT, IMMOWELT_DOMAINS, IMMOWELT_PFAD, str.lower, LAND_DE),
 )
 
 
@@ -206,7 +224,7 @@ def portal_und_id(url: str) -> tuple[str, str]:
     if not host:
         return LEER
 
-    for portal, domains, muster, normalisieren in PORTALE:
+    for portal, domains, muster, normalisieren, _land in PORTALE:
         if _passt(host, domains):
             treffer = muster.match(teile.path)
             return (portal, normalisieren(treffer.group(1))) if treffer else LEER
@@ -244,7 +262,30 @@ def ist_bekannte_domain(url: str) -> bool:
     if not host:
         return False
 
-    return any(_passt(host, domains) for _, domains, _, _ in PORTALE)
+    return any(_passt(host, domains) for _, domains, _, _, _ in PORTALE)
+
+
+def land_aus_portal(portal: str) -> str:
+    """Das Land des Portals als Schluessel der Land-Auswahl - oder leer.
+
+    Das Land muss nicht gelesen werden: es folgt aus dem Portal, das
+    `portal_und_id()` schon aus der URL ableitet. Ein Portal wechselt sein
+    Land nicht.
+
+    Gelesen wird aus derselben `PORTALE`-Tabelle wie `portal_und_id()` und
+    `ist_bekannte_domain()`. Eine eigene Zuordnung daneben koennte ein Portal
+    auslassen, ohne dass es auffiele - hier faellt eine fehlende Spalte schon
+    beim Entpacken auf, und `PortalUndIdTests` misst die Spaltenzahl.
+
+    Leer fuer jedes unbekannte Portal, `sonstiges` und `""` ausdruecklich
+    eingeschlossen: `sonstiges` ist der Auffangwert der Auswahlliste und keine
+    Domain, und ein geratenes Land waere ein falsches Feld, das niemand sieht.
+    Dieselbe Linie wie bei `portal_und_id()`.
+    """
+    for schluessel, _domains, _muster, _normalisieren, land in PORTALE:
+        if schluessel == portal:
+            return land
+    return ""
 
 
 # =========================================================================
@@ -359,4 +400,174 @@ def preis_aus_titel(portal: str, titel: str) -> int | None:
     leser = PREIS_AUS_TITEL.get(portal)
     if leser is None:
         return None
+    return leser(titel)
+
+
+# =========================================================================
+# Ort und Stadtteil aus dem Titel
+# =========================================================================
+#
+# Abschnitt 2.3 der Bookmarklet-Spezifikation schliesst den Ort aus: er stehe
+# "ohne verlaessliche Auszeichnung im Titel". Fuer Idealista ist das an acht
+# Inseraten vom 14.09. widerlegt - der Ort steht im og:Titel, in einem Aufbau,
+# der sich ohne Raten zerlegen laesst.
+#
+# Damit gilt hier dieselbe Lage wie beim Immowelt-Preis seit dem 07.09.: keine
+# geratene CSS-Auswahl in fremdem Markup, sondern ein Meta-Feld, das das
+# Lesezeichen ohnehin liest und als Parameter `titel` uebergibt. Das Skript
+# selbst wird NICHT angefasst - ein geaendertes Lesezeichen muss auf jedem
+# Geraet neu gesetzt werden.
+#
+# Fuer Region, Baujahr, Objekttyp, Grundstuecksgroesse und Zustand bleibt die
+# Festlegung bestehen: die stehen im Fliesstext, nicht im Titel.
+
+#: Der Trenner vor dem Portalnamen: Geviertstrich U+2014, von je einem
+#: Leerzeichen umgetrennt. AUSGESCHRIEBEN als Escape und nicht als Zeichen,
+#: weil er im Editor vom Bindestrich und vom Halbgeviertstrich nicht zu
+#: unterscheiden ist - und ein Muster, das am falschen Strich haengt, trifft
+#: nie und liefert stumm leere Felder.
+TITEL_TRENNER = " — "
+
+#: Die sprachgebundene Marke vor der Adresse.
+#:
+#: Sie greift NUR auf der deutschen Sprachfassung. Auf der englischen oder
+#: spanischen bleiben die Felder leer - das ist gewollt und der Grund fuer die
+#: Verfahrensregel zur Sprachfassung, nicht eine Luecke, die eine zweite Marke
+#: schliessen sollte. Eine Marke je Sprache waere fuer Englisch und Spanisch
+#: an keinem einzigen Titel belegt.
+TITEL_MARKE = " zu verkaufen in "
+
+#: Ein Segment, das nur aus Ziffern besteht.
+#:
+#: `[0-9]` und nicht `\d`: `\d` trifft in Python auch arabisch-indische und
+#: andere Unicode-Ziffern. Der Riegel soll die HAUSNUMMER fangen, und die
+#: steht in diesen Titeln arabisch. Ein Segment aus fremden Ziffern ist kein
+#: belegter Fall, und ein Riegel, der mehr wegwirft als belegt ist, wirft
+#: irgendwann einen Stadtteil weg.
+NUR_ZIFFERN = re.compile(r"[0-9]+")
+
+#: Die Laenge der beiden Ortsfelder am Modell.
+#:
+#: Als Zahl und nicht aus dem Modell gelesen, weil dieses Modul Django nicht
+#: importieren darf - dieselbe Lage wie bei den Portal- und Landschluesseln
+#: oben, und derselbe Ausgleich: NICHT strukturell gesichert, sondern
+#: zurueckgelesen bezeugt (siehe `OrtsfeldLaengeTests`). Ohne diesen Zeugen
+#: liefe der Riegel nach einer Aenderung am Modell auf die falsche Grenze -
+#: entweder verwuerfe er Werte, die passen, oder er liesse einen durch, an dem
+#: die Datenbank dann aufliefe.
+#:
+#: EINE Zahl fuer beide Felder, weil `stadtteil` zeichengleich zu `ort`
+#: angelegt ist. Waeren es zwei verschiedene, gehoerten zwei Zahlen hierher.
+ORTSFELD_LAENGE = 150
+
+
+def _idealista_ort_und_stadtteil(titel: str) -> tuple[str, str]:
+    """`(ort, stadtteil)` aus dem og:Titel eines Idealista-Inserats.
+
+    Belegtes Format, acht Faelle vom 14.09., deutsche Sprachfassung:
+
+        Wohnung zu verkaufen in Calle San Pancracio, 5, Zona Puerto Deportivo, Fuengirola — idealista
+        Casa terrera zu verkaufen in Tamaimo-Arguayo, Santiago del Teide — idealista
+
+    Das LETZTE Segment ist die Gemeinde, das vorletzte die Lage darin. Der
+    Unterschied traegt: `Puerto de Santiago` liegt am Meer, `Tamaimo-Arguayo`
+    im Landesinneren darueber, beide in `Santiago del Teide`. Ein einzelnes
+    Ortsfeld warf genau den Unterschied weg, der den Preis erklaert.
+
+    Anders als bei `portal_und_id()` ist ein halb gefuelltes Paar hier
+    ZULAESSIG und richtig: ein Titel ohne Stadtteil ist der Normalfall, der Ort
+    allein ist brauchbar, und die beiden Werte haengen an keinem gemeinsamen
+    Index. Deshalb wird `LEER` hier auch nicht wiederverwendet - dort steht es
+    fuer "beide oder keiner", und das gilt hier gerade nicht.
+
+    Der Objekttyp steht im Titel ebenfalls sauber und wird AUSDRUECKLICH nicht
+    gelesen: `Casa terrera` ist in der deutschen Fassung unuebersetzt
+    stehengeblieben und `Penthouse` ist kein Wert der Auswahlliste. Das
+    braeuchte eine eigene Zuordnungstabelle.
+    """
+    # 1. Am LETZTEN Vorkommen des Trenners abschneiden. `rpartition` liefert
+    #    bei fehlendem Trenner ("", "", titel) - der leere Trenner ist die
+    #    Fehlanzeige, nicht der leere Kopf.
+    arbeitstext, trenner, _portalname = (titel or "").rpartition(TITEL_TRENNER)
+    if not trenner:
+        return "", ""
+
+    # 2. Am ERSTEN Vorkommen der Marke: alles dahinter ist die Adresse.
+    _objekttyp, marke, adresse = arbeitstext.partition(TITEL_MARKE)
+    if not marke:
+        return "", ""
+
+    # 3. Am Komma zerlegen, an den Raendern putzen, Leeres verwerfen.
+    segmente = [teil.strip() for teil in adresse.split(",")]
+    segmente = [teil for teil in segmente if teil]
+    if not segmente:
+        return "", ""
+
+    # 4. Letztes Segment ist der Ort, vorletztes der Stadtteil.
+    ort = segmente[-1]
+    stadtteil = segmente[-2] if len(segmente) > 1 else ""
+
+    # RIEGEL 1: Die Hausnummer ist ein eigenes Komma-Segment. Bei
+    # `Calle Mirasierra, 5, Fuengirola` waere das Vorletzte die `5`. Verworfen
+    # wird nur der Stadtteil - der Ort bleibt gesetzt und ist brauchbar.
+    if NUR_ZIFFERN.fullmatch(stadtteil):
+        stadtteil = ""
+
+    # RIEGEL 2: Was zu lang ist, faellt WEG statt abgeschnitten zu werden. Ein
+    # gekuerzter Ortsname sieht aus wie ein Ortsname und ist doch keiner; ein
+    # leeres Feld sieht man. Je Feld einzeln - ein zu langer Stadtteil ist kein
+    # Grund, den Ort zu verwerfen.
+    if len(ort) > ORTSFELD_LAENGE:
+        ort = ""
+    if len(stadtteil) > ORTSFELD_LAENGE:
+        stadtteil = ""
+
+    # RIEGEL 3 steht nirgends als Zeile, sondern in dem, was fehlt: es gibt
+    # KEINEN Rueckfall auf eine andere Quelle. Liefert das Verfahren nichts,
+    # bleiben die Felder leer.
+    return ort, stadtteil
+
+
+#: Welche Portale Ort und Stadtteil aus dem Titel lesen.
+#:
+#: Eigene Tabelle in derselben Bauform wie `PREIS_AUS_TITEL` und ausdruecklich
+#: keine `if`-Abfrage in der Uebernahme: dass die Regel derzeit ausschliesslich
+#: fuer Idealista gilt, ist damit strukturell und nicht in einer View
+#: nachgehalten. Ein weiteres Portal waere eine Zeile.
+#:
+#: Fuer Fotocasa, Pisos, Milanuncios, ImmoScout24 und Immowelt steht hier
+#: NICHTS: fuer keines von ihnen ist ein einziger Titel belegt. Nach der Lehre
+#: vom 07.09. wird nichts aufgenommen, was nicht belegt ist - sonst taeuscht
+#: die Tabelle Abdeckung vor.
+#:
+#: Getrennt von `PREIS_AUS_TITEL` und nicht als zweite Spalte darin: die beiden
+#: Tabellen decken verschiedene Portale ab und werden zu verschiedenen Zeiten
+#: erweitert. In einer gemeinsamen Tabelle stuende fuer jedes Portal eine
+#: leere Zelle, und eine leere Zelle sieht aus wie eine vergessene.
+ORT_AUS_TITEL = {
+    PORTAL_IDEALISTA: _idealista_ort_und_stadtteil,
+}
+
+
+def ort_und_stadtteil(portal: str, titel: str) -> tuple[str, str]:
+    """`(ort, stadtteil)` aus dem Titel - beide `str`, halb gefuellt erlaubt.
+
+    Kein Datenbankzugriff, kein Netz, kein Django - damit aus dem Mail-Parser
+    aus Schritt 3 gleichermassen aufrufbar, wie es `portal_und_id()` schon ist.
+
+    Traegt das uebergebene Portal keine Titelregel, ist die Rueckgabe
+    `("", "")` - auch dann, wenn der Titel im Idealista-Aufbau steht. Die Regel
+    haengt am Portal und nicht daran, ob ein Titel zufaellig passt.
+
+    Argumentfolge `(portal, titel)` wie bei `preis_aus_titel()`. Die
+    Spezifikation gab `(titel, portal)` vor; das ist am 14.09. gedreht worden,
+    weil beide Argumente `str` sind: ein Vertauschen faellt dann nicht beim
+    Aufruf auf, sondern nur daran, dass die Felder still leer bleiben - im
+    Hauptzulaufweg am Hauptportal. Zwei Titelregeln nebeneinander, die ihre
+    Argumente verschieden herum nehmen, sind genau die Falle, die niemand
+    sieht. Ein Hinweis im Docstring haelt sie nicht auf.
+    """
+    leser = ORT_AUS_TITEL.get(portal)
+    if leser is None:
+        return "", ""
     return leser(titel)

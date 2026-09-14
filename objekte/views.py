@@ -20,6 +20,8 @@ from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
 from .portale import (
     ist_bekannte_domain,
+    land_aus_portal,
+    ort_und_stadtteil,
     portal_und_id,
     preis_aus_titel,
     preis_kommt_aus_dem_titel,
@@ -423,7 +425,7 @@ def votum_punkte(objekt, personen):
 
 
 def unterzeile(objekt):
-    """Ort, Herkunft und Zustand als fertige Teile fuer die Zeile unter dem Titel.
+    """Lage, Herkunft und Zustand als fertige Teile fuer die Zeile unter dem Titel.
 
     Was leer ist, FAELLT WEG - kein Gedankenstrich, keine leere Stelle. Das ist
     die Zusage aus `02`, die die Tabelle nie halten konnte: eine Spalte muss in
@@ -446,6 +448,13 @@ def unterzeile(objekt):
     "leer faellt weg" stuende dreimal statt einmal da.
     """
     teile = []
+    # Von FEIN nach GROB: Stadtteil, Ort, dann Region und Land als ein Teil.
+    # Der Stadtteil steht VOR dem Ort, weil er die genauere Angabe ist - und
+    # weil genau er den Preisunterschied erklaert, den ein blosser
+    # Gemeindename verschluckt: `Puerto de Santiago` am Meer und
+    # `Tamaimo-Arguayo` im Landesinneren liegen beide in `Santiago del Teide`.
+    if objekt.stadtteil:
+        teile.append(objekt.stadtteil)
     if objekt.ort:
         teile.append(objekt.ort)
     herkunft = ", ".join(
@@ -690,6 +699,12 @@ def objekt_anlegen(request):
     # jeder Sperre auf Portalseite.
     portal, inserats_id = portal_und_id(url)
 
+    # Dieselbe Stelle wie `portal_und_id()`: nach der Pruefung der URL, vor der
+    # Dublettenpruefung. Die Schnellerfassung kennt die URL und damit das
+    # Portal, aber KEINEN Titel - Ort und Stadtteil bleiben deshalb leer, und
+    # das ist kein Mangel: sie stehen im Titel, den erst die Uebernahme hat.
+    land = land_aus_portal(portal)
+
     vorhanden = bestehendes_objekt(url, portal, inserats_id)
     if vorhanden is not None:
         return _liegt_schon_vor(request, vorhanden)
@@ -704,6 +719,7 @@ def objekt_anlegen(request):
                 url=url,
                 portal=portal,
                 inserats_id=inserats_id,
+                land=land,
                 quelle=Quelle.URL_EINGEWORFEN,
                 eingestellt_von=request.user,
                 zuletzt_geaendert_von=request.user,
@@ -1318,6 +1334,31 @@ class UebernehmenView(View):
             preis = preis_aus_titel(portal, daten.get("titel", ""))
             if preis is not None:
                 werte["kaufpreis"] = str(preis)
+
+        # Ort und Stadtteil ABGELEITET, nicht uebergeben: das Lesezeichen
+        # schickt beide nicht, und es soll sie auch nicht schicken - ein
+        # geaendertes Skript muesste auf jedem Geraet neu gesetzt werden.
+        # Gelesen wird der Titel, den es ohnehin uebergibt.
+        #
+        # Ein halb gefuelltes Paar ist hier RICHTIG, anders als bei Portal und
+        # Inserats-ID: ein Titel ohne Stadtteil ist der Normalfall, und der Ort
+        # allein ist brauchbar. Deshalb zwei getrennte Abfragen und kein
+        # gemeinsames `if`.
+        ort, stadtteil = ort_und_stadtteil(portal, daten.get("titel", ""))
+        if ort:
+            werte["ort"] = ort
+        if stadtteil:
+            werte["stadtteil"] = stadtteil
+
+        # Das Land folgt aus dem Portal und wird gar nicht gelesen. Es steht
+        # trotzdem HIER und nicht weiter unten: was in `werte` landet, laeuft
+        # durch `_hinweise()` und `_vorbelegen()` und erbt damit die Regel aus
+        # Abschnitt 3.1 - Bestandswert gewinnt, der abgeleitete Wert erscheint
+        # als Hinweis. Ein Land, das an `_vorbelegen()` vorbei ins Formular
+        # geschrieben wuerde, ueberschriebe eine Korrektur von Hand.
+        land = land_aus_portal(portal)
+        if land:
+            werte["land"] = land
 
         return werte
 

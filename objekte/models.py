@@ -291,6 +291,18 @@ class Objekt(models.Model):
     )
 
     titel = models.CharField("Titel des Inserats", max_length=300, blank=True, default="")
+    # Feldtyp, Laenge und `blank`-Verhalten sind ABSICHTLICH Zeichen fuer
+    # Zeichen die von `ort`: beide tragen ein Segment desselben Titels, und
+    # eine abweichende Laenge liesse den Riegel in `ort_und_stadtteil()` fuer
+    # das eine Feld anders greifen als fuer das andere.
+    #
+    # Die drei Ortsebenen sind getrennte Felder und keine Abstufung eines
+    # einzigen: `stadtteil` ist die Lage INNERHALB der Gemeinde, `ort` die
+    # Gemeinde, `region` die uebergeordnete Ebene. Ein einzelnes Ortsfeld warf
+    # genau den Unterschied weg, der den Preis erklaert - `Puerto de Santiago`
+    # am Meer und `Tamaimo-Arguayo` im Landesinneren liegen beide in der
+    # Gemeinde `Santiago del Teide`.
+    stadtteil = models.CharField("Stadtteil", max_length=150, blank=True, default="")
     ort = models.CharField("Ort", max_length=150, blank=True, default="")
     land = models.CharField("Land", max_length=20, choices=Land, blank=True, default="")
     region = models.CharField(
