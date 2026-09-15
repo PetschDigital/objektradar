@@ -1434,6 +1434,26 @@ main button.ruhig {
 
 .notizform { margin-top: var(--mittel); }
 
+/* --- Sichtung -----------------------------------------------------------
+   EINSPALTIG, anders als jede andere Beschreibungsliste der Seite. Die
+   Vorgabe (`auto 1fr`) stellt Beschriftung und Wert nebeneinander, und das
+   traegt der Datenblock in der linken Spalte muehelos. Hier nicht: die
+   Bedienspalte ist 26rem breit, und "zuletzt gesehen" neben
+   "14.09.2026 16:30 — Steffen P." laesst fuer den Wert keine 12rem uebrig -
+   er braeche mitten im Datum um.
+
+   EIGENE Klasse und nicht `daten` mitbenutzt, obwohl das Bauteil dasselbe
+   waere: `daten` ist der Datenblock, und ein Zeuge, der ihn eingrenzt,
+   bekaeme sonst diese Zeile mit dazu. Genau die Blindheit vom 03.09., nur
+   von der anderen Seite. */
+.sichtung { grid-template-columns: 1fr; gap: 0; }
+
+/* Der Knopf steht ALLEIN im Block, ohne Feld darueber. `.knopfzeile` bringt
+   `--mittel` mit - die Luft zwischen einem Feld und dem Knopf darunter -,
+   und die ist hier zu viel: darueber steht nur eine Zeile Text. Dieselbe
+   Ueberlegung wie bei `.notizform`, nur in die andere Richtung. */
+.sichtungform .knopfzeile { margin-top: var(--knapp); }
+
 /* "Noch keine Notiz." steht in der Zeile, in der spaeter die Eintraege
    stehen - nicht mittig wie der leere Bildschirm der Liste. Dort ist die
    ganze Seite leer, hier fehlt nur ein Block von mehreren. */

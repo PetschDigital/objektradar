@@ -9,11 +9,16 @@ zweite nicht mehr, sobald die erste faellt.
 """
 
 import ast
+import contextlib
 import html as htmlwerkzeug
 import math
 import inspect
+import os
 import re
 import textwrap
+#: `from datetime import … time` weiter unten belegt den Namen `time`.
+#: Das Modul wird trotzdem gebraucht - `tzset()` steht nur dort.
+import time as systemzeit
 from datetime import date, datetime, time, timedelta
 from html.parser import HTMLParser
 from importlib import import_module
@@ -48,12 +53,21 @@ from .choices import (
     Portal,
     PreisQuelle,
     Quelle,
+    SichtungQuelle,
     Status,
     Wertung,
     Zustand,
 )
 from .forms import STATUS_VORBELEGUNG, ObjektForm
-from .models import Bild, Notiz, Objekt, Preisverlauf, Statusaenderung, Votum
+from .models import (
+    Bild,
+    Notiz,
+    Objekt,
+    Preisverlauf,
+    Sichtung,
+    Statusaenderung,
+    Votum,
+)
 from .portale import land_aus_portal, ort_und_stadtteil, portal_und_id
 
 #: Der Modulname faengt mit einer Ziffer an - ein `import` schreibt sich dafuer
@@ -7564,10 +7578,18 @@ class LoeschbeziehungenTests(SimpleTestCase):
 
         Ohne ihn waeren die beiden darueber auch dann gruen, wenn
         `related_objects` leer zurueckkaeme - etwa nach einer Umbenennung des
-        Modells. Fuenf Beziehungen sind es: Bild, Preisverlauf,
-        Statusaenderung, Votum, Notiz.
+        Modells.
+
+        Gemessen an den NAMEN und nicht an einer Anzahl. Eine Zahl sagt beim
+        Fallen nicht, WAS dazugekommen ist, und sie verfuehrt dazu, sie
+        einfach hochzusetzen. Die Liste zwingt dazu, die neue Beziehung zu
+        benennen - und genau dabei faellt auf, ob sie auch in die
+        Loeschbestaetigung gehoert. `Sichtung` ist am 14.09. dazugekommen.
         """
-        self.assertEqual(len(Objekt._meta.related_objects), 5)
+        self.assertEqual(
+            sorted(b.related_model.__name__ for b in Objekt._meta.related_objects),
+            ["Bild", "Notiz", "Preisverlauf", "Sichtung", "Statusaenderung", "Votum"],
+        )
 
 
 class LoeschenTests(TestCase):
@@ -7590,8 +7612,9 @@ class LoeschenTests(TestCase):
             aktueller_preis=Decimal("250000"),
             eingestellt_von=self.person,
         )
-        # Ein Objekt mit Anhang an JEDER der fuenf Beziehungen. Ohne das
-        # maessen die Zeugen unten das Verschwinden von nichts.
+        # Ein Objekt mit Anhang an JEDER Beziehung. Ohne das maessen die
+        # Zeugen unten das Verschwinden von nichts. Ohne Anzahl im Text: sie
+        # war seit dem 14.09. falsch, sobald die Sichtung dazukam.
         Votum.objects.create(
             objekt=self.objekt, person=self.person, wertung=Wertung.DAFUER
         )
@@ -7602,6 +7625,9 @@ class LoeschenTests(TestCase):
         Bild.objects.create(objekt=self.objekt, url="https://bild.example/1.jpg")
         self.objekt.preis_setzen(self.person, Decimal("239000"))
         self.objekt.status_setzen(self.person, Status.IN_PRUEFUNG)
+        # Am 14.09. dazugekommen. Ueber die Methode und nicht per `create()` -
+        # sie ist der einzige Weg, auf dem eine Sichtung entsteht.
+        self.objekt.sichtung_eintragen(person=self.andere)
 
         # Ein zweites Objekt mit eigenem Anhang. Es darf nichts abbekommen.
         self.fremd = Objekt.objects.create(
@@ -7727,7 +7753,7 @@ class LoeschenTests(TestCase):
     def test_die_seite_nennt_die_zahl_der_statusaenderungen(self):
         self.assertEqual(self._anhangzahlen()["Statusänderungen"], 1)
 
-    def test_keine_der_drei_zahlen_ist_null(self):
+    def test_keine_der_gezeigten_zahlen_ist_null(self):
         """Die Zusage aus Abschnitt 1.5: die TATSAECHLICHEN Zahlen, nicht null.
 
         Der Riegel gegen eine Seite, die Nullen ausweist, weil die Zaehlung am
@@ -7735,8 +7761,12 @@ class LoeschenTests(TestCase):
         Zeugen darueber und faellt auch dann, wenn jemand die Zeilen durch
         feste Werte ersetzt.
 
-        DREI seit dem 04.09., nicht mehr vier: die Vota sind aus der Liste
-        heraus.
+        Der Name trug bis zum 14.09. eine ANZAHL ("der drei"). Sie war am
+        04.09. von vier auf drei gefallen, weil die Vota aus der Liste
+        gingen, und mit der Sichtung stand sie wieder bei vier - dieselbe
+        Zahl wie vorher, aus einem anderen Grund. Eine Zahl, die zufaellig
+        wieder stimmt, bricht beim naechsten Mal erneut; sie steht deshalb
+        weder hier noch im Docstring von `_anhang()`.
         """
         self.assertNotIn(0, dict(self._anhangzahlen()).values())
 
@@ -7813,15 +7843,21 @@ class LoeschenTests(TestCase):
         self.assertIn("Vota", inhalt)
 
     def test_die_uebrigen_zahlen_stehen_weiterhin_da(self):
-        """Notizen, Preiseintraege und Statusaenderungen sind keine Wertung.
+        """Notizen, Preiseintraege, Statusaenderungen und Sichtungen sind
+        keine Wertung.
 
         Wer sie zaehlt, erfaehrt nichts ueber die Meinung der anderen. Sie
         pauschal mit wegzunehmen waere die bequeme Loesung und naehme der
         Seite genau das, wofuer sie da ist.
+
+        Die SICHTUNGEN sind am 14.09. dazugekommen. Eine Sichtung sagt "das
+        Inserat existierte an diesem Tag" und nichts ueber eine Meinung - die
+        Verdeckungsregel, die den Vota ihre Zahl nimmt, greift fuer sie nicht.
         """
         zahlen = self._anhangzahlen()
         self.assertEqual(
-            sorted(zahlen), ["Einträge im Preisverlauf", "Notizen", "Statusänderungen"]
+            sorted(zahlen),
+            ["Einträge im Preisverlauf", "Notizen", "Sichtungen", "Statusänderungen"],
         )
 
     def test_die_zahlen_stehen_auch_wirklich_auf_der_seite(self):
@@ -13389,7 +13425,13 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
             beschreibung="Wohnung von 119 m² mit Terrasse",
             quelle=Quelle.SUCHAGENT,
             eingestellt_von=self.person,
-            zuletzt_gesehen=timezone.now(),
+        )
+        # Die Angabe "zuletzt gesehen" entsteht seit dem 14.09. ueber die
+        # Tabelle und nicht mehr als Feldwert am `create()`. Das Objekt dieser
+        # Klasse traegt JEDES Feld gefuellt - also auch dieses, und zwar auf
+        # dem Weg, auf dem es im Betrieb entsteht.
+        self.objekt.sichtung_eintragen(
+            person=self.person, quelle=SichtungQuelle.LESEZEICHEN
         )
         # Zwei Eintraege, damit es ueberhaupt eine Preisaenderung gibt: mit
         # einem bliebe `vorheriger_preis` NULL und der Zweig im Markup waere
@@ -13594,12 +13636,24 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
                 self.assertIn(stueck, text)
 
     def test_die_herkunftsangabe_steht_im_fuss(self):
-        """"eingestellt von … am …" und "zuletzt gesehen" - der Beleg, an dem
-        haengt, ob das Inserat noch am Markt ist."""
+        """Der Fuss ist der BELEG: wer eingeworfen und wer zuletzt geaendert
+        hat. Beides sind Aussagen ueber die GRUPPE.
+
+        EINGEGRENZT am 14.09., nicht angepasst. "zuletzt gesehen" stand hier
+        bis dahin mit und ist in die rechte Spalte gewandert, in den Kasten
+        mit dem Knopf, der es fortschreibt - es ist eine Aussage ueber das
+        INSERAT und gehoert dorthin, wo gehandelt wird. Der Zeuge behauptet
+        deshalb jetzt beides: dass der Beleg seine zwei Angaben weiter fuehrt
+        UND dass die Sichtung nicht mehr darin steht. Ohne den zweiten Teil
+        bliebe er gruen, wenn die Angabe versehentlich an beiden Stellen
+        stuende - und derselbe Wert zweimal hat auf dieser Seite schon einmal
+        einen Zeugen blind gemacht (14.09.).
+        """
         text = block(self._seite(), "beleg").text
         self.assertIn("Steffen P.", text)
         self.assertIn("eingestellt von", text)
-        self.assertIn("zuletzt gesehen", text)
+        self.assertIn("zuletzt geändert von", text)
+        self.assertNotIn("zuletzt gesehen", text)
 
     def test_der_statusverlauf_steht_weiterhin_da(self):
         """Wie die Preisaenderung nicht in Zusage 1 genannt und aus demselben
@@ -14027,31 +14081,40 @@ class BedienelementeNachDemUmbauTests(TestCase):
 
     # --- Riegel gegen die Zeugen unten im Vakuum -------------------------
 
-    def test_die_seite_fuehrt_genau_die_drei_formulare(self):
+    #: Die Bedienformulare der Objektansicht, als URL-Namen. `sichtung_eintragen`
+    #: ist am 14.09. dazugekommen. Als LISTE VON NAMEN und nicht als Anzahl: eine
+    #: Zahl im Testnamen sagt beim Fallen nicht, WAS dazugekommen ist, und sie
+    #: verfuehrt dazu, sie einfach hochzusetzen. Genau das ist der Zahl im
+    #: Docstring von `_anhang()` zweimal passiert.
+    BEDIENFORMULARE = (
+        "notiz_anlegen",
+        "sichtung_eintragen",
+        "status_setzen",
+        "votum_setzen",
+    )
+
+    def test_die_seite_fuehrt_genau_diese_formulare(self):
         """Faende der Parser keines, waere jeder Zeuge unten schon am Aufbau
         rot statt an seiner Zusage - und faende er zu viele, schickte ein
         Zeuge an das falsche."""
         adressen = sorted(f["adresse"] for f in formulare(self._seite()))
         self.assertEqual(
             adressen,
-            sorted(
-                reverse(name, args=[self.objekt.pk])
-                for name in ("notiz_anlegen", "status_setzen", "votum_setzen")
-            ),
+            sorted(reverse(name, args=[self.objekt.pk]) for name in self.BEDIENFORMULARE),
         )
 
-    def test_jedes_der_drei_formulare_schickt_per_post(self):
+    def test_jedes_formular_schickt_per_post(self):
         """Ein `GET`-Formular liefe in den 405 der Ansicht - sichtbar waere
         eine Seite, die nichts tut."""
-        for teil in ("/votum/", "/status/", "/notiz/"):
+        for teil in ("/votum/", "/status/", "/notiz/", "/sichtung/"):
             with self.subTest(formular=teil):
                 self.assertEqual(self._formular(teil)["verfahren"], "post")
 
-    def test_jedes_der_drei_formulare_traegt_das_csrf_feld(self):
+    def test_jedes_formular_traegt_das_csrf_feld(self):
         """Ohne es antwortet Django mit 403. Der Testclient prueft es nicht -
         ein Zeuge, der nur absendet, merkte den Verlust deshalb nicht, und
-        auf dem Bildschirm waeren alle drei Knoepfe tot."""
-        for teil in ("/votum/", "/status/", "/notiz/"):
+        auf dem Bildschirm waeren alle Knoepfe tot."""
+        for teil in ("/votum/", "/status/", "/notiz/", "/sichtung/"):
             with self.subTest(formular=teil):
                 self.assertIn("csrfmiddlewaretoken", self._formular(teil)["felder"])
 
@@ -14248,3 +14311,1265 @@ class FokusumrissTests(TestCase):
             if re.search(r"outline:\s*(none|0)\b", angaben):
                 with self.subTest(waehler=waehler.strip()):
                     self.assertRegex(angaben, r"(box-shadow|border|background):")
+
+
+# =========================================================================
+# Sichtung - "Ist es noch am Markt oder schon weg" (14.09.)
+# =========================================================================
+
+
+class SichtungBasis(TestCase):
+    """Aufbau fuer die Sichtungs-Zeugen. Eine Person, ein Objekt.
+
+    Getrennte Basisklasse und nicht in jeder Klasse wiederholt: die Zeugen
+    unten messen sehr verschiedene Dinge, und der Aufbau ist bei allen
+    derselbe.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user(
+            "steffen", password="lang-genug-123", first_name="Steffen", last_name="P."
+        )
+        self.andere = Person.objects.create_user(
+            "anna", password="lang-genug-123", first_name="Anna", last_name="K."
+        )
+        self.client.force_login(self.person)
+        self.objekt = Objekt.objects.create(
+            url="https://www.idealista.com/inmueble/112155320/",
+            portal=Portal.IDEALISTA,
+            inserats_id="112155320",
+            titel="Wohnung in Tamaimo-Arguayo",
+        )
+
+    def _zurueckdatieren(self, eintrag, wann):
+        """`zeitpunkt` traegt `auto_now_add` und nimmt keinen Wert an."""
+        Sichtung.objects.filter(pk=eintrag.pk).update(zeitpunkt=wann)
+        eintrag.refresh_from_db()
+        return eintrag
+
+    def _seite(self, objekt=None):
+        return self.client.get(reverse("objekt", args=[(objekt or self.objekt).pk]))
+
+
+class SichtungModellTests(SichtungBasis):
+    """Die Tabelle selbst: Form, Riegel und Reihenfolge."""
+
+    # --- Riegel 1: `zuletzt_gesehen` ist kein Eingabefeld mehr -----------
+
+    def test_zuletzt_gesehen_ist_nicht_editierbar(self):
+        """Riegel 1, an der Feldangabe gemessen.
+
+        Damit faellt das Feld aus JEDEM ModelForm heraus - und die
+        Uebernahme, das Bearbeiten und das Admin-Formular koennen es nicht
+        mehr nebenbei setzen.
+        """
+        self.assertFalse(Objekt._meta.get_field("zuletzt_gesehen").editable)
+
+    def test_zuletzt_gesehen_steht_in_keinem_formular(self):
+        """Dieselbe Zusage am Ergebnis statt an der Feldangabe.
+
+        `editable=False` ist die Bauform; dass daraufhin wirklich kein
+        Formular das Feld fuehrt, ist die Zusage. Ein `fields="__all__"`
+        laesst nicht editierbare Felder aus - genau darauf beruht der Riegel.
+        """
+        alle = modelform_factory(Objekt, fields="__all__")
+        self.assertNotIn("zuletzt_gesehen", alle().fields)
+        self.assertNotIn("zuletzt_gesehen", ObjektForm().fields)
+        self.assertNotIn("zuletzt_gesehen", forms.UebernahmeForm().fields)
+
+    def test_der_hilfetext_behauptet_den_erneuten_abruf_nicht_mehr(self):
+        """Er sagte "wird ab Schritt 2 beim erneuten Abruf gefuellt" und
+        beschrieb damit etwas, das der Code nie getan hat. Ein Serverabruf ist
+        seit dem 29.08. ausdruecklich ausgeschlossen."""
+        hilfe = Objekt._meta.get_field("zuletzt_gesehen").help_text
+        self.assertNotIn("erneuten Abruf", hilfe)
+        self.assertIn("Sichtung", hilfe)
+
+    def test_zuletzt_gesehen_ist_im_admin_geschuetzt(self):
+        """Alle Nachbarfelder derselben Gruppe waren geschuetzt, dieses nicht."""
+        self.assertIn("zuletzt_gesehen", admin.site._registry[Objekt].readonly_fields)
+
+    # --- die Form der Tabelle -------------------------------------------
+
+    def test_die_sichtung_haengt_per_cascade_am_objekt(self):
+        """Wie die fuenf bestehenden abhaengigen Tabellen: ein geloeschtes
+        Objekt nimmt seine Sichtungen mit."""
+        feld = Sichtung._meta.get_field("objekt")
+        self.assertIs(feld.remote_field.on_delete, models.CASCADE)
+
+    def test_die_person_ist_nullbar_und_geschuetzt(self):
+        """Nullbar, weil die staerkste Sichtung die ohne Menschen ist -
+        `PROTECT` wie bei `Votum` und `Notiz`, damit ein geloeschtes Konto die
+        Belege nicht mitnimmt."""
+        feld = Sichtung._meta.get_field("person")
+        self.assertTrue(feld.null)
+        self.assertIs(feld.remote_field.on_delete, models.PROTECT)
+        for vorbild in (Votum, Notiz):
+            with self.subTest(vorbild=vorbild.__name__):
+                self.assertIs(
+                    vorbild._meta.get_field("person").remote_field.on_delete,
+                    feld.remote_field.on_delete,
+                )
+
+    def test_die_sichtung_traegt_genau_ein_zeitfeld(self):
+        """Anders als der Preisverlauf, der zwei traegt. An der Sichtung
+        haengt kein Signal, das zwei Zeitbegriffe auseinanderhielte."""
+        zeitfelder = [
+            f.name
+            for f in Sichtung._meta.get_fields()
+            if isinstance(f, (models.DateTimeField, models.DateField))
+        ]
+        self.assertEqual(zeitfelder, ["zeitpunkt"])
+
+    def test_der_zeitpunkt_laesst_sich_nicht_von_aussen_setzen(self):
+        """`auto_now_add`. Eine Sichtung, die sich vordatieren laesst, waere
+        kein Beleg."""
+        vorgabe = timezone.now() - timedelta(days=30)
+        eintrag = Sichtung.objects.create(objekt=self.objekt, zeitpunkt=vorgabe)
+        self.assertGreater(eintrag.zeitpunkt, vorgabe)
+
+    def test_die_reihenfolge_traegt_ein_zweites_kriterium(self):
+        """Sonst waere "die juengste Sichtung" bei gleichem Zeitstempel
+        Zufall - und daran haengen die Anzeige UND `zuletzt_gesehen`."""
+        self.assertEqual(Sichtung._meta.ordering, ["-zeitpunkt", "-id"])
+
+    def test_die_juengste_sichtung_ist_bei_gleichem_zeitstempel_bestimmt(self):
+        """Dieselbe Zusage am Ergebnis. Drei Eintraege, EIN Zeitstempel."""
+        gleich = timezone.now()
+        eintraege = [Sichtung.objects.create(objekt=self.objekt) for _ in range(3)]
+        Sichtung.objects.update(zeitpunkt=gleich)
+        self.assertEqual(self.objekt.sichtungen.first().pk, max(e.pk for e in eintraege))
+
+    def test_die_quellen_sind_die_drei_der_spezifikation(self):
+        self.assertEqual(
+            [w for w, _ in SichtungQuelle.choices],
+            ["lesezeichen", "von_hand", "suchagent"],
+        )
+
+
+class SichtungDaempfungTests(SichtungBasis):
+    """Ein Eintrag je Person und Tag, quellenuebergreifend.
+
+    GEMESSEN WIRD DIE ZAHL DER EINTRAEGE IN DER TABELLE, nicht die Antwort
+    der Seite. Eine Seite, die "schon bestaetigt" meldet, sagt nichts
+    darueber, ob daneben trotzdem eine Zeile entstanden ist - und genau das
+    ist die Zusage.
+    """
+
+    def _zahl(self):
+        return self.objekt.sichtungen.count()
+
+    # --- Riegel gegen einen Zeugen im Vakuum ------------------------------
+
+    def test_zwei_verschiedene_personen_am_selben_tag_ergeben_zwei_eintraege(self):
+        """DER Riegel unter allen Daempfungs-Zeugen dieser Klasse.
+
+        Ohne ihn maessen sie eine Daempfung, die auch dann gruen bliebe, wenn
+        `sichtung_eintragen()` grundsaetzlich nichts anlegte: "einer statt
+        zwei" und "null statt zwei" sind am Zaehlstand nicht zu
+        unterscheiden, solange niemand belegt, dass zwei ueberhaupt moeglich
+        sind.
+        """
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.sichtung_eintragen(person=self.andere)
+        self.assertEqual(self._zahl(), 2)
+
+    # --- die Daempfung selbst ---------------------------------------------
+
+    def test_zwei_klicks_derselben_person_am_selben_tag_ergeben_einen_eintrag(self):
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertEqual(self._zahl(), 1)
+
+    def test_die_zweite_sichtung_gibt_none_zurueck(self):
+        """Der Rueckgabewert ist es, woran die Ansicht ihre Meldung
+        entscheidet - ohne ihn muesste sie ein zweites Mal zaehlen."""
+        self.assertIsNotNone(self.objekt.sichtung_eintragen(person=self.person))
+        self.assertIsNone(self.objekt.sichtung_eintragen(person=self.person))
+
+    def test_die_daempfung_gilt_quellenuebergreifend(self):
+        """Wer morgens per Lesezeichen einwirft und nachmittags auf "geprueft"
+        klickt, erzeugt EINEN Eintrag. Die zweite Bestaetigung desselben Tages
+        durch dieselbe Person ist keine neue Information."""
+        self.objekt.sichtung_eintragen(
+            person=self.person, quelle=SichtungQuelle.LESEZEICHEN
+        )
+        self.objekt.sichtung_eintragen(
+            person=self.person, quelle=SichtungQuelle.VON_HAND
+        )
+        self.assertEqual(self._zahl(), 1)
+
+    def test_ein_eintrag_von_gestern_daempft_heute_nicht(self):
+        """Sonst waere die Daempfung keine Tagesdaempfung, sondern eine
+        Einmaligkeit - und `zuletzt_gesehen` stuende fuer immer still."""
+        gestern = self.objekt.sichtung_eintragen(person=self.person)
+        self._zurueckdatieren(gestern, timezone.now() - timedelta(days=1))
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertEqual(self._zahl(), 2)
+
+    def test_die_daempfung_greift_je_objekt(self):
+        """Eine Sichtung an Objekt A darf Objekt B nicht daempfen."""
+        zweites = Objekt.objects.create(url="https://x.example/zweites")
+        self.objekt.sichtung_eintragen(person=self.person)
+        zweites.sichtung_eintragen(person=self.person)
+        self.assertEqual(Sichtung.objects.count(), 2)
+
+    # --- Riegel 4: die NULL-Person ist ein eigener Fall -------------------
+
+    def test_eine_sichtung_ohne_person_wird_von_einer_mit_person_nicht_gedaempft(self):
+        """Riegel 4. Ab Schritt 3 legt der Mail-Parser Sichtungen ohne Person
+        an - eine Agenten-Mail von heute darf nicht dadurch verschluckt
+        werden, dass irgendjemand heute schon geklickt hat. Sie ist der
+        staerkere Beleg: da hat niemand geklickt."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.sichtung_eintragen(person=None, quelle=SichtungQuelle.SUCHAGENT)
+        self.assertEqual(self._zahl(), 2)
+
+    def test_eine_sichtung_mit_person_wird_von_einer_ohne_nicht_gedaempft(self):
+        """Die Gegenrichtung. Ohne sie waere die Zusage halb gemessen."""
+        self.objekt.sichtung_eintragen(person=None, quelle=SichtungQuelle.SUCHAGENT)
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertEqual(self._zahl(), 2)
+
+    def test_zwei_sichtungen_ohne_person_am_selben_tag_ergeben_einen_eintrag(self):
+        """Die NULL-Person ist ein EIGENER Fall - aber eben auch nur einer.
+        Zwei Agenten-Mails am selben Tag sagen nichts Zweites."""
+        self.objekt.sichtung_eintragen(person=None, quelle=SichtungQuelle.SUCHAGENT)
+        self.objekt.sichtung_eintragen(person=None, quelle=SichtungQuelle.SUCHAGENT)
+        self.assertEqual(self._zahl(), 1)
+
+    # --- `zuletzt_gesehen` als Projektion --------------------------------
+
+    def test_zuletzt_gesehen_folgt_dem_juengsten_eintrag(self):
+        eintrag = self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.zuletzt_gesehen, eintrag.zeitpunkt)
+
+    def test_eine_unterdrueckte_sichtung_bewegt_zuletzt_gesehen_nicht(self):
+        """Die Folge der Daempfung, und sie ist so GEWOLLT: wird kein Eintrag
+        angelegt, wandert auch das Feld nicht. Feld und Tabelle laufen nie
+        auseinander."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.refresh_from_db()
+        vorher = self.objekt.zuletzt_gesehen
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.refresh_from_db()
+        self.assertEqual(self.objekt.zuletzt_gesehen, vorher)
+
+    def test_feld_und_tabelle_stimmen_nach_jedem_schritt_ueberein(self):
+        """Die Zusage in ihrer allgemeinen Form, ueber mehrere Tage und
+        wechselnde Personen gefuehrt.
+
+        GEPRUEFT WIRD JEWEILS UNMITTELBAR NACH DEM AUFRUF und nicht am Ende.
+        Das Zurueckdatieren danach ist ein `update()` an der Methode vorbei -
+        genau das Loch, das `editable=False` bekanntermassen offenlaesst und
+        das hier hingenommen wird. Danach duerfen Feld und Tabelle
+        auseinanderliegen, und ein Zeuge, der das mitmisst, maesse die
+        bekannte Grenze statt der Zusage.
+
+        Das Zurueckdatieren steht trotzdem da: ohne es laegen alle vier
+        Aufrufe auf demselben Tag, und die Daempfung schluckte den vierten -
+        dann fuehrte die Schleife nur drei Schritte und niemand saehe es.
+        """
+        for tag, wer in ((3, self.person), (2, self.andere), (1, None), (0, self.person)):
+            with self.subTest(tag=tag):
+                eintrag = self.objekt.sichtung_eintragen(person=wer)
+                self.assertIsNotNone(eintrag, "Dieser Schritt wurde gedaempft.")
+                self.objekt.refresh_from_db()
+                self.assertEqual(self.objekt.zuletzt_gesehen, eintrag.zeitpunkt)
+                self.assertEqual(
+                    self.objekt.zuletzt_gesehen,
+                    self.objekt.sichtungen.first().zeitpunkt,
+                )
+            if tag:
+                self._zurueckdatieren(eintrag, timezone.now() - timedelta(days=tag))
+
+    def test_ohne_jede_sichtung_bleibt_zuletzt_gesehen_leer(self):
+        self.assertIsNone(self.objekt.zuletzt_gesehen)
+
+
+class SichtungZeitzonenTests(SichtungBasis):
+    """Riegel 6: "heute" ist `timezone.localdate()`, nie `date.today()`.
+
+    DIESE KLASSE IST DER EINZIGE ZEUGE, DER DEN UNTERSCHIED SEHEN KANN. Auf
+    dem Rechner, auf dem gebaut wird, stehen `settings.TIME_ZONE` und die
+    Zeitzone des BETRIEBSSYSTEMS beide auf Europe/Berlin; beide Ausdruecke
+    liefern denselben Wert, und jeder andere Zeuge dieser Datei bliebe nach
+    einer Umstellung auf `date.today()` gruen.
+
+    `override_settings(TIME_ZONE=…)` ALLEIN GENUEGT DAFUER NICHT, und das ist
+    die Falle dieser Stelle: Djangos Signalempfaenger fuer diese Einstellung
+    (`django/test/signals.py`) setzt zusaetzlich `os.environ["TZ"]` und ruft
+    `time.tzset()` - er verstellt also auch die Zeitzone des Prozesses. Unter
+    `override_settings` folgen `timezone.localdate()` und `date.today()`
+    einander deshalb brav, und ein Zeuge, der nur die Einstellung verstellt,
+    misst nichts. Nachgemessen am 14.09.: mit Pacific/Midway gaben beide
+    denselben, verschobenen Tag zurueck.
+
+    Gebaut wird deshalb die KONSTELLATION DES BETRIEBS - Anwendung und
+    Betriebssystem in verschiedenen Zonen -, indem `TZ` NACH dem
+    `override_settings` noch einmal gesetzt wird.
+
+    Die beiden Zonen liegen 25 Stunden auseinander (UTC+14 und UTC-11). Damit
+    fallen ihre Kalendertage zu JEDER Tageszeit auseinander, und der Zeuge
+    haengt nicht an der Stunde, zu der der Testlauf startet.
+
+    Im Betrieb ist das kein Gedankenspiel: der Server laeuft in UTC, die
+    Anwendung in Europe/Berlin. Zwischen Mitternacht und zwei Uhr nachts sind
+    das zwei verschiedene Tage.
+    """
+
+    #: UTC+14 - die Zeitzone der ANWENDUNG im Zeugen.
+    ZONE_ANWENDUNG = "Pacific/Kiritimati"
+    #: UTC-11 - die Zeitzone des BETRIEBSSYSTEMS im Zeugen.
+    ZONE_SYSTEM = "Pacific/Midway"
+
+    @contextlib.contextmanager
+    def _auseinanderfallende_zonen(self):
+        """Anwendung in der einen, Betriebssystem in der anderen Zone.
+
+        Die Reihenfolge ist der ganze Punkt: `override_settings` setzt `TZ`
+        selbst: erst danach laesst sich die Systemzone auf einen anderen Wert
+        stellen. Beim Verlassen wird sie zurueckgesetzt, bevor
+        `override_settings` sich schliesst - sonst truege der Prozess die
+        fremde Zone in jeden folgenden Zeugen der Datei weiter.
+        """
+        vorher = os.environ.get("TZ")
+        with override_settings(TIME_ZONE=self.ZONE_ANWENDUNG):
+            os.environ["TZ"] = self.ZONE_SYSTEM
+            systemzeit.tzset()
+            try:
+                yield
+            finally:
+                if vorher is None:
+                    os.environ.pop("TZ", None)
+                else:
+                    os.environ["TZ"] = vorher
+                systemzeit.tzset()
+
+    # --- Riegel gegen die Zeugen darunter im Vakuum ----------------------
+
+    def test_die_beiden_zonen_liegen_wirklich_auf_verschiedenen_tagen(self):
+        """Ohne ihn maessen die Zeugen darunter nur, dass die Daempfung
+        ueberhaupt daempft - und blieben nach einer Umstellung auf
+        `date.today()` gruen, weil beide Ausdruecke dasselbe saegen."""
+        with self._auseinanderfallende_zonen():
+            self.assertNotEqual(
+                timezone.localdate(),
+                date.today(),
+                "Anwendung und Betriebssystem stehen auf demselben Kalendertag.",
+            )
+
+    def test_die_systemzone_ist_nach_dem_zeugen_wiederhergestellt(self):
+        """Der Riegel auf den Aufbau selbst. Bliebe die fremde Zone stehen,
+        rechnete jeder folgende Zeuge dieser Datei in Pacific/Midway - und die
+        Ursache waere an der Stelle, an der es knallt, nicht zu sehen."""
+        vorher = timezone.localdate(), date.today()
+        with self._auseinanderfallende_zonen():
+            pass
+        self.assertEqual((timezone.localdate(), date.today()), vorher)
+
+    # --- Riegel 6 ---------------------------------------------------------
+
+    def test_die_daempfung_rechnet_in_der_zeitzone_der_anwendung(self):
+        """Riegel 6, am Zaehlstand der Tabelle.
+
+        Beide Eintragungen laufen in derselben Konstellation. Rechnet die
+        Daempfung mit `timezone.localdate()`, vergleicht sie denselben
+        Kalendertag, den auch `zeitpunkt__date` meint - die Datenbank rechnet
+        dafuer nach `settings.TIME_ZONE` um -, und der zweite Aufruf wird
+        verschluckt. Rechnet sie mit `date.today()`, haelt sie den Tag des
+        BETRIEBSSYSTEMS dagegen; die beiden treffen sich nicht, und es
+        entstehen zwei Eintraege.
+        """
+        with self._auseinanderfallende_zonen():
+            self.objekt.sichtung_eintragen(person=self.person)
+            self.objekt.sichtung_eintragen(person=self.person)
+        self.assertEqual(self.objekt.sichtungen.count(), 1)
+
+    def test_dasselbe_ohne_person(self):
+        """Die NULL-Person laeuft durch den anderen Zweig der Bedingung und
+        koennte die Umrechnung fuer sich verlieren."""
+        with self._auseinanderfallende_zonen():
+            self.objekt.sichtung_eintragen(person=None)
+            self.objekt.sichtung_eintragen(person=None)
+        self.assertEqual(self.objekt.sichtungen.count(), 1)
+
+
+class SichtungKnopfTests(SichtungBasis):
+    """Riegel 7: der Knopf ist POST mit CSRF. Ein GET legt nichts an.
+
+    Die Oberflaechen-Zeugen dieser Klasse lesen Adresse, Verfahren und
+    Knopfbeschriftung AUS DER AUSGELIEFERTEN SEITE (Entscheidung 14.09.). Ein
+    Zeuge, der die Adresse selbst hinschreibt, prueft die Ansicht und nicht
+    die Seite: verschoebe der Umbau das `action`, bliebe er gruen, waehrend
+    der Knopf auf dem Bildschirm nichts mehr tut.
+    """
+
+    def _formular(self, antwort=None):
+        """Das Sichtungsformular, wie die SEITE es anbietet."""
+        ziel = reverse("sichtung_eintragen", args=[self.objekt.pk])
+        passend = [
+            f for f in formulare(antwort or self._seite()) if f["adresse"] == ziel
+        ]
+        self.assertEqual(len(passend), 1, "Die Seite fuehrt kein Sichtungsformular.")
+        return passend[0]
+
+    def _absenden(self, client=None, daten=None):
+        """An die Adresse, die die SEITE nennt - nicht an eine hingeschriebene."""
+        return (client or self.client).post(self._formular()["adresse"], daten or {})
+
+    # --- die Seite bietet den Knopf ueberhaupt an ------------------------
+
+    def test_die_seite_fuehrt_ein_sichtungsformular(self):
+        """Riegel gegen die Zeugen darunter im Vakuum: faende `_formular()`
+        nichts, fiele jeder von ihnen schon am Aufbau."""
+        self.assertIsNotNone(self._formular())
+
+    def test_das_formular_geht_per_post(self):
+        self.assertEqual(self._formular()["verfahren"], "post")
+
+    def test_das_formular_traegt_ein_csrf_token(self):
+        """Am FELD der ausgelieferten Seite gemessen, nicht an `{% csrf_token %}`
+        im Quelltext der Vorlage."""
+        self.assertIn("csrfmiddlewaretoken", self._formular()["felder"])
+
+    def test_der_knopf_traegt_die_zugesagte_beschriftung(self):
+        """Aus der Seite gelesen. "Inserat geprueft - noch da" sagt beides:
+        was die Person getan hat und was sie damit behauptet."""
+        abschnitt = self._sichtungsabschnitt()
+        self.assertIn("Inserat geprüft — noch da", abschnitt["text"])
+
+    def _sichtungsabschnitt(self):
+        """Der `<section>`, der das Sichtungsformular traegt.
+
+        Eingegrenzt auf DIESEN Kasten und nicht auf die ganze Antwort: die
+        Behauptung "der Knopf steht im selben Block wie die Anzeige" waere
+        sonst auch dann gruen, wenn er in den Notizblock gerutscht ist.
+        """
+        ziel = reverse("sichtung_eintragen", args=[self.objekt.pk])
+        passend = [
+            a
+            for a in abschnitte(self._seite())
+            if any(
+                tag == "form" and werte.get("action") == ziel
+                for tag, werte in a["elemente"]
+            )
+        ]
+        self.assertEqual(len(passend), 1, "Kein Abschnitt traegt das Formular.")
+        return passend[0]
+
+    # --- Riegel 7: GET legt nichts an ------------------------------------
+
+    def test_ein_get_auf_die_adresse_wird_abgewiesen(self):
+        antwort = self.client.get(reverse("sichtung_eintragen", args=[self.objekt.pk]))
+        self.assertEqual(antwort.status_code, 405)
+
+    def test_ein_get_auf_die_adresse_legt_nichts_an(self):
+        """Die eigentliche Zusage. Der Statuscode allein sagt nichts darueber,
+        ob daneben eine Zeile entstanden ist."""
+        self.client.get(reverse("sichtung_eintragen", args=[self.objekt.pk]))
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+    # --- Riegel 7: CSRF ---------------------------------------------------
+
+    def _strenger_client(self):
+        from django.test import Client
+
+        streng = Client(enforce_csrf_checks=True)
+        streng.force_login(self.person)
+        return streng
+
+    def test_ein_post_ohne_csrf_token_wird_abgewiesen(self):
+        self.assertEqual(self._absenden(self._strenger_client()).status_code, 403)
+
+    def test_ein_post_ohne_csrf_token_legt_nichts_an(self):
+        self._absenden(self._strenger_client())
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+    def test_mit_csrf_token_laeuft_derselbe_aufruf_durch(self):
+        """Der Riegel gegen einen blinden Zeugen darueber: ohne ihn koennte
+        der 403 aus einem ganz anderen Grund kommen."""
+        streng = self._strenger_client()
+        streng.get(reverse("objekt", args=[self.objekt.pk]))
+        self._absenden(
+            streng, {"csrfmiddlewaretoken": streng.cookies["csrftoken"].value}
+        )
+        self.assertEqual(Sichtung.objects.count(), 1)
+
+    def test_die_ansicht_traegt_kein_csrf_exempt(self):
+        """Strukturell. `csrf_exempt` setzt ein Attribut an der Ansicht - es
+        zu pruefen faengt den Fall, in dem jemand es setzt und der
+        Verhaltenszeuge oben aus einem anderen Grund gruen bleibt."""
+        self.assertFalse(
+            getattr(views.sichtung_eintragen, "csrf_exempt", False)
+        )
+
+    # --- der Weg durch: POST-Redirect-GET --------------------------------
+
+    def test_der_knopf_legt_eine_sichtung_an(self):
+        self._absenden()
+        eintrag = Sichtung.objects.get()
+        self.assertEqual(eintrag.objekt, self.objekt)
+        self.assertEqual(eintrag.person, self.person)
+
+    def test_der_knopf_traegt_die_quelle_von_hand(self):
+        """Nicht `lesezeichen`: die Person hat hier keinen Einwurf gemacht,
+        sondern von Hand bestaetigt."""
+        self._absenden()
+        self.assertEqual(Sichtung.objects.get().quelle, SichtungQuelle.VON_HAND)
+
+    def test_die_antwort_ist_eine_umleitung_auf_die_objektansicht(self):
+        """POST-Redirect-GET. Gerendertes HTML legte bei jedem Neuladen den
+        POST noch einmal auf."""
+        antwort = self._absenden()
+        self.assertRedirects(antwort, reverse("objekt", args=[self.objekt.pk]))
+
+    def test_der_knopf_schreibt_zuletzt_gesehen_fort(self):
+        self._absenden()
+        self.objekt.refresh_from_db()
+        self.assertEqual(
+            self.objekt.zuletzt_gesehen, Sichtung.objects.get().zeitpunkt
+        )
+
+    # --- die Meldung ------------------------------------------------------
+
+    def test_die_erste_bestaetigung_meldet_erfolg(self):
+        antwort = self.client.post(
+            self._formular()["adresse"], {}, follow=True
+        )
+        klassen = [k for k, _ in gerenderte_meldungen(antwort)]
+        self.assertIn(["success"], klassen)
+
+    def test_die_zweite_bestaetigung_desselben_tages_meldet_ruhig(self):
+        """Ohne Fehlerfarbe. Die Person hat alles richtig gemacht - es gibt
+        nur nichts Neues zu protokollieren. Gemessen an den KLASSEN der
+        ausgelieferten Meldung, nicht an einer `class="…"`-Zeichenkette."""
+        self._absenden()
+        antwort = self.client.post(self._formular()["adresse"], {}, follow=True)
+        klassen = [k for k, _ in gerenderte_meldungen(antwort)]
+        self.assertEqual(klassen, [["info"]])
+
+    def test_die_zweite_bestaetigung_traegt_weder_fehler_noch_warnung(self):
+        """Dieselbe Zusage von der anderen Seite - `--fehler` und `--warnung`
+        sind die beiden Stufen, die sie ausdruecklich NICHT hat."""
+        self._absenden()
+        antwort = self.client.post(self._formular()["adresse"], {}, follow=True)
+        alle = {k for klassen, _ in gerenderte_meldungen(antwort) for k in klassen}
+        self.assertFalse(alle & {"error", "warning"})
+
+    def test_die_zweite_bestaetigung_legt_nichts_an(self):
+        """Die Meldung ist das eine, die Tabelle das andere."""
+        self._absenden()
+        self._absenden()
+        self.assertEqual(Sichtung.objects.count(), 1)
+
+    # --- der Knopf steht NICHT in der Liste -------------------------------
+
+    def test_die_liste_traegt_keinen_sichtungsknopf(self):
+        """Die Liste ist kein Aktionsort; ein Knopf je Zeile im Blocklayout
+        ist am Handy nicht vertretbar."""
+        antwort = self.client.get(reverse("objektliste"))
+        ziel = reverse("sichtung_eintragen", args=[self.objekt.pk])
+        self.assertNotIn(ziel, [f["adresse"] for f in formulare(antwort)])
+
+
+class SichtungAnzeigeTests(SichtungBasis):
+    """Zeitpunkt und Person der juengsten Sichtung - aus der TABELLE gelesen.
+
+    Jede Behauptung ist auf den Block eingegrenzt, um den es geht
+    (Entscheidung 03.09.): der Zeitpunkt steht auch im Fuss neben "zuletzt
+    geaendert", ein Personenname steht auch am Votum und an jeder Notiz. Eine
+    Behauptung ueber die ganze Antwort waere gruen, egal wo der Wert steht.
+    """
+
+    def _sichtungsblock(self, objekt=None):
+        """Was in der Beschreibungsliste des Sichtungsblocks WIRKLICH steht."""
+        return paare(self._seite(objekt), "sichtung")
+
+    def _wert(self, objekt=None):
+        return self._sichtungsblock(objekt)["zuletzt gesehen"]
+
+    # --- Riegel gegen die Zeugen darunter im Vakuum ----------------------
+
+    def test_der_parser_findet_den_block_ueberhaupt(self):
+        """Ohne ihn waere jeder `assertIn` darunter ein Zeuge ueber eine
+        leere Liste."""
+        self.assertIn("zuletzt gesehen", self._sichtungsblock().paare)
+
+    # --- die Anzeige liest aus der Tabelle -------------------------------
+
+    def test_zeitpunkt_und_person_der_juengsten_sichtung_stehen_da(self):
+        self.objekt.sichtung_eintragen(person=self.person)
+        eintrag = Sichtung.objects.get()
+        wert = self._wert()
+        # Ueber `localtime()` formatiert, nicht ueber `zeitpunkt` roh: die
+        # Vorlage rendert in der Zeitzone der Anwendung, und der gespeicherte
+        # Wert steht in UTC.
+        self.assertIn(f"{timezone.localtime(eintrag.zeitpunkt):%d.%m.%Y %H:%M}", wert)
+        self.assertIn("Steffen P.", wert)
+
+    def test_nur_die_juengste_sichtung_steht_da_und_keine_liste(self):
+        """Bei woechentlicher Kontrolle waeren es nach drei Monaten zwoelf
+        Zeilen, die niemand liest."""
+        alt = self.objekt.sichtung_eintragen(person=self.andere)
+        self._zurueckdatieren(alt, timezone.now() - timedelta(days=2))
+        self.objekt.sichtung_eintragen(person=self.person)
+        wert = self._wert()
+        self.assertIn("Steffen P.", wert)
+        self.assertNotIn("Anna K.", wert)
+
+    def test_ohne_person_steht_die_quelle_statt_des_namens(self):
+        """Ab Schritt 3 der Regelfall. Ein Strich stuende dort fuer
+        "unbekannt" und waere falsch - die Herkunft ist bekannt, sie ist nur
+        kein Mensch."""
+        self.objekt.sichtung_eintragen(person=None, quelle=SichtungQuelle.SUCHAGENT)
+        self.assertIn(SichtungQuelle.SUCHAGENT.label, self._wert())
+
+    def test_ohne_jede_sichtung_steht_der_platzhalter(self):
+        """Die Regel "in der Objektansicht werden leere Felder angezeigt"
+        (Entscheidung 03.09.) gilt auch hier."""
+        self.assertEqual(self._wert(), "—")
+
+    def test_der_platzhalter_ist_als_fehlend_ausgezeichnet(self):
+        """Man muss SEHEN, dass die Angabe fehlt, sonst haelt man sie fuer
+        eine Aussage. Ueber die KLASSENLISTE gemessen, nicht ueber eine
+        `class="…"`-Zeichenkette (Entscheidung 05.09.)."""
+        self.assertIn("fehlt", self._sichtungsblock().klassen["zuletzt gesehen"])
+
+    # --- Sabotage 10: aus der Tabelle, nicht aus dem Feld ----------------
+
+    def test_die_anzeige_folgt_der_tabelle_und_nicht_dem_feld(self):
+        """Der Zeuge gegen die Umstellung auf `objekt.zuletzt_gesehen`.
+
+        Beide tragen denselben Zeitpunkt - das Feld IST die Projektion. Zu
+        unterscheiden sind sie nur an dem, was das Feld NICHT hat: Person und
+        Quelle. Hier wird das Feld zusaetzlich per `update()` an der Methode
+        vorbei geleert; liest die Anzeige aus ihm, steht danach der
+        Platzhalter da, obwohl die Tabelle eine Sichtung fuehrt.
+        """
+        self.objekt.sichtung_eintragen(person=self.person)
+        Objekt.objects.filter(pk=self.objekt.pk).update(zuletzt_gesehen=None)
+        wert = self._wert()
+        self.assertNotEqual(wert, "—")
+        self.assertIn("Steffen P.", wert)
+
+    def test_die_anzeige_nennt_die_person_die_das_feld_nicht_kennt(self):
+        """Dieselbe Zusage ohne jeden Eingriff: `zuletzt_gesehen` ist ein
+        `DateTimeField` und kann einen Namen gar nicht tragen."""
+        self.objekt.sichtung_eintragen(person=self.andere)
+        self.assertIn("Anna K.", self._wert())
+
+    # --- der Ort: rechte Spalte, nicht mehr der Fuss ---------------------
+
+    def test_die_anzeige_steht_in_der_bedienspalte(self):
+        """Die rechte Spalte traegt seit dem 14.09. das Handeln. Die Sichtung
+        ist eine Handlung und steht im selben Kasten wie ihr Knopf."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertIn("Steffen P.", block(self._seite(), "bedienspalte").text)
+
+    def test_die_anzeige_steht_im_selben_kasten_wie_der_knopf(self):
+        """Auf den `<section>` eingegrenzt: "beide in der Spalte" waere auch
+        dann gruen, wenn die Anzeige in den Notizblock gerutscht ist."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        ziel = reverse("sichtung_eintragen", args=[self.objekt.pk])
+        passend = [
+            a
+            for a in abschnitte(self._seite())
+            if any(
+                tag == "form" and werte.get("action") == ziel
+                for tag, werte in a["elemente"]
+            )
+        ]
+        self.assertEqual(len(passend), 1)
+        self.assertIn("Steffen P.", passend[0]["text"])
+
+    def test_der_sichtungsblock_ist_kein_zweiter_datenblock(self):
+        """Der Datenblock der linken Spalte darf die Zeile NICHT mitfuehren.
+
+        Beide waeren `<dl>`-Listen, und traegen beide die Klasse `daten`,
+        bekaeme jeder Zeuge, der den Datenblock eingrenzt, diese Zeile mit
+        dazu - genau die Blindheit vom 03.09., nur von der anderen Seite.
+        """
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertNotIn("zuletzt gesehen", paare(self._seite(), "daten").paare)
+
+
+def sichtung_uebernahme_rumpf(antwort):
+    """Der POST-Rumpf, so wie ihn der Browser aus der Vorschau zurueckschickt.
+
+    Ueber `widget.format_value()` und nicht ueber die Rohwerte - genau der
+    gerenderte Text geht zurueck. Dieselbe Bauart wie `_post_rumpf` in
+    `UebernahmeTests`; ein von Hand zusammengestellter Rumpf faellt durch die
+    Formularpruefung, und die Ansicht rendert dann die Vorschau erneut,
+    ohne etwas anzulegen - ein Zeuge darauf maesse schweigend nichts.
+    """
+    formular = antwort.context["form"]
+    daten = {}
+    for name, feld in formular.fields.items():
+        gerendert = feld.widget.format_value(formular[name].value())
+        if isinstance(gerendert, list):
+            gerendert = gerendert[0] if gerendert else ""
+        daten[name] = "" if gerendert is None else gerendert
+    for verstecktes in ("url", "portal", "inserats_id", "bilder"):
+        daten[verstecktes] = antwort.context[verstecktes]
+    return daten
+
+
+class SichtungEinwurfTests(TestCase):
+    """Riegel 3: der URL-Einwurf legt KEINE Sichtung an - auch nicht als Dublette.
+
+    Eine aus WhatsApp kopierte URL kann drei Wochen alt sein. Wer sie
+    einwirft, hat das Inserat nicht notwendig gesehen - sondern einen Link
+    weitergereicht.
+
+    DER WAECHTER DANEBEN IST PFLICHT. Ein Zeuge, der nur misst, dass die
+    Tabelle leer bleibt, misst ein FEHLEN - er bliebe auch dann gruen, wenn
+    `sichtung_eintragen()` nirgends mehr aufgerufen wuerde oder die Tabelle
+    gar nicht existierte. Erst der Nachweis, dass DERSELBE Aufbau ueber das
+    Lesezeichen einen Eintrag erzeugt, macht aus dem Fehlen eine Aussage.
+    """
+
+    INSERAT = "https://www.idealista.com/inmueble/112155320/"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _einwerfen(self, url=None):
+        return self.client.post(
+            reverse("objekt_anlegen"), {"url": url or self.INSERAT}
+        )
+
+    def _uebernehmen(self, url=None):
+        """Derselbe Aufbau ueber das Lesezeichen - der Waechter.
+
+        Der ganze Weg: Vorschau aufrufen, dann absenden, was dort steht.
+        """
+        vorschau = self.client.get(
+            reverse("uebernehmen"), {"url": url or self.INSERAT, "titel": "Wohnung"}
+        )
+        return self.client.post(
+            reverse("uebernehmen"), sichtung_uebernahme_rumpf(vorschau)
+        )
+
+    # --- Riegel 3 ---------------------------------------------------------
+
+    def test_der_einwurf_legt_keine_sichtung_an(self):
+        self._einwerfen()
+        self.assertEqual(Objekt.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+    def test_der_einwurf_laesst_zuletzt_gesehen_leer(self):
+        self._einwerfen()
+        self.assertIsNone(Objekt.objects.get().zuletzt_gesehen)
+
+    def test_der_dublettenfall_legt_keine_sichtung_an(self):
+        """Der zweite Einwurf derselben URL landet auf dem Bestandsobjekt.
+        Auch dort hat niemand hingesehen."""
+        self._einwerfen()
+        self._einwerfen()
+        self.assertEqual(Objekt.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+    def test_der_dublettenfall_ueber_den_schluessel_legt_keine_sichtung_an(self):
+        """Dieselbe Zusage fuer die andere Schreibweise derselben URL - sie
+        laeuft ueber Portal und Inserats-ID statt ueber die rohe Adresse."""
+        self._einwerfen()
+        self._einwerfen("https://www.idealista.com/en/inmueble/112155320/")
+        self.assertEqual(Objekt.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+    # --- der Waechter: derselbe Aufbau ueber das Lesezeichen -------------
+
+    def test_derselbe_aufbau_ueber_das_lesezeichen_legt_eine_sichtung_an(self):
+        """OHNE DIESEN ZEUGEN MESSEN DIE VIER DARUEBER EIN FEHLEN.
+
+        Gleiche Person, gleiche URL, gleiche Sitzung - nur der Weg ist ein
+        anderer. Entsteht hier ein Eintrag, ist belegt, dass die Tabelle
+        beschreibbar ist und die Methode greift; das Ausbleiben oben ist dann
+        eine Entscheidung und kein Ausfall.
+        """
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.count(), 1)
+
+    def test_der_waechter_misst_dasselbe_objekt(self):
+        """Und zwar am selben Objekt: haenge der Eintrag an einem zweiten,
+        waere der Waechter ein Zeuge ueber etwas anderes."""
+        self._einwerfen()
+        objekt = Objekt.objects.get()
+        self._uebernehmen()
+        self.assertEqual(Objekt.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.get().objekt_id, objekt.pk)
+
+
+class SichtungUebernahmeTests(TestCase):
+    """Die Uebernahme traegt in BEIDEN Zweigen eine Sichtung ein.
+
+    Der `else`-Zweig tat es vorher schon - er war die einzige Stelle im ganzen
+    Projekt, an der `zuletzt_gesehen` je gesetzt wurde. Der `if neu`-Zweig tat
+    es NICHT, und das war der Fehlstand vom 29.08.: ein frisch uebernommenes
+    Objekt trug "zuletzt gesehen: —", obwohl es in derselben Sekunde gesehen
+    worden war.
+    """
+
+    INSERAT = "https://www.idealista.com/inmueble/112155320/"
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _uebernehmen(self, **felder):
+        """Der ganze Weg: Vorschau aufrufen, dann absenden, was dort steht."""
+        daten = {"url": self.INSERAT, "titel": "Wohnung in Tamaimo"}
+        daten.update(felder)
+        vorschau = self.client.get(reverse("uebernehmen"), daten)
+        return self.client.post(
+            reverse("uebernehmen"), sichtung_uebernahme_rumpf(vorschau)
+        )
+
+    def test_die_neuanlage_legt_eine_sichtung_an(self):
+        """Der Fehlstand vom 29.08."""
+        self._uebernehmen()
+        self.assertEqual(Sichtung.objects.count(), 1)
+
+    def test_die_neuanlage_setzt_zuletzt_gesehen(self):
+        self._uebernehmen()
+        objekt = Objekt.objects.get()
+        self.assertEqual(objekt.zuletzt_gesehen, Sichtung.objects.get().zeitpunkt)
+
+    def test_die_ergaenzung_legt_eine_sichtung_an(self):
+        bestand = Objekt.objects.create(
+            url=self.INSERAT, portal=Portal.IDEALISTA, inserats_id="112155320"
+        )
+        self._uebernehmen()
+        self.assertEqual(Sichtung.objects.count(), 1)
+        self.assertEqual(Sichtung.objects.get().objekt_id, bestand.pk)
+
+    def test_die_sichtung_traegt_die_quelle_lesezeichen(self):
+        """Nicht `von_hand`: der Weg ist der Lesezeichen-Zulauf."""
+        self._uebernehmen()
+        self.assertEqual(Sichtung.objects.get().quelle, SichtungQuelle.LESEZEICHEN)
+
+    def test_die_sichtung_traegt_die_uebernehmende_person(self):
+        self._uebernehmen()
+        self.assertEqual(Sichtung.objects.get().person, self.person)
+
+    def test_eine_zweite_uebernahme_am_selben_tag_daempft(self):
+        """Die Daempfung gilt auch hier - sie haengt an der Methode und nicht
+        am Aufrufer."""
+        self._uebernehmen()
+        self._uebernehmen()
+        self.assertEqual(Sichtung.objects.count(), 1)
+
+
+class SichtungBesuchsmarkeTests(TestCase):
+    """Eine Sichtung zaehlt als Bewegung - die eigene aber nicht.
+
+    Damit ist erkennbar, dass jemand nachgesehen hat, und drei Leute pruefen
+    nicht dasselbe Inserat am selben Tag.
+
+    DIE DATENFORM ERZWINGT DIE NULL-ZEILE: das Objekt in `_nur_sichtung()`
+    hat als einzige Bewegung eine Sichtung, und in den NULL-Zeugen unten hat
+    diese Sichtung keine Person. Ohne diese Form maessen die Zeugen die
+    NULL-Zeile ueberhaupt nicht - es markierte dann der Nachbareintrag.
+
+    WAS DIESE KLASSE NICHT BEWACHT, ist die ausgeschriebene NULL-Behandlung
+    in `durch_andere()`. Am 15.09. nachgemessen: Django haengt an jede
+    negierte Gleichheit auf einer nullbaren Spalte selbst einen NULL-Riegel,
+    und die NULL-Zeile bleibt in JEDER Fassung stehen - mit
+    `.exclude(person=person)` genauso wie mit dem ausgeschriebenen Zweig. Die
+    ausgeschriebene Form ist seitdem eine STILREGEL, kein Riegel; kein Zeuge
+    hier kann sie zum Fallen bringen, und keiner gibt vor, es zu koennen.
+    Siehe den Docstring von `durch_andere()` in `models.py`.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("ich", password="ein-langes-passwort")
+        self.andere = Person.objects.create_user("du", password="ein-langes-passwort")
+        self.client.force_login(self.person)
+        self.schwelle = timezone.now() - timedelta(hours=1)
+        Person.objects.filter(pk=self.person.pk).update(
+            besuch_davor=self.schwelle, letzter_besuch=timezone.now()
+        )
+        self._nummer = 0
+
+    def _nur_sichtung(self, person, wann=None):
+        """Ein Objekt, dessen EINZIGE Bewegung eine Sichtung ist.
+
+        Die Anlage liegt vor der Schwelle - sonst truege das Objekt schon
+        wegen seiner eigenen Entstehung eine Marke, und der Zeuge maesse
+        nicht die Sichtung.
+        """
+        self._nummer += 1
+        objekt = Objekt.objects.create(
+            url=f"https://x.example/{self._nummer}", titel=f"Objekt {self._nummer}"
+        )
+        Objekt.objects.filter(pk=objekt.pk).update(
+            eingestellt_am=self.schwelle - timedelta(minutes=10)
+        )
+        eintrag = objekt.sichtung_eintragen(person=person)
+        Sichtung.objects.filter(pk=eintrag.pk).update(
+            zeitpunkt=wann if wann is not None else self.schwelle + timedelta(minutes=10)
+        )
+        return Objekt.objects.get(pk=objekt.pk)
+
+    def _bewegt(self, objekt):
+        """Der WERT der Annotation an diesem Objekt."""
+        return (
+            Objekt.objects.mit_besuchsmarke(self.person, self.schwelle)
+            .get(pk=objekt.pk)
+            .seit_besuch_bewegt
+        )
+
+    # --- Riegel gegen die Zeugen darunter im Vakuum ----------------------
+
+    def test_ohne_jede_bewegung_ist_nichts_markiert(self):
+        """Sonst maessen die Zeugen unten nur, dass die Annotation immer wahr
+        ist."""
+        objekt = Objekt.objects.create(url="https://x.example/still", titel="still")
+        Objekt.objects.filter(pk=objekt.pk).update(
+            eingestellt_am=self.schwelle - timedelta(minutes=10)
+        )
+        self.assertFalse(self._bewegt(objekt))
+
+    # --- die Sichtung ist eine Bewegung ----------------------------------
+
+    def test_eine_fremde_sichtung_nach_der_schwelle_markiert(self):
+        self.assertTrue(self._bewegt(self._nur_sichtung(self.andere)))
+
+    def test_eine_fremde_sichtung_vor_der_schwelle_markiert_nicht(self):
+        """Verglichen wird `zeitpunkt` gegen die Besuchsschwelle - was davor
+        lag, hat die Person gesehen."""
+        objekt = self._nur_sichtung(
+            self.andere, wann=self.schwelle - timedelta(minutes=10)
+        )
+        self.assertFalse(self._bewegt(objekt))
+
+    def test_die_eigene_sichtung_setzt_die_marke_nicht(self):
+        """Entscheidung 05.09. Sonst leuchtet der Person ihr eigener letzter
+        Klick entgegen, und die Marke ist nach zwei Tagen wertlos."""
+        self.assertFalse(self._bewegt(self._nur_sichtung(self.person)))
+
+    # --- die Sichtung OHNE Person (Verhalten, nicht die Schreibweise) ------
+
+    def test_eine_sichtung_ohne_person_zaehlt_als_fremde_bewegung(self):
+        """Eine Sichtung ohne Person markiert - sie gilt als fremdes Tun.
+
+        Ab Schritt 3 tragen die Sichtungen aus dem Mail-Parser keine Person,
+        und sie sind die wichtigsten: eine Agenten-Mail belegt die Existenz
+        des Inserats ohne jeden Klick. Dass sie eine Marke tragen, ist die
+        Zusage, die hier gemessen wird - und sie ist echt: bliebe die
+        NULL-Zeile aus der Bedingung heraus, faende `Exists` nichts und der
+        Zeuge fiele.
+
+        ER BEWACHT ABER NICHT DIE SCHREIBWEISE. Hier stand bis zum 15.09.
+        "faellt die NULL-Behandlung, truegen genau sie nie eine Marke". Das
+        ist nachgemessen falsch: Django schreibt in jede negierte Gleichheit
+        auf einer nullbaren Spalte selbst
+
+            NOT (person_id = %s AND person_id IS NOT NULL)
+
+        und fuer die NULL-Zeile ist das `NOT (unbekannt AND falsch)` = wahr.
+        Dieser Zeuge bliebe also auch mit `.exclude(person=person)` und ganz
+        ohne ausgeschriebenen NULL-Zweig gruen. Wer die ausgeschriebene Form
+        aus `durch_andere()` entfernt, wird von KEINEM Zeugen aufgehalten -
+        das ist seit dem 15.09. Absicht, nicht Luecke.
+        """
+        objekt = self._nur_sichtung(None)
+        self.assertEqual(objekt.sichtungen.filter(person__isnull=True).count(), 1)
+        self.assertTrue(self._bewegt(objekt))
+
+    def test_die_datenform_dieses_zeugen_hat_wirklich_nur_die_null_zeile(self):
+        """Riegel auf den AUFBAU des Zeugen darueber, nicht auf die
+        Schreibweise der Bedingung: gaebe es daneben eine Sichtung MIT fremder
+        Person, markierte die - und der Zeuge bliebe gruen, ohne die NULL-Zeile
+        je anzufassen."""
+        objekt = self._nur_sichtung(None)
+        self.assertEqual(objekt.sichtungen.count(), 1)
+        self.assertEqual(objekt.vota.count(), 0)
+        self.assertEqual(objekt.notizen.count(), 0)
+        self.assertEqual(objekt.preise.count(), 0)
+        self.assertEqual(objekt.statusaenderungen.count(), 0)
+
+    def test_ohne_schwelle_ist_auch_eine_sichtung_nicht_markiert(self):
+        """Der erste Besuch einer Person. Die Gegenlesart "alles ist neu"
+        liesse beim ersten Login die komplette Liste leuchten."""
+        objekt = self._nur_sichtung(self.andere)
+        self.assertFalse(
+            Objekt.objects.mit_besuchsmarke(self.person, None)
+            .get(pk=objekt.pk)
+            .seit_besuch_bewegt
+        )
+
+    # --- und an der ausgelieferten Liste ----------------------------------
+
+    def test_die_liste_zeigt_die_marke_fuer_eine_fremde_sichtung(self):
+        """Dieselbe Zusage am Markup statt an der Annotation: die Liste muss
+        die Bewegungsart auch wirklich durchreichen."""
+        objekt = self._nur_sichtung(self.andere)
+        antwort = self.client.get(
+            reverse("objektliste"), {"status": [s.value for s in Status]}
+        )
+        markiert = {
+            zeile["marken"] and reverse("objekt", args=[objekt.pk]) in zeile["verweise"]
+            for zeile in ListenzeilenParser.lesen(antwort).zeilen
+        }
+        self.assertIn(True, markiert)
+
+    def test_mehr_sichtungen_kosten_nicht_mehr_abfragen(self):
+        """Die Zusage der Annotation: sie steht im SELECT derselben Anweisung.
+        Ein Zugriff je Zeile waere bei fuenfzig Zeilen einundfuenfzig
+        Abfragen."""
+        adresse = reverse("objektliste")
+        for _ in range(2):
+            self._nur_sichtung(self.andere)
+        with CaptureQueriesContext(connection) as wenige:
+            self.client.get(adresse)
+        for _ in range(6):
+            self._nur_sichtung(self.andere)
+        with CaptureQueriesContext(connection) as viele:
+            self.client.get(adresse)
+        self.assertEqual(len(wenige), len(viele))
+
+
+class SichtungLoeschbestaetigungTests(SichtungBasis):
+    """Riegel 8: Sichtungen sind keine Wertung und werden NICHT verdeckt.
+
+    Den Zaehlstand der Vota sieht nur, wer an diesem Objekt selbst abgestimmt
+    hat. Eine Sichtung sagt "das Inserat existierte an diesem Tag" und nichts
+    ueber eine Meinung - die Verdeckungsregel greift dafuer nicht.
+    """
+
+    def _anhang(self):
+        antwort = self.client.get(reverse("objekt_loeschen", args=[self.objekt.pk]))
+        return paare(antwort, "anhang")
+
+    def test_die_bestaetigung_nennt_die_zahl_der_sichtungen(self):
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.assertEqual(self._anhang()["Sichtungen"], "1")
+
+    def test_die_zahl_folgt_dem_bestand(self):
+        """Riegel gegen eine fest verdrahtete Zahl: zwei Personen, zwei
+        Eintraege."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.objekt.sichtung_eintragen(person=self.andere)
+        self.assertEqual(self._anhang()["Sichtungen"], "2")
+
+    def test_ohne_sichtung_steht_eine_null_da(self):
+        """Nicht weggelassen. Die Seite beantwortet "verliere ich etwas" - und
+        "null" ist eine Antwort darauf."""
+        self.assertEqual(self._anhang()["Sichtungen"], "0")
+
+    def test_die_zahl_steht_ohne_eigene_sichtung_genauso_da(self):
+        """Riegel 8 im Kern: keine Freischaltung, kein zweiter Zweig. Die
+        anmeldende Person hat hier selbst nie gesichtet."""
+        self.objekt.sichtung_eintragen(person=self.andere)
+        self.assertEqual(self.objekt.sichtungen.filter(person=self.person).count(), 0)
+        self.assertEqual(self._anhang()["Sichtungen"], "1")
+
+    def test_die_vota_stehen_weiter_ohne_zahl_da(self):
+        """Der Nachbar zur Abgrenzung: an der Verdeckung der Vota aendert die
+        Sichtung nichts."""
+        Votum.objects.create(
+            objekt=self.objekt, person=self.andere, wertung=Wertung.DAFUER
+        )
+        self.assertNotIn("Vota", self._anhang().paare)
+
+    def test_die_sichtungen_gehen_beim_loeschen_wirklich_mit(self):
+        """Die Zahl ist eine Warnung - sie muss stimmen."""
+        self.objekt.sichtung_eintragen(person=self.person)
+        self.client.post(reverse("objekt_loeschen", args=[self.objekt.pk]))
+        self.assertEqual(Sichtung.objects.count(), 0)
+
+
+class SichtungQuelltextRiegelTests(SimpleTestCase):
+    """Riegel 1 und 2, am Syntaxbaum statt am Verhalten gemessen.
+
+    Strukturtests, und sie sind hier nicht verzichtbar: eine zweite
+    Schreibstelle faellt keinem Verhaltenszeugen auf, solange sie dasselbe tut
+    wie die erste. Sie faellt erst auf, wenn sie etwas ANDERES tut - und dann
+    ist die Zusage "Feld und Tabelle laufen nie auseinander" schon weg.
+
+    Gemessen wird ueber `ast`, nicht ueber eine Textsuche: die Begruendungen in
+    den Docstrings dieses Projekts nennen genau die Aufrufe, um die es geht,
+    und eine Textsuche faende sie dort.
+    """
+
+    #: Was als ANWENDUNGSCODE gilt. `models.py` steht nicht darin - die
+    #: Methode selbst wohnt dort und ist der eine erlaubte Ort.
+    ANWENDUNGSMODULE = ("objekte/views.py", "objekte/forms.py", "objekte/admin.py")
+
+    def _baum(self, pfad):
+        with open(settings.BASE_DIR / pfad, encoding="utf-8") as datei:
+            return ast.parse(datei.read())
+
+    # --- Riegel 2: kein `Sichtung.objects.create()` ----------------------
+
+    def _create_aufrufe(self, baum):
+        """`X.objects.create(...)` - der Name von `X` je Aufruf."""
+        namen = []
+        for knoten in ast.walk(baum):
+            if not (isinstance(knoten, ast.Call) and isinstance(knoten.func, ast.Attribute)):
+                continue
+            if knoten.func.attr != "create":
+                continue
+            ziel = knoten.func.value
+            if isinstance(ziel, ast.Attribute) and ziel.attr == "objects":
+                if isinstance(ziel.value, ast.Name):
+                    namen.append(ziel.value.id)
+        return namen
+
+    def test_der_anwendungscode_legt_keine_sichtung_direkt_an(self):
+        """Riegel 2. Ein `Sichtung.objects.create()` umginge die Daempfung -
+        und `zuletzt_gesehen` bliebe stehen, waehrend die Tabelle waechst."""
+        for modul in self.ANWENDUNGSMODULE:
+            with self.subTest(modul=modul):
+                self.assertNotIn("Sichtung", self._create_aufrufe(self._baum(modul)))
+
+    def test_der_strukturtest_sieht_ueberhaupt_create_aufrufe(self):
+        """Riegel gegen einen vakuum-gruenen Zeugen darueber: faende der
+        Syntaxbaum gar keine `create`-Aufrufe, bewachte er nichts."""
+        gefunden = []
+        for modul in self.ANWENDUNGSMODULE:
+            gefunden += self._create_aufrufe(self._baum(modul))
+        self.assertIn("Objekt", gefunden)
+
+    def test_die_methode_ist_der_einzige_ort_mit_einem_create(self):
+        """Und im Modell steht es genau EINMAL - in `sichtung_eintragen()`."""
+        quelle = textwrap.dedent(inspect.getsource(Objekt.sichtung_eintragen))
+        self.assertEqual(self._create_aufrufe(ast.parse(quelle)), ["Sichtung"])
+
+    # --- Riegel 1: kein Schreibzugriff auf `zuletzt_gesehen` --------------
+
+    def _zuweisungen(self, baum, feld):
+        """Jede Zuweisung `irgendwas.<feld> = …` im Baum."""
+        treffer = []
+        for knoten in ast.walk(baum):
+            ziele = []
+            if isinstance(knoten, ast.Assign):
+                ziele = knoten.targets
+            elif isinstance(knoten, ast.AugAssign):
+                ziele = [knoten.target]
+            treffer += [
+                z for z in ziele if isinstance(z, ast.Attribute) and z.attr == feld
+            ]
+        return treffer
+
+    def test_der_anwendungscode_schreibt_zuletzt_gesehen_nicht(self):
+        """Riegel 1. Die Zuweisung stand bis zum 14.09. in
+        `UebernehmenView.post` - der einzigen Stelle, an der das Feld je
+        gesetzt wurde."""
+        for modul in self.ANWENDUNGSMODULE:
+            with self.subTest(modul=modul):
+                self.assertEqual(
+                    self._zuweisungen(self._baum(modul), "zuletzt_gesehen"), []
+                )
+
+    def test_der_strukturtest_sieht_ueberhaupt_feldzuweisungen(self):
+        """Riegel gegen den Zeugen darueber im Vakuum. `zuletzt_geaendert_von`
+        ist der Nachbar, der weiterhin von Hand gesetzt wird."""
+        gefunden = []
+        for modul in self.ANWENDUNGSMODULE:
+            gefunden += self._zuweisungen(self._baum(modul), "zuletzt_geaendert_von")
+        self.assertNotEqual(gefunden, [])
+
+    def test_im_modell_schreibt_nur_die_methode_das_feld(self):
+        quelle = textwrap.dedent(inspect.getsource(Objekt))
+        traeger = []
+        for knoten in ast.walk(ast.parse(quelle)):
+            if not isinstance(knoten, ast.FunctionDef):
+                continue
+            if self._zuweisungen(knoten, "zuletzt_gesehen"):
+                traeger.append(knoten.name)
+        self.assertEqual(traeger, ["sichtung_eintragen"])
+
+    # --- Riegel 6 am Quelltext -------------------------------------------
+
+    def test_das_modell_ruft_date_today_nirgends_auf(self):
+        """Riegel 6, strukturell. Der Verhaltenszeuge dafuer steht in
+        `SichtungZeitzonenTests` und braucht eine eigens gebaute
+        Zeitzonenkonstellation - dieser hier faellt sofort."""
+        aufrufe = []
+        for knoten in ast.walk(self._baum("objekte/models.py")):
+            if isinstance(knoten, ast.Call) and isinstance(knoten.func, ast.Attribute):
+                if knoten.func.attr == "today":
+                    aufrufe.append(ast.unparse(knoten.func))
+        self.assertEqual(aufrufe, [])
+
+    def test_die_methode_ruft_localdate_auf(self):
+        """Die Gegenrichtung, damit der Zeuge darueber kein blosses Fehlen
+        misst."""
+        quelle = inspect.getsource(Objekt.sichtung_eintragen)
+        self.assertIn("timezone.localdate()", quelle)
+
+
+class SichtungMigrationTests(TestCase):
+    """Die Migration 0010 leert `zuletzt_gesehen` im Bestand.
+
+    Sonst truege ein Altobjekt ein Datum, zu dem keine Sichtung existiert -
+    Feld und Tabelle widersprechen sich ab Tag eins, und die Objektansicht
+    zeigte je nach Herkunft der Angabe zwei verschiedene Antworten auf
+    dieselbe Frage.
+
+    Der Weg ist der von `ErfassungszeitpunktMigrationTests` und
+    `StadtteilFeldTests`: das Objekt entsteht im Zustand VOR 0010 und wird
+    durch die Migration hindurchgefuehrt. `TestCase` haelt den Test in einer
+    Transaktion, und Postgres kann Schemaaenderungen zuruecknehmen - der
+    Ruecksprung gilt nur innerhalb dieses Tests.
+    """
+
+    DAVOR = ("objekte", "0009_objekt_stadtteil")
+    DANACH = ("objekte", "0010_alter_objekt_zuletzt_gesehen_sichtung")
+
+    def _altes_objekt_mit_datum(self, executor):
+        executor.migrate([self.DAVOR])
+        modell = executor.loader.project_state(self.DAVOR).apps.get_model(
+            "objekte", "Objekt"
+        )
+        # Im Zustand vor 0010 ist das Feld noch editierbar und nimmt den Wert
+        # am `create()` an - genau so ist der Bestand entstanden.
+        return modell.objects.create(
+            url="https://www.idealista.com/inmueble/998877/",
+            zuletzt_gesehen=timezone.now(),
+        )
+
+    def test_der_zustand_davor_kennt_die_sichtung_noch_nicht(self):
+        """Riegel gegen den Zeugen darunter im Vakuum: liefe er gegen einen
+        Zustand, in dem die Tabelle schon steht, maesse er nichts."""
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.DAVOR])
+        zustand = executor.loader.project_state(self.DAVOR)
+        self.assertNotIn(
+            "sichtung", {m.lower() for a, m in zustand.models if a == "objekte"}
+        )
+        executor.loader.build_graph()
+        executor.migrate([self.DANACH])
+
+    def test_die_migration_leert_zuletzt_gesehen_im_bestand(self):
+        executor = MigrationExecutor(connection)
+        alt = self._altes_objekt_mit_datum(executor)
+        self.assertIsNotNone(alt.zuletzt_gesehen, "Der Aufbau traegt kein Datum.")
+
+        executor.loader.build_graph()
+        executor.migrate([self.DANACH])
+
+        self.assertIsNone(Objekt.objects.get(pk=alt.pk).zuletzt_gesehen)
+
+    def test_die_migration_loescht_das_objekt_nicht(self):
+        """Geleert wird die Spalte, nicht die Zeile."""
+        executor = MigrationExecutor(connection)
+        alt = self._altes_objekt_mit_datum(executor)
+        executor.loader.build_graph()
+        executor.migrate([self.DANACH])
+        self.assertTrue(Objekt.objects.filter(pk=alt.pk).exists())
+
+    def test_nach_der_migration_ist_die_sichtungstabelle_leer(self):
+        """Kein Nachtrag in die Gegenrichtung: aus einem Datum laesst sich
+        keine Sichtung erfinden - es ist nicht bekannt, wer nachgesehen hat."""
+        executor = MigrationExecutor(connection)
+        self._altes_objekt_mit_datum(executor)
+        executor.loader.build_graph()
+        executor.migrate([self.DANACH])
+        self.assertEqual(Sichtung.objects.count(), 0)

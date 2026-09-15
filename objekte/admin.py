@@ -92,6 +92,17 @@ class ObjektAdmin(admin.ModelAdmin):
         "eingestellt_am",
         "zuletzt_geaendert_von",
         "zuletzt_geaendert_am",
+        # Seit dem 14.09. dabei, und es war eine Luecke: alle Nachbarfelder
+        # derselben Gruppe waren geschuetzt, dieses eine nicht. `zuletzt_gesehen`
+        # ist die Projektion der Tabelle `Sichtung` - ein Wert, der hier von
+        # Hand eingetragen wuerde, behauptete eine Sichtung, die es nicht gibt.
+        #
+        # Das Feld traegt zusaetzlich `editable=False` und faellt damit ohnehin
+        # aus jedem Formular. Es steht hier trotzdem, und zwar aus dem
+        # umgekehrten Grund als die anderen: OHNE diesen Eintrag waere es im
+        # Admin gar nicht mehr zu SEHEN. `readonly_fields` ist die einzige
+        # Moeglichkeit, ein nicht editierbares Feld anzuzeigen.
+        "zuletzt_gesehen",
     ]
     inlines = [BildInline, PreisverlaufInline, VotumInline, NotizInline, StatusaenderungInline]
     actions = STATUS_ACTIONS

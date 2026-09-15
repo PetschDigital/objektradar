@@ -71,6 +71,26 @@ class PreisQuelle(models.TextChoices):
     VON_HAND = "von_hand", "von Hand"
 
 
+class SichtungQuelle(models.TextChoices):
+    """Woher die Bestaetigung kommt, dass das Inserat noch existiert.
+
+    EIGENE Liste und nicht `PreisQuelle` mitbenutzt, obwohl der Aufbau
+    derselbe ist: die beiden Tabellen beantworten verschiedene Fragen, und
+    ihre Quellen ueberschneiden sich nur zufaellig. `erneuter_abruf` gibt es
+    hier nicht - ein Serverabruf ist per Entscheidung vom 29.08.
+    ausgeschlossen -, `lesezeichen` gibt es beim Preis nicht. Eine gemeinsame
+    Liste muesste beide Luecken tragen und saehe an jeder der beiden Stellen
+    nach einem Versehen aus.
+
+    `lesezeichen` ist der haeufigste Fall: wer ein bekanntes Inserat erneut
+    einwirft, hat es gerade offen vor sich gehabt.
+    """
+
+    LESEZEICHEN = "lesezeichen", "Lesezeichen"
+    VON_HAND = "von_hand", "von Hand"
+    SUCHAGENT = "suchagent", "Suchagent"
+
+
 class Wertung(models.TextChoices):
     DAFUER = "dafuer", "dafür"
     ANSCHAUEN = "anschauen", "anschauen"

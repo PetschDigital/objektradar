@@ -25,6 +25,7 @@ from .choices import (
     Portal,
     PreisQuelle,
     Quelle,
+    SichtungQuelle,
     Status,
     Wertung,
     Zustand,
@@ -138,7 +139,7 @@ class ObjektQuerySet(models.QuerySet):
     def mit_besuchsmarke(self, person, schwelle):
         """`seit_besuch_bewegt` als Annotation: hat sich hier etwas getan?
 
-        Wahr, wenn NACH der Schwelle mindestens eine der fuenf Bewegungsarten
+        Wahr, wenn NACH der Schwelle mindestens eine der Bewegungsarten
         stattfand - und zwar durch JEMAND ANDEREN. Eigenes Tun zaehlt nicht:
         sonst leuchtet der Person ihr eigener letzter Klick entgegen, und die
         Marke ist nach zwei Tagen wertlos.
@@ -150,11 +151,13 @@ class ObjektQuerySet(models.QuerySet):
         "alles ist neu" liesse beim ersten Login die komplette Liste leuchten,
         und danach schaut niemand mehr hin.
 
-        VIER `Exists()`-Unterabfragen und eine Bedingung auf der Zeile selbst,
-        alles im SELECT derselben Anweisung. Das ist der eigentliche Bauteil
-        dieses Punktes: fuenf Bewegungsarten mal fuenfzig Zeilen waeren naiv
-        250 Abfragen je Seitenaufruf. So sind es null zusaetzliche - die
-        Seitenabfrage bleibt unabhaengig von der Objektzahl konstant.
+        Eine Bedingung auf der Zeile selbst, alle uebrigen als
+        `Exists()`-Unterabfrage - alles im SELECT derselben Anweisung. Das ist
+        der eigentliche Bauteil dieses Punktes: je Bewegungsart eine Abfrage
+        je Zeile waeren bei fuenfzig Zeilen mehrere hundert je Seitenaufruf.
+        So sind es null zusaetzliche - die Seitenabfrage bleibt unabhaengig
+        von der Objektzahl konstant. Hier steht bewusst KEINE Zahl: sie
+        stimmte bei jeder neuen Bewegungsart einen Tag lang nicht mehr.
 
         `Exists` und KEIN Aggregat: die Liste zieht bereits drei bedingte
         `Count` ueber `vota`, und ein zweiter JOIN auf `notizen` oder `preise`
@@ -173,6 +176,10 @@ class ObjektQuerySet(models.QuerySet):
         und ist ein `DateField` - eine Schwelle mit Uhrzeit laesst sich
         dagegen nicht pruefen. Siehe das Feld im Modell.
 
+        Vier der fuenf Bewegungsarten laufen ueber denselben Helfer
+        `durch_andere()`, die Sichtung seit dem 15.09. eingeschlossen. Die
+        NULL-Behandlung steht dort EINMAL und gilt damit fuer alle vier.
+
         Am Preisverlauf haengt als EINZIGEM keine Person: `02` fuehrt nur
         Objekt, Datum, Preis und Quelle. Eine von Hand eingetragene
         Preisaenderung ist deshalb nicht zuzuordnen und markiert auch fuer die
@@ -187,20 +194,59 @@ class ObjektQuerySet(models.QuerySet):
 
         def durch_andere(modell, zeitfeld):
             """Gibt es an diesem Objekt einen Eintrag NACH der Schwelle, der
-            nicht von dieser Person stammt?"""
+            nicht von dieser Person stammt?
+
+            `Sichtung.person` und `Statusaenderung.person` sind NULLBAR, und
+            die NULL-Person steht deshalb AUSGESCHRIEBEN da. Das ist seit dem
+            15.09. eine STILREGEL UND KEIN RIEGEL - ausdruecklich, nicht aus
+            Nachlaessigkeit. Dieselbe Hausform wie bei `eingestellt_von`
+            unten.
+
+            SIE HAELT KEINE ZEILE, DIE NICHT AUCH SO BLIEBE. Nachgemessen:
+            Django schreibt in jede negierte Gleichheit auf einer nullbaren
+            Spalte selbst einen NULL-Riegel, gleichlautend in
+            `.exclude(person=person)` wie in `filter(~Q(person=person))`:
+
+                NOT (person_id = %s AND person_id IS NOT NULL)
+
+            Fuer die NULL-Zeile ist das `NOT (unbekannt AND falsch)` und
+            damit WAHR - die Zeile bleibt, in allen drei Fassungen. Was in
+            rohem SQL ein Fund waere, ist im ORM keiner.
+
+            Folge, die man wissen muss: WER DIESEN ZWEIG ENTFERNT, WIRD VON
+            KEINEM ZEUGEN AUFGEHALTEN. Es gibt hier nichts zu bewachen, weil
+            nichts kaputtgeht. Der Zweig traegt erst, wenn diese Abfrage
+            einmal an Django vorbei gebaut wird - in rohem SQL, in einer
+            `RawSQL`-Annotation oder unter einem ORM, das die Umschreibung
+            nicht macht. Bis dahin steht er als Regel, die man liest. Siehe
+            `SichtungBesuchsmarkeTests` und den Bericht vom 15.09.
+
+            Bei `Votum` und `Notiz` ist die Spalte NOT NULL - der NULL-Zweig
+            laeuft dort ins Leere. Dass er trotzdem mitlaeuft, ist der Sinn
+            der Sache: EINE Form fuer alle vier statt vier Fassungen, von
+            denen jede einzeln verfallen kann. Die ausgeschriebene
+            Sonderfassung nur fuer die Sichtung stand hier bis zum 15.09.
+            und ist zurueckgebaut.
+            """
             return Exists(
                 modell.objects.filter(
-                    objekt=OuterRef("pk"), **{f"{zeitfeld}__gt": schwelle}
-                ).exclude(person=person)
+                    Q(person__isnull=True) | ~Q(person=person),
+                    objekt=OuterRef("pk"),
+                    **{f"{zeitfeld}__gt": schwelle},
+                )
             )
 
         bewegt = (
             # Das Objekt selbst - keine Unterabfrage, die Spalten stehen an
-            # der Zeile. `eingestellt_von` ist NULLBAR, und das ausgeschrieben
-            # zu behandeln ist hier keine Ziererei: ab Schritt 3 legt der
-            # Mail-Parser Objekte ohne Person an. `~Q(...)` allein liesse in
-            # SQL eine NULL uebrig, und genau die Objekte, die niemand
-            # eingeworfen hat, truegen dann nie eine Marke.
+            # der Zeile. `eingestellt_von` ist NULLBAR, und die NULL steht
+            # ausgeschrieben da: ab Schritt 3 legt der Mail-Parser Objekte
+            # ohne Person an, und die soll die Marke tragen.
+            #
+            # Bis zum 15.09. stand hier, `~Q(...)` allein liesse die NULL in
+            # SQL liegen. Nachgemessen stimmt das im ORM nicht - Django haengt
+            # den NULL-Riegel selbst an, siehe `durch_andere()` oben. Der
+            # Zweig bleibt trotzdem stehen, aus demselben Grund wie dort: als
+            # Regel, die man liest.
             (
                 Q(eingestellt_am__gt=schwelle)
                 & (Q(eingestellt_von__isnull=True) | ~Q(eingestellt_von=person))
@@ -208,6 +254,11 @@ class ObjektQuerySet(models.QuerySet):
             | Q(durch_andere(Votum, "geaendert_am"))
             | Q(durch_andere(Notiz, "erstellt_am"))
             | Q(durch_andere(Statusaenderung, "datum"))
+            # Dass eine Sichtung als Bewegung zaehlt, ist der Punkt: so ist
+            # erkennbar, dass jemand nachgesehen hat, und drei Leute pruefen
+            # nicht dasselbe Inserat am selben Tag. Die NULL-Person steht im
+            # Helfer, nicht hier.
+            | Q(durch_andere(Sichtung, "zeitpunkt"))
             # Ohne Personenfilter - siehe Docstring.
             | Q(
                 Exists(
@@ -395,11 +446,26 @@ class Objekt(models.Model):
         related_name="geaenderte_objekte",
     )
     zuletzt_geaendert_am = models.DateTimeField("zuletzt geändert am", auto_now=True)
+    # PROJEKTION der Tabelle `Sichtung`, kein Eingabefeld. Dasselbe Muster wie
+    # `aktueller_preis` gegenueber dem Preisverlauf (Entscheidung 28.08.): die
+    # Tabelle fuehrt, die Spalte folgt.
+    #
+    # Der Hilfetext sagte bis zum 14.09. "wird ab Schritt 2 beim erneuten
+    # Abruf gefuellt" und beschrieb damit etwas, das der Code nie getan hat -
+    # gefuellt wurde das Feld an genau einer Stelle, beim Ergaenzen eines
+    # Bestandsobjekts ueber die Uebernahme. Ein Hilfetext, der eine Zusage
+    # macht, die der Code nicht haelt, ist schlimmer als keiner.
+    #
+    # Bekannte Grenze, unveraendert: `editable=False` ist reine
+    # Django-Schicht. Ein `.update()` umgeht sie lautlos. Das gilt beim
+    # Kaufpreis genauso und wird hingenommen.
     zuletzt_gesehen = models.DateTimeField(
         "zuletzt gesehen",
         null=True,
         blank=True,
-        help_text="Bleibt in Schritt 1 leer. Wird ab Schritt 2 beim erneuten Abruf gefüllt.",
+        editable=False,
+        help_text="Zeitpunkt der jüngsten Sichtung. Wird ausschließlich von "
+        "`sichtung_eintragen()` geschrieben, nie von Hand.",
     )
 
     objects = ObjektQuerySet.as_manager()
@@ -503,6 +569,68 @@ class Objekt(models.Model):
             )
             self.zuletzt_geaendert_von = person
             self.save(update_fields=["zuletzt_geaendert_von", "zuletzt_geaendert_am"])
+        return eintrag
+
+    def sichtung_eintragen(self, person=None, quelle=SichtungQuelle.VON_HAND):
+        """Bestaetigen, dass das Inserat noch existiert. Gibt den Eintrag zurueck
+        - oder `None`, wenn heute schon einer derselben Person vorlag.
+
+        DER EINZIGE WEG, auf dem eine Sichtung entsteht und auf dem
+        `zuletzt_gesehen` geschrieben wird. Symmetrisch zu `preis_setzen()`
+        und `status_setzen()`: der Verlaufseintrag fuehrt, das Objektfeld
+        folgt. Ein `Sichtung.objects.create()` im Anwendungscode umginge die
+        Daempfung und liesse Feld und Tabelle auseinanderlaufen.
+
+        GEDAEMPFT auf einen Eintrag je Person und Tag, und zwar
+        QUELLENUEBERGREIFEND: wer morgens per Lesezeichen einwirft und
+        nachmittags auf "geprueft" klickt, erzeugt einen Eintrag. Die zweite
+        Bestaetigung desselben Tages durch dieselbe Person ist keine neue
+        Information - sie blaehte nur die Loeschbestaetigung auf und sagte
+        nichts Zweites.
+
+        Folge, die so GEWOLLT ist: wird ein Eintrag unterdrueckt, wandert auch
+        `zuletzt_gesehen` nicht. Feld und Tabelle laufen nie auseinander, denn
+        das Feld wird nur dort gesetzt, wo auch ein Eintrag entsteht.
+
+        "HEUTE" ist `timezone.localdate()` und niemals `date.today()`.
+        `USE_TZ` steht auf `True` und `TIME_ZONE` auf `Europe/Berlin`;
+        `date.today()` liest dagegen die Zeitzone des BETRIEBSSYSTEMS. Auf dem
+        Rechner, auf dem gebaut wird, sind beide gleich - auf einem Server in
+        UTC sind sie es zwischen Mitternacht und zwei Uhr nachts nicht, und
+        dann daempfte die Methode gegen einen anderen Tag als den, den der
+        Vergleich `zeitpunkt__date` in der Datenbank meint: `__date` rechnet
+        nach `settings.TIME_ZONE` um. Siehe `SichtungZeitzonenTests`.
+
+        DIE NULL-PERSON IST EIN EIGENER FALL und wird AUSGESCHRIEBEN
+        gefuehrt. Ab Schritt 3 legt der Mail-Parser Sichtungen ohne Person an;
+        eine Agenten-Mail von heute darf nicht dadurch verschluckt werden,
+        dass irgendjemand heute schon geklickt hat - und umgekehrt.
+        """
+        with transaction.atomic():
+            heute = timezone.localdate()
+            # AUSGESCHRIEBEN und nicht als `Q(person=person)` mit `None`
+            # darin. Die beiden Fassungen sind in Django 5.2 zwar
+            # gleichwertig - ein `exact`-Lookup auf `None` wird intern zu
+            # `isnull` -, aber die Regel steht hier als Regel und nicht als
+            # Nebenwirkung einer ORM-Umschreibung, die sich mit einer
+            # Django-Version aendern kann. Dieselbe Hausform wie bei
+            # `eingestellt_von` in `mit_besuchsmarke()`.
+            wie_diese_person = (
+                Q(person__isnull=True) if person is None else Q(person=person)
+            )
+            if self.sichtungen.filter(wie_diese_person, zeitpunkt__date=heute).exists():
+                return None
+
+            eintrag = Sichtung.objects.create(objekt=self, person=person, quelle=quelle)
+            # Den juengsten Eintrag AUS DER TABELLE holen, statt
+            # `eintrag.zeitpunkt` weiterzureichen. Beides liefert hier
+            # denselben Wert - aber "das Feld ist die Projektion der Tabelle"
+            # steht damit auch im Code und nicht nur im Kommentar.
+            self.zuletzt_gesehen = self.sichtungen.first().zeitpunkt
+            # `update_fields` haelt `Objekt.save()` von seinem Preiszweig fern:
+            # ohne `aktueller_preis` in der Liste liest er den Preis nicht nach
+            # und legt keinen Verlaufseintrag an.
+            self.save(update_fields=["zuletzt_gesehen"])
         return eintrag
 
     def status_setzen(self, person, neuer_status):
@@ -693,3 +821,72 @@ class Notiz(models.Model):
 
     def __str__(self):
         return self.text[:60]
+
+
+class Sichtung(models.Model):
+    """Ein Eintrag je bestaetigter Existenz des Inserats. Mit Person und Quelle.
+
+    Beantwortet die Zusage aus `01`: "Ist es noch am Markt oder schon weg."
+    `Objekt.zuletzt_gesehen` ist die Projektion dieser Tabelle, nicht
+    umgekehrt.
+
+    NUR POSITIVBELEG. Die Tabelle traegt ausschliesslich "Inserat existiert".
+    Wer nachsieht und nichts findet, setzt den Status auf `vom Markt` - dieser
+    Wechsel wird seit dem 28.08. in `Statusaenderung` mit Person und Datum
+    protokolliert und braucht hier keine zweite Spur.
+
+    Angelegt wird ausschliesslich ueber `Objekt.sichtung_eintragen()`. Ein
+    direktes `Sichtung.objects.create()` im Anwendungscode umginge die
+    Tagesdaempfung.
+    """
+
+    objekt = models.ForeignKey(
+        Objekt, verbose_name="Objekt", on_delete=models.CASCADE, related_name="sichtungen"
+    )
+    # NULLBAR, und das ist ab Schritt 3 der REGELFALL: die staerkste Sichtung
+    # ist die ohne Menschen. Meldet eine Agenten-Mail ein bekanntes Objekt
+    # erneut, existiert das Inserat nachweislich - da hat niemand geklickt.
+    # Dieselbe Lage wie beim Preisverlauf (Entscheidung 05.09.).
+    #
+    # `PROTECT` wie bei `Votum`, `Notiz` und `Statusaenderung`: ein geloeschtes
+    # Konto darf die Belege nicht mitnehmen. Die Kombination aus `PROTECT` und
+    # `null=True` hat im Bestand genau ein Vorbild - `Statusaenderung.person`.
+    person = models.ForeignKey(
+        PERSON,
+        verbose_name="Person",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sichtungen",
+    )
+    # GENAU EIN Zeitfeld, anders als beim Preisverlauf.
+    #
+    # `Preisverlauf` traegt zwei (`datum` und `erfasst_am`), weil dort zwei
+    # Signale gegen zwei verschiedene Zeitbegriffe laufen: die
+    # Besuchsmarkierung gegen den Erfassungszeitpunkt, die Preisanzeige gegen
+    # das fachliche Preisdatum - die Mail nennt gestern, der Abruf laeuft
+    # heute frueh. An der Sichtung haengt kein solches Signal. Ob eine
+    # Agenten-Mail von gestern als "gestern" oder "heute frueh" gesehen
+    # zaehlt, aendert nichts.
+    #
+    # `auto_now_add` verhindert zugleich, dass der Wert von aussen gesetzt
+    # wird - eine Sichtung, die sich vordatieren laesst, waere kein Beleg.
+    zeitpunkt = models.DateTimeField("Zeitpunkt", auto_now_add=True)
+    quelle = models.CharField(
+        "Quelle", max_length=20, choices=SichtungQuelle, default=SichtungQuelle.VON_HAND
+    )
+
+    class Meta:
+        verbose_name = "Sichtung"
+        verbose_name_plural = "Sichtungen"
+        # Zweites Kriterium ZWINGEND, wie beim Preisverlauf und am Objekt
+        # selbst: zwei Eintraege aus derselben Mikrosekunde staenden sonst
+        # unbestimmt zueinander, und "die juengste Sichtung" - die Anzeige der
+        # Objektansicht UND die Quelle fuer `zuletzt_gesehen` - waere Zufall.
+        # Ab Schritt 3 ist das der Normalfall: der Mail-Parser traegt mehrere
+        # Sichtungen in einer Schleife ein.
+        ordering = ["-zeitpunkt", "-id"]
+
+    def __str__(self):
+        wer = self.person.anzeigename if self.person_id else self.get_quelle_display()
+        return f"{self.zeitpunkt:%d.%m.%Y %H:%M} — {wer}"

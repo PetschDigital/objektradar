@@ -482,6 +482,67 @@
         </form>
       </section>
 
+      {% comment %}
+        Die Sichtung. Sie steht in der RECHTEN Spalte, weil sie eine Handlung
+        ist - die Spalte trägt seit dem 14.09. das Handeln, die linke die
+        Information.
+
+        Der Ablauf ist: hinsehen, zurückkommen, bestätigen. Der Verweis „zum
+        Inserat" steht dafür schon im Kopf der Seite und wird hier nicht
+        wiederholt — derselbe Verweis zweimal sagt nichts Zweites.
+
+        POST mit CSRF-Token und eine eigene Adresse, danach Umleitung zurück
+        (POST-Redirect-GET). Ein `<a>` wäre falsch: ein Verweis wird von
+        Vorausladern und vom Zurück-Knopf abgerufen, und jeder dieser Abrufe
+        trüge einen Beleg ein, den niemand gegeben hat.
+
+        KEIN Knopf in der Liste, und das ist eine Entscheidung gegen die
+        naheliegende Bequemlichkeit: die Liste ist kein Aktionsort, und ein
+        Knopf je Zeile im Blocklayout ist am Handy nicht vertretbar.
+
+        Die Anzeige darüber liest aus der TABELLE, nicht aus
+        `objekt.zuletzt_gesehen` — das Feld kennt weder Person noch Quelle.
+        Nur die jüngste Sichtung, keine Liste: bei wöchentlicher Kontrolle
+        wären es nach drei Monaten zwölf Zeilen, die niemand liest.
+
+        Ohne jede Sichtung steht der gedämpfte Strich da und nicht nichts —
+        die Regel „in der Objektansicht werden leere Felder angezeigt" gilt
+        auch hier (Entscheidung 03.09.). Ein leeres Feld ist die Aufforderung,
+        es zu füllen, und genau dafür steht der Knopf darunter.
+      {% endcomment %}
+      <section class="block handeln">
+        <h2>Sichtung</h2>
+        <dl class="sichtung">
+          <dt>zuletzt gesehen</dt>
+          <dd>
+            {% if letzte_sichtung %}
+              {{ letzte_sichtung.zeitpunkt|date:"d.m.Y H:i" }} —
+              {% comment %}
+                Ohne Person steht die QUELLE statt des Namens. Ab Schritt 3 ist
+                das der Regelfall: meldet eine Agenten-Mail ein bekanntes
+                Objekt erneut, existiert das Inserat nachweislich, und es hat
+                niemand geklickt. Ein Strich stünde dort für „unbekannt" und
+                wäre falsch — die Herkunft ist bekannt, sie ist nur kein Mensch.
+              {% endcomment %}
+              {% if letzte_sichtung.person %}
+                {{ letzte_sichtung.person.anzeigename }}
+              {% else %}
+                {{ letzte_sichtung.get_quelle_display }}
+              {% endif %}
+            {% else %}
+              <span class="fehlt">—</span>
+            {% endif %}
+          </dd>
+        </dl>
+
+        <form method="post" action="{% url 'sichtung_eintragen' objekt.pk %}" class="sichtungform">
+          {% csrf_token %}
+          <div class="knopfzeile">
+            <button type="submit" class="ruhig">Inserat geprüft — noch da</button>
+          </div>
+        </form>
+      </section>
+
     </div>
   </div>
 
@@ -492,9 +553,12 @@
     14.09. der Fuss selbst und nicht mehr ein `<hr>` davor: ein `<hr>` ist
     ein inhaltlicher Themenwechsel, und der Fuss ist keiner.
 
-    "Zuletzt gesehen" beantwortet die Frage, ob das Inserat noch am Markt
-    ist, und bleibt bis Schritt 2 leer - dann steht dort ein Strich und nicht
-    nichts.
+    "Zuletzt gesehen" stand bis zum 14.09. hier und steht seitdem in der
+    rechten Spalte, im selben Kasten wie der Knopf, der es fortschreibt. Der
+    Fuss ist der BELEG - wer das Objekt eingeworfen und wer es zuletzt
+    geaendert hat -, und das ist eine Aussage ueber die Gruppe. Ob das Inserat
+    noch am Markt ist, ist eine Aussage ueber das Inserat und gehoert dorthin,
+    wo gehandelt wird.
 
     Das LOESCHEN steht damit nicht mehr zwischen den Bedienelementen,
     sondern unter der Seite. Es bleibt derselbe Weg ueber die
@@ -510,7 +574,6 @@
     <p class="beleg">
       eingestellt von {{ objekt.eingestellt_von.anzeigename|default:"—" }} am {{ objekt.eingestellt_am|date:"d.m.Y H:i" }}
       · zuletzt geändert von {{ objekt.zuletzt_geaendert_von.anzeigename|default:"—" }} am {{ objekt.zuletzt_geaendert_am|date:"d.m.Y H:i" }}
-      · zuletzt gesehen {{ objekt.zuletzt_gesehen|date:"d.m.Y H:i"|default:"—" }}
     </p>
     <p class="loeschen"><a href="{% url 'objekt_loeschen' objekt.pk %}">Objekt löschen</a></p>
   </footer>

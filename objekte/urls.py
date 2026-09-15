@@ -24,4 +24,8 @@ urlpatterns = [
     path("objekt/<int:pk>/votum/", views.votum_setzen, name="votum_setzen"),
     path("objekt/<int:pk>/status/", views.status_setzen, name="status_setzen"),
     path("objekt/<int:pk>/notiz/", views.notiz_anlegen, name="notiz_anlegen"),
+    # Nur POST - `@require_POST` an der Ansicht. Ein GET auf diese Adresse
+    # legt nichts an: ein Beleg, den ein Vorauslader eintragen kann, ist
+    # keiner.
+    path("objekt/<int:pk>/sichtung/", views.sichtung_eintragen, name="sichtung_eintragen"),
 ]

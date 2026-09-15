@@ -14,7 +14,7 @@ from django.utils.html import format_html
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
 
-from .choices import PreisQuelle, Quelle, Status, Wertung, Zustand
+from .choices import PreisQuelle, Quelle, SichtungQuelle, Status, Wertung, Zustand
 from .forms import ObjektFilterForm, ObjektForm, UebernahmeForm
 from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
@@ -794,6 +794,23 @@ class ObjektView(DetailView):
         kwargs.setdefault(
             "statusaenderungen", self.object.statusaenderungen.select_related("person")
         )
+        # NUR DIE JUENGSTE, keine Liste. Bei woechentlicher Kontrolle waeren es
+        # nach drei Monaten zwoelf Zeilen, die niemand liest - und die Frage,
+        # die das Feld beantwortet, ist "ist es noch am Markt", nicht "wer hat
+        # wann alles nachgesehen".
+        #
+        # Gelesen aus der TABELLE und nicht aus `objekt.zuletzt_gesehen`: das
+        # Feld traegt nur den Zeitpunkt, nicht die Person und nicht die Quelle.
+        # Ein zweiter Weg zur selben Angabe waere ausserdem die zweite Formel
+        # fuer dieselbe Regel, und die driftet - dieselbe Ueberlegung wie beim
+        # Preis, der in dieser Ansicht aus derselben Annotation kommt wie in
+        # der Liste.
+        #
+        # `select_related`, damit der Name der Person keine zweite Abfrage
+        # kostet. `.first()` nutzt `Meta.ordering` - "-zeitpunkt", "-id".
+        kwargs.setdefault(
+            "letzte_sichtung", self.object.sichtungen.select_related("person").first()
+        )
         return super().get_context_data(**kwargs)
 
 
@@ -880,14 +897,19 @@ class ObjektLoeschenView(View):
         die Arbeit anderer, ohne es zu wissen. Eine Seite, die nur "wirklich
         loeschen?" fragt, verschweigt das.
 
-        VIER einzelne `count()`-Abfragen und NICHT vier `Count`-Aggregate in
-        einer: die Aggregate liefen ueber vier verschiedene Beziehungen und
-        erzeugten miteinander ein Kreuzprodukt - jede Notiz vervielfachte
-        jedes Votum, und die Zahlen waeren still zu hoch. Dasselbe Muster, das
-        `mit_preisaenderung()` mit einer Subquery umgeht. Hier ist es ein
-        einzelnes Objekt und eine Seite, die selten aufgerufen wird; vier
-        kleine Abfragen sind die ehrliche Antwort und `distinct=True` waere
-        eine Feinheit, die niemand mehr nachliest.
+        EINZELNE `count()`-Abfragen, je Beziehung eine, und NICHT `Count`-
+        Aggregate in einer: die Aggregate liefen ueber verschiedene
+        Beziehungen und erzeugten miteinander ein Kreuzprodukt - jede Notiz
+        vervielfachte jedes Votum, und die Zahlen waeren still zu hoch.
+        Dasselbe Muster, das `mit_preisaenderung()` mit einer Subquery umgeht.
+        Hier ist es ein einzelnes Objekt und eine Seite, die selten aufgerufen
+        wird; ein paar kleine Abfragen sind die ehrliche Antwort und
+        `distinct=True` waere eine Feinheit, die niemand mehr nachliest.
+
+        Hier steht bewusst KEINE Anzahl. Sie stand bis zum 14.09. da ("vier"),
+        war seit dem 04.09. falsch (es waren drei) und stimmte mit den
+        Sichtungen zufaellig wieder - und genau das ist der Grund, warum sie
+        beim naechsten Mal wieder gebrochen waere.
 
         Die Bilder stehen NICHT in dieser Liste, obwohl sie mitgehen. Sie sind
         vom Portal verlinkt und niemandes Arbeit - und die Liste beantwortet
@@ -910,14 +932,20 @@ class ObjektLoeschenView(View):
         und faellt eine aus, haelt die andere den Zeugen gruen.
 
         Dass die Vota mitgehen, sagt die Seite weiter - im Satz unter der
-        Liste, ohne Zahl. Notizen, Preiseintraege und Statusaenderungen
-        behalten ihre: sie sind Arbeit, keine Wertung, und ihr Verlust ist
-        genau das, wovor diese Seite warnt.
+        Liste, ohne Zahl. Notizen, Preiseintraege, Statusaenderungen und
+        Sichtungen behalten ihre: sie sind Arbeit, keine Wertung, und ihr
+        Verlust ist genau das, wovor diese Seite warnt.
+
+        Die SICHTUNGEN stehen seit dem 14.09. mit Zahl darin. Eine Sichtung
+        ist keine Wertung - sie sagt "das Inserat existierte an diesem Tag"
+        und nichts ueber eine Meinung. Die Verdeckungsregel, die den Vota ihre
+        Zahl nimmt, greift hier nicht.
         """
         return [
             ("Notizen", objekt.notizen.count()),
             ("Einträge im Preisverlauf", objekt.preise.count()),
             ("Statusänderungen", objekt.statusaenderungen.count()),
+            ("Sichtungen", objekt.sichtungen.count()),
         ]
 
 
@@ -969,6 +997,40 @@ def notiz_anlegen(request, pk):
         messages.error(request, "Eine leere Notiz wird nicht gespeichert.")
         return redirect("objekt", pk=pk)
     Notiz.objects.create(objekt=objekt, person=request.user, text=text)
+    return redirect("objekt", pk=pk)
+
+
+@require_POST
+def sichtung_eintragen(request, pk):
+    """Der Knopf "Inserat geprueft - noch da".
+
+    NUR POST, und `@require_POST` ist hier kein Formalismus: ein GET auf diese
+    Adresse darf nichts anlegen. Ein Verweis wird von Vorausladern,
+    Linkpruefern und dem Zurueck-Knopf abgerufen, ohne dass jemand ihn
+    angeklickt haette - und jeder dieser Abrufe truege sonst einen Beleg ein,
+    den niemand gegeben hat. Genau derselbe Grund wie beim Loeschen und bei
+    der Uebernahme. Django antwortet auf ein GET mit 405.
+
+    POST-Redirect-GET: die Antwort ist eine Umleitung zurueck auf die
+    Objektansicht, nie gerendertes HTML. Ein Neuladen wiederholte sonst den
+    POST - und liefe zwar in die Daempfung, aber die Meldung stuende ein
+    zweites Mal da.
+
+    Die zweite Bestaetigung desselben Tages ist KEIN Fehler. Sie wird ruhig
+    gemeldet, auf der neutralen Stufe (`info`) - nicht als Fehler und nicht
+    als Warnung: die Person hat alles richtig gemacht, es gibt nur nichts
+    Neues zu protokollieren. Was die Stufen unterscheidet, steht im
+    Stylesheet; `info` traegt dort keine eigene Farbe und faellt auf den
+    gedaempften Balken.
+    """
+    objekt = get_object_or_404(Objekt, pk=pk)
+    eintrag = objekt.sichtung_eintragen(
+        person=request.user, quelle=SichtungQuelle.VON_HAND
+    )
+    if eintrag is None:
+        messages.info(request, "Heute schon als vorhanden bestätigt.")
+    else:
+        messages.success(request, "Als noch vorhanden vermerkt.")
     return redirect("objekt", pk=pk)
 
 
@@ -1168,6 +1230,14 @@ class UebernehmenView(View):
         objekt = form.save(commit=False)
         neu = objekt.pk is None
 
+        # KEIN `else`-Zweig mehr. Beim Ergaenzen bleiben `portal`,
+        # `inserats_id` und `url` des Bestands, wie sie sind - sie sind der
+        # Dublettenschluessel, und ihn nebenbei aus einer Heuristik zu
+        # ueberschreiben waere genau das stillschweigende Ueberschreiben, das
+        # dieser Weg vermeiden soll. Dafuer ist nichts zu TUN; bis zum 14.09.
+        # stand dort `objekt.zuletzt_gesehen = timezone.now()` - die einzige
+        # Stelle im Projekt, an der das Feld je gesetzt wurde. Sie ist nach
+        # unten gewandert und gilt jetzt fuer beide Zweige.
         if neu:
             objekt.url = url
             # Aus der URL neu abgeleitet, nicht aus dem versteckten Feld
@@ -1179,12 +1249,6 @@ class UebernehmenView(View):
             objekt.inserats_id = inserats_id
             objekt.quelle = Quelle.URL_EINGEWORFEN
             objekt.eingestellt_von = request.user
-        else:
-            # `portal`, `inserats_id` und `url` des Bestands bleiben, wie sie
-            # sind. Sie sind der Dublettenschluessel; ihn nebenbei aus einer
-            # Heuristik zu ueberschreiben waere genau das stillschweigende
-            # Ueberschreiben, das dieser Weg vermeiden soll.
-            objekt.zuletzt_gesehen = timezone.now()
 
         objekt.zuletzt_geaendert_von = request.user
 
@@ -1202,6 +1266,19 @@ class UebernehmenView(View):
                 return _liegt_schon_vor(request, vorhanden)
             messages.error(request, "Das Inserat konnte nicht angelegt werden.")
             return redirect("objektliste")
+
+        # BEIDE Zweige, nicht nur der `else`-Zweig. Wer ueber das Lesezeichen
+        # uebernimmt, hatte das Inserat gerade offen vor sich - beim Ergaenzen
+        # eines Bestandsobjekts genauso wie bei der Neuanlage. Dass die
+        # Neuanlage das Feld bisher GAR NICHT setzte, war der Fehlstand vom
+        # 29.08.: ein frisch uebernommenes Objekt trug "zuletzt gesehen: —",
+        # obwohl es in derselben Sekunde gesehen worden war.
+        #
+        # NACH dem `save()`, nicht davor: die Methode schreibt `zuletzt_gesehen`
+        # selbst fort und braucht dafuer einen Primaerschluessel.
+        objekt.sichtung_eintragen(
+            person=request.user, quelle=SichtungQuelle.LESEZEICHEN
+        )
 
         self._preis_fortschreiben(request, objekt, form.cleaned_data.get("kaufpreis"))
         self._bilder_ergaenzen(objekt, bilder)
