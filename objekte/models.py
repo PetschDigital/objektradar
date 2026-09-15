@@ -342,10 +342,20 @@ class Objekt(models.Model):
     )
 
     titel = models.CharField("Titel des Inserats", max_length=300, blank=True, default="")
+    # Ein ZEICHENFELD und ausdruecklich keine Zahl: `01067` verloere als Zahl
+    # die fuehrende Null. Mit einer PLZ rechnet niemand; sie ist eine
+    # Kennung, die aus Ziffern besteht.
+    #
+    # Die Laenge von zehn Zeichen ist vorgegeben (15.09.). Gefuellt wird das
+    # Feld derzeit nur aus dem Immowelt-Titel, und dort liefert das Muster in
+    # `portale.py` genau fuenf Ziffern - die Leseregel kann die Feldlaenge
+    # nicht ueberschreiten und braucht deshalb keinen Laengenriegel.
+    plz = models.CharField("PLZ", max_length=10, blank=True, default="")
     # Feldtyp, Laenge und `blank`-Verhalten sind ABSICHTLICH Zeichen fuer
     # Zeichen die von `ort`: beide tragen ein Segment desselben Titels, und
-    # eine abweichende Laenge liesse den Riegel in `ort_und_stadtteil()` fuer
-    # das eine Feld anders greifen als fuer das andere.
+    # eine abweichende Laenge liesse den Riegel in `ort_und_stadtteil()` und
+    # `angaben_aus_titel()` fuer das eine Feld anders greifen als fuer das
+    # andere.
     #
     # Die drei Ortsebenen sind getrennte Felder und keine Abstufung eines
     # einzigen: `stadtteil` ist die Lage INNERHALB der Gemeinde, `ort` die
@@ -353,7 +363,15 @@ class Objekt(models.Model):
     # genau den Unterschied weg, der den Preis erklaert - `Puerto de Santiago`
     # am Meer und `Tamaimo-Arguayo` im Landesinneren liegen beide in der
     # Gemeinde `Santiago del Teide`.
-    stadtteil = models.CharField("Stadtteil", max_length=150, blank=True, default="")
+    #
+    # Die BESCHRIFTUNG heisst seit dem 15.09. "Ortsteil", der Spaltenname
+    # bleibt `stadtteil` - keine Umbenennung, keine Datenmigration, kein
+    # Umbau von Filter oder Freitextsuche. "Lage innerhalb der Gemeinde"
+    # trifft auf einen Hamburger Stadtteil ebenso zu wie auf ein Dorf in einer
+    # Amtsgemeinde; "Stadtteil" traf nur den ersten Fall. Ein Feld, das bei
+    # Doerfern falsch beschriftet ist, bleibt leer - und genau diese Angabe
+    # erklaert den Preisunterschied.
+    stadtteil = models.CharField("Ortsteil", max_length=150, blank=True, default="")
     ort = models.CharField("Ort", max_length=150, blank=True, default="")
     land = models.CharField("Land", max_length=20, choices=Land, blank=True, default="")
     region = models.CharField(

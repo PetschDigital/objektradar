@@ -40,6 +40,7 @@
 
     <fieldset class="gruppe">
       <legend>Lage</legend>
+      {% include "feld.html" with feld=form.plz %}
       {% include "feld.html" with feld=form.stadtteil %}
       {% include "feld.html" with feld=form.ort %}
       {% include "feld.html" with feld=form.land %}

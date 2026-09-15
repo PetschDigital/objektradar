@@ -238,7 +238,7 @@
 
         Ort, Land und die Zahlen stehen nicht noch einmal hier: die einen
         tragen die Zeile unter der Bezeichnung, die anderen das Band
-        darueber. Stadtteil, Region und Zustand stehen dafuer ALLEIN hier
+        darueber. PLZ, Ortsteil, Region und Zustand stehen dafuer ALLEIN hier
         und nicht auch oben. Derselbe Wert zweimal sagt nichts Zweites -
         Entscheidung vom 03.09., am 14.09. bestaetigt, nachdem die
         zwischenzeitliche Doppelung einen Zeugen blind gemacht hatte.
@@ -255,14 +255,24 @@
           <dt>Zustand</dt>
           <dd>{{ objekt.get_zustand_display }}</dd>
           {% comment %}
-            Der Stadtteil steht HIER und nicht oben in der Objektzeile: die
+            Der Ortsteil steht HIER und nicht oben in der Objektzeile: die
             Objektzeile traegt nur, was der Datenblock nicht fuehrt. Und er
             steht VOR der Region, weil die Ortsebenen von fein nach grob
-            stehen: Stadtteil (Lage in der Gemeinde), dann Region
+            stehen: Ortsteil (Lage in der Gemeinde), dann Region
             (Teneriffa, Costa del Sol). Leer ist er bei jedem Portal ausser
-            Idealista - und leer ist er hier die Aufforderung.
+            Idealista und Immowelt - und leer ist er hier die Aufforderung.
+
+            Die Beschriftung heisst seit dem 15.09. "Ortsteil", das Feld
+            weiterhin `stadtteil`. "Stadtteil" traf den Hamburger Stadtteil,
+            aber nicht das Dorf in einer Amtsgemeinde.
+
+            Die PLZ steht unmittelbar DAVOR (15.09.), und zwar als Text: sie
+            ist ein Zeichenfeld, `01067` behaelt seine fuehrende Null. Leer
+            steht sie da wie jedes andere Feld dieses Blocks.
           {% endcomment %}
-          <dt>Stadtteil</dt>
+          <dt>PLZ</dt>
+          <dd>{% if objekt.plz %}{{ objekt.plz }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
+          <dt>Ortsteil</dt>
           <dd>{% if objekt.stadtteil %}{{ objekt.stadtteil }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>
           <dt>Region</dt>
           <dd>{% if objekt.region %}{{ objekt.region }}{% else %}<span class="fehlt">—</span>{% endif %}</dd>

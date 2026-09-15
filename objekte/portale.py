@@ -535,10 +535,13 @@ def _idealista_ort_und_stadtteil(titel: str) -> tuple[str, str]:
 #: fuer Idealista gilt, ist damit strukturell und nicht in einer View
 #: nachgehalten. Ein weiteres Portal waere eine Zeile.
 #:
-#: Fuer Fotocasa, Pisos, Milanuncios, ImmoScout24 und Immowelt steht hier
-#: NICHTS: fuer keines von ihnen ist ein einziger Titel belegt. Nach der Lehre
-#: vom 07.09. wird nichts aufgenommen, was nicht belegt ist - sonst taeuscht
-#: die Tabelle Abdeckung vor.
+#: Fuer Fotocasa, Pisos, Milanuncios und ImmoScout24 steht hier NICHTS: fuer
+#: keines von ihnen ist ein einziger Titel belegt. Nach der Lehre vom 07.09.
+#: wird nichts aufgenommen, was nicht belegt ist - sonst taeuscht die Tabelle
+#: Abdeckung vor.
+#:
+#: Immowelt ist seit dem 15.09. belegt und steht trotzdem nicht hier: seine
+#: Titelregel liefert vier Angaben statt zwei und steht in `ANGABEN_AUS_TITEL`.
 #:
 #: Getrennt von `PREIS_AUS_TITEL` und nicht als zweite Spalte darin: die beiden
 #: Tabellen decken verschiedene Portale ab und werden zu verschiedenen Zeiten
@@ -570,4 +573,200 @@ def ort_und_stadtteil(portal: str, titel: str) -> tuple[str, str]:
     leser = ORT_AUS_TITEL.get(portal)
     if leser is None:
         return "", ""
+    return leser(titel)
+
+
+# =========================================================================
+# Ort, Ortsteil, PLZ und Objekttyp aus dem Immowelt-Titel
+# =========================================================================
+#
+# Bei Immowelt blieben Ort und Ortsteil leer, obwohl beide im og:Titel stehen
+# - ebenso PLZ und Objekttyp. Belegt an acht Inseraten aus dem Bestand vom
+# 15.09.; die acht stehen als Zeugen in `ImmoweltTitelregelTests`. Gelesen wird
+# der Titel, den das Lesezeichen ohnehin uebergibt. Das Skript wird NICHT
+# angefasst.
+#
+# EIGENE Funktion und EIGENE Tabelle - ausdruecklich KEIN Umbau der
+# Idealista-Regel darueber, obwohl das Zerlegen am Komma und zwei Riegel gleich
+# aussehen. Ein gemeinsamer Helfer mit Portalparameter koppelte zwei Regeln,
+# die an verschiedenen Titeln belegt sind und sich getrennt aendern werden.
+# Ein zweiter Aufrufer rechtfertigt keine Verallgemeinerung (Entscheidung
+# 15.09.). Mitbenutzt werden nur die Konstanten `NUR_ZIFFERN` und
+# `ORTSFELD_LAENGE`: die eine beschreibt die Hausnummer, die andere das
+# Modell - keine von beiden das Titelformat eines Portals.
+#
+# Belegtes Format, die Flaeche fehlt bei mindestens einem Titel:
+#
+#     <Typ> [<Fläche> m²] <Preis> € zum Kauf <Adressteil> (<PLZ>)
+#
+#     Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg (22395)
+#     Haus 2490000 € zum Kauf Berchtesgaden,Berchtesgaden (83471)
+#     Haus 90 m² 167500 € zum Kauf Rosenkreuzstr. 7,Neumagen,Neumagen-Dhron (54347)
+
+#: Die Marke vor dem Adressteil. Gesucht wird ihr LETZTES Vorkommen.
+IMMOWELT_MARKE = " zum Kauf "
+
+#: Ein Klammerausdruck aus Ziffern als Abschluss des Titels.
+#:
+#: ABGESCHNITTEN wird er immer, als PLZ GELESEN nur bei genau fuenf Ziffern
+#: (`IMMOWELT_PLZ`). Eine abweichende Klammer - vier Ziffern, sechs - laesst
+#: die PLZ leer, darf aber nicht als `Hamburg (2239)` im Ort landen.
+#:
+#: Nur ZIFFERN in der Klammer und nicht jeder Inhalt: Gemeindenamen tragen
+#: mitunter selbst eine Klammer (`Frankfurt (Oder)`). Ob Immowelt sie so
+#: schreibt, ist nicht belegt. Eine Regel, die JEDE Klammer am Ende abschnitte,
+#: liesse dort bei fehlender PLZ still `Frankfurt` stehen - einen Namen, der
+#: richtig aussieht. So bleibt die Klammer sichtbar im Ort.
+#:
+#: `[0-9]` und nicht `\d`, aus demselben Grund wie bei `NUR_ZIFFERN`.
+IMMOWELT_KLAMMER = re.compile(r"\(([0-9]*)\)\Z")
+IMMOWELT_PLZ = re.compile(r"[0-9]{5}")
+
+#: Die Auswahlwerte von `choices.Objekttyp`: Beschriftung, per `casefold`
+#: kleingeschrieben -> gespeicherter Schluessel.
+#:
+#: KEINE ABBILDUNGSTABELLE. Hier steht jeder Auswahlwert genau einmal und
+#: sonst nichts - kein `Einfamilienhaus`, keine `Doppelhaushälfte`. Alle acht
+#: Belege tragen `Haus`, weil die Suche danach gefiltert war; fuer jeden
+#: anderen Begriff gibt es keinen Beleg, und eine Zuordnung darueber hinaus
+#: waere geraten. Was nicht woertlich passt, laesst das Feld leer.
+#:
+#: Verglichen wird die BESCHRIFTUNG und nicht der Schluessel, und die beiden
+#: gehen an genau einer Stelle auseinander: `Grundstück` gegen `grundstueck`.
+#: Als nackte Zeichenketten, weil dieses Modul Django nicht importieren darf -
+#: dass sie zu `choices.Objekttyp` passen, ist NICHT strukturell gesichert,
+#: sondern zurueckgelesen bezeugt (`ImmoweltTitelangabenTests`). Derselbe Zeuge
+#: faellt, sobald hier ein Eintrag steht, der kein Auswahlwert ist.
+OBJEKTTYPEN = {
+    "villa": "villa",
+    "haus": "haus",
+    "reihenhaus": "reihenhaus",
+    "wohnung": "wohnung",
+    "finca": "finca",
+    "grundstück": "grundstueck",
+    "sonstiges": "sonstiges",
+}
+
+#: Die Formularfelder, die die Regel fuellt. Das Ergebnis traegt IMMER alle
+#: vier, leer oder nicht.
+#:
+#: Es sind die FELDNAMEN: der Ortsteil heisst hier `stadtteil`, weil am 15.09.
+#: nur die Beschriftung umbenannt wurde, nicht die Spalte. Nackte
+#: Zeichenketten aus demselben Grund wie oben, gegen das Formular
+#: zurueckgelesen bezeugt.
+ANGABEN = ("stadtteil", "ort", "plz", "objekttyp")
+
+
+def _immowelt_angaben(titel: str) -> dict[str, str]:
+    """Ortsteil, Ort, PLZ und Objekttyp aus dem og:Titel eines Immowelt-Inserats.
+
+    Ein Verzeichnis und kein Viertupel: vier Zeichenketten in fester
+    Reihenfolge vertauscht man, ohne dass es beim Aufruf auffaellt - dieselbe
+    Falle, derentwegen `ort_und_stadtteil()` seine Argumente am 14.09. gedreht
+    bekam.
+
+    Die Grundhaltung ist die aller Titelregeln hier: ein leeres Feld sieht
+    man, ein falsches nicht. Wo nichts sicher zu lesen ist, bleibt es leer,
+    ohne Rueckfall auf eine andere Quelle.
+    """
+    angaben = dict.fromkeys(ANGABEN, "")
+
+    # Raender weg, bevor irgendetwas gemessen wird. Das Lesezeichen trimmt den
+    # og:Titel, faellt aber auf `document.title` zurueck, und das trimmt es
+    # nicht. Ein Leerzeichen hinter der Klammer liesse sonst die PLZ leer und
+    # die Klammer im Ort stehen.
+    text = (titel or "").strip()
+
+    # 1. Die Marke, LETZTES Vorkommen. Fehlt sie, bleiben ALLE VIER leer -
+    #    auch der Objekttyp, obwohl er vorn steht: ohne Marke ist nicht
+    #    belegt, dass der Titel dieses Format hat.
+    _kopf, marke, adressteil = text.rpartition(IMMOWELT_MARKE)
+    if not marke:
+        return angaben
+
+    # 2. Die PLZ. Abgeschnitten wird die Klammer immer, gelesen nur mit genau
+    #    fuenf Ziffern - siehe `IMMOWELT_KLAMMER`.
+    klammer = IMMOWELT_KLAMMER.search(adressteil)
+    if klammer:
+        if IMMOWELT_PLZ.fullmatch(klammer.group(1)):
+            angaben["plz"] = klammer.group(1)
+        adressteil = adressteil[: klammer.start()]
+
+    # 3. Am Komma zerlegen, Raender putzen, Leeres verwerfen. In den Belegen
+    #    steht hinter dem Komma kein Leerzeichen.
+    segmente = [teil.strip() for teil in adressteil.split(",")]
+    segmente = [teil for teil in segmente if teil]
+
+    # 4. VON HINTEN gezaehlt: das letzte Segment ist die Gemeinde, das
+    #    vorletzte der Ortsteil, alles davor faellt weg. `Bergstedt,Hamburg`
+    #    belegt die Reihenfolge; `Rosenkreuzstr. 7,Neumagen,Neumagen-Dhron`
+    #    belegt, warum von hinten - von vorn gezaehlt stuende die Strasse im
+    #    Ortsteil.
+    if segmente:
+        ort = segmente[-1]
+        ortsteil = segmente[-2] if len(segmente) > 1 else ""
+
+        # RIEGEL: derselbe Wert zweimal sagt nichts Zweites
+        # (`Berchtesgaden,Berchtesgaden`). Woertlich verglichen, nach dem
+        # Trimmen.
+        if ortsteil == ort:
+            ortsteil = ""
+        # RIEGEL: ein rein numerisches Segment ist eine Hausnummer und kein
+        # Ortsteil. Uebernommen aus der Idealista-Regel.
+        if NUR_ZIFFERN.fullmatch(ortsteil):
+            ortsteil = ""
+        # RIEGEL: zu lang heisst leer, nicht gekuerzt - je Feld einzeln. Ein
+        # gekuerzter Ortsname sieht aus wie einer und ist keiner.
+        if len(ort) > ORTSFELD_LAENGE:
+            ort = ""
+        if len(ortsteil) > ORTSFELD_LAENGE:
+            ortsteil = ""
+
+        angaben["ort"] = ort
+        angaben["stadtteil"] = ortsteil
+
+    # 5. Der Objekttyp: die Zeichen bis zum ersten Leerzeichen, uebernommen
+    #    nur bei woertlicher Uebereinstimmung mit einem Auswahlwert. Kein
+    #    Rueckfall auf `sonstiges`, kein Raten.
+    #
+    #    Fuer PLZ und Objekttyp steht KEIN Laengenriegel: die PLZ hat per Muster
+    #    genau fuenf Zeichen, der Objekttyp ist ein Schluessel der
+    #    Auswahlliste. Beide passen strukturell in ihr Feld - ein Riegel dort
+    #    koennte nie greifen.
+    wort, _, _ = text.partition(" ")
+    angaben["objekttyp"] = OBJEKTTYPEN.get(wort.casefold(), "")
+
+    return angaben
+
+
+#: Welche Portale Ortsteil, Ort, PLZ und Objekttyp aus dem Titel lesen.
+#:
+#: Dieselbe Bauform wie `PREIS_AUS_TITEL` und `ORT_AUS_TITEL`: dass die Regel
+#: ausschliesslich fuer Immowelt gilt, steht hier und nicht als `if` in der
+#: Uebernahme.
+#:
+#: GETRENNT von `ORT_AUS_TITEL` und nicht als Zeile darin: jene Tabelle liefert
+#: zwei Werte, diese vier. Immowelt dort einzutragen hiesse, die Rueckgabe der
+#: Idealista-Regel umzubauen - und das ist ausgeschlossen. Die beiden Tabellen
+#: ueberschneiden sich nicht; welches Portal in welcher steht, bezeugen
+#: `test_nur_idealista_traegt_eine_titelregel` und
+#: `test_nur_immowelt_traegt_titelangaben`.
+ANGABEN_AUS_TITEL = {
+    PORTAL_IMMOWELT: _immowelt_angaben,
+}
+
+
+def angaben_aus_titel(portal: str, titel: str) -> dict[str, str]:
+    """Die Titelangaben dieses Portals - IMMER alle vier Schluessel aus `ANGABEN`.
+
+    Kein Datenbankzugriff, kein Netz, kein Django - aus dem Mail-Parser aus
+    Schritt 3 gleichermassen aufrufbar wie `ort_und_stadtteil()`.
+
+    Traegt das Portal keine Regel, sind alle vier leer - auch bei einem Titel
+    im Immowelt-Aufbau. Argumentfolge `(portal, titel)` wie bei
+    `preis_aus_titel()` und `ort_und_stadtteil()`.
+    """
+    leser = ANGABEN_AUS_TITEL.get(portal)
+    if leser is None:
+        return dict.fromkeys(ANGABEN, "")
     return leser(titel)

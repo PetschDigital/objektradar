@@ -3139,6 +3139,9 @@ class OrtUndStadtteilTests(SimpleTestCase):
         Tabellenabfrage gruen.
         """
         for portal in (
+            # Immowelt hat seit dem 15.09. sehr wohl eine Titelregel - aber in
+            # `ANGABEN_AUS_TITEL`. Hier steht es richtig als Portal ohne
+            # Eintrag in `ORT_AUS_TITEL`.
             Portal.IMMOWELT,
             Portal.FOTOCASA,
             Portal.IMMOSCOUT24,
@@ -3153,9 +3156,12 @@ class OrtUndStadtteilTests(SimpleTestCase):
     def test_nur_idealista_traegt_eine_titelregel(self):
         """Strukturzeuge: die Tabelle taeuscht keine Abdeckung vor.
 
-        Fuer Fotocasa, Pisos, Milanuncios, ImmoScout24 und Immowelt ist kein
-        einziger Titel belegt. Nach der Lehre vom 07.09. gehoert nichts in die
-        Tabelle, was nicht belegt ist.
+        Fuer Fotocasa, Pisos, Milanuncios und ImmoScout24 ist kein einziger
+        Titel belegt. Nach der Lehre vom 07.09. gehoert nichts in die Tabelle,
+        was nicht belegt ist.
+
+        Immowelt ist seit dem 15.09. belegt, steht aber nicht hier, sondern in
+        `ANGABEN_AUS_TITEL` - siehe `test_nur_immowelt_traegt_titelangaben`.
         """
         self.assertEqual(
             list(portale.ORT_AUS_TITEL), [portale.PORTAL_IDEALISTA]
@@ -6880,7 +6886,8 @@ FELDER_DES_DATENBLOCKS = (
     "Zimmer",
     "Baujahr",
     "Zustand",
-    "Stadtteil",
+    "PLZ",
+    "Ortsteil",
     "Region",
     "Portal",
     "Inserats-ID",
@@ -6927,6 +6934,7 @@ class ObjektansichtDatenblockTests(TestCase):
         """
         for name in (
             "objekttyp",
+            "plz",
             "stadtteil",
             "region",
             "portal",
@@ -7394,7 +7402,7 @@ class StadtteilDarstellungTests(TestCase):
         """
         antwort = self._objektansicht(Objekt.objects.create(url="https://x/1"))
         self.assertEqual(
-            (daten_paare(antwort)["Stadtteil"], daten_klassen(antwort)["Stadtteil"]),
+            (daten_paare(antwort)["Ortsteil"], daten_klassen(antwort)["Ortsteil"]),
             ("—", ["fehlt"]),
         )
 
@@ -7408,7 +7416,7 @@ class StadtteilDarstellungTests(TestCase):
             Objekt.objects.create(url="https://x/1", stadtteil="Puerto de Santiago")
         )
         self.assertEqual(
-            (daten_paare(antwort)["Stadtteil"], daten_klassen(antwort)["Stadtteil"]),
+            (daten_paare(antwort)["Ortsteil"], daten_klassen(antwort)["Ortsteil"]),
             ("Puerto de Santiago", []),
         )
 
@@ -7416,12 +7424,12 @@ class StadtteilDarstellungTests(TestCase):
         """Auch hier von fein nach grob."""
         antwort = self._objektansicht(Objekt.objects.create(url="https://x/1"))
         namen = list(daten_paare(antwort))
-        self.assertLess(namen.index("Stadtteil"), namen.index("Region"))
+        self.assertLess(namen.index("Ortsteil"), namen.index("Region"))
 
     def _objektansicht(self, objekt):
         antwort = self.client.get(f"/objekt/{objekt.pk}/")
         self.assertIn(
-            "Stadtteil", daten_paare(antwort), "der Datenblock wurde nicht gelesen"
+            "Ortsteil", daten_paare(antwort), "der Datenblock wurde nicht gelesen"
         )
         return antwort
 
@@ -13187,8 +13195,8 @@ class PaarParser(HTMLParser):
         if self._marke:
             self._text += daten
 
-    # Damit ein Zeuge `paare(antwort, "daten")["Stadtteil"]` schreiben kann und
-    # nicht `.paare["Stadtteil"]`. Der Parser IST die Paarliste; die zweite
+    # Damit ein Zeuge `paare(antwort, "daten")["Ortsteil"]` schreiben kann und
+    # nicht `.paare["Ortsteil"]`. Der Parser IST die Paarliste; die zweite
     # Sicht (`klassen`) steht daneben und nicht darin - genau die Aufteilung,
     # die `DatenblockParser` am 05.09. bekommen hat, damit ein Zeuge auf den
     # Text weiter gegen einen Text vergleicht.
@@ -13411,6 +13419,7 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
             portal=Portal.IDEALISTA,
             inserats_id="112155320",
             titel="Wohnung in Tamaimo-Arguayo",
+            plz="38690",
             stadtteil="Tamaimo-Arguayo",
             ort="Santiago del Teide",
             region="Teneriffa",
@@ -13460,7 +13469,7 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
         """Ohne ihn maessen die Zeugen unten nicht, dass GEFUELLTE Felder
         ihren Wert zeigen - sondern nur, dass irgendetwas dasteht."""
         for name in (
-            "titel", "stadtteil", "ort", "region", "land", "objekttyp",
+            "titel", "plz", "stadtteil", "ort", "region", "land", "objekttyp",
             "portal", "inserats_id", "beschreibung",
         ):
             with self.subTest(feld=name):
@@ -13584,7 +13593,7 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
     def test_jedes_feld_des_datenblocks_traegt_seinen_wert(self):
         """Am PAAR gemessen, nicht an der Anwesenheit der Beschriftung.
 
-        Dass "Stadtteil" auf der Seite steht, sagt noch nicht, dass daneben
+        Dass "Ortsteil" auf der Seite steht, sagt noch nicht, dass daneben
         etwas steht - und der Stadtteilname steht seit dem 14.09. ausserdem
         oben in der Objektzeile. Ein Zeuge auf die ganze Antwort bliebe
         gruen, waehrend das Feld seinen Wert schon verloren haette.
@@ -13595,7 +13604,8 @@ class ObjektansichtVollstaendigkeitTests(TestCase):
             "Zimmer": "3",
             "Baujahr": "1998",
             "Zustand": "mittel",
-            "Stadtteil": "Tamaimo-Arguayo",
+            "PLZ": "38690",
+            "Ortsteil": "Tamaimo-Arguayo",
             "Region": "Teneriffa",
             "Portal": "idealista",
             "Inserats-ID": "112155320",
@@ -15555,7 +15565,15 @@ class SichtungMigrationTests(TestCase):
         executor.loader.build_graph()
         executor.migrate([self.DANACH])
 
-        self.assertIsNone(Objekt.objects.get(pk=alt.pk).zuletzt_gesehen)
+        # Gelesen ueber das Modell im Zustand 0010 und NICHT ueber `Objekt`
+        # (15.09.). Seit 0011 kennt das heutige Modell die Spalte `plz`, die
+        # es im Zustand 0010 noch nicht gibt - der `SELECT` lief ins Leere,
+        # obwohl die Migration tut, was sie soll. Derselbe Weg wie in
+        # `StadtteilFeldTests`, und er haelt auch bei jedem kuenftigen Feld.
+        modell = executor.loader.project_state(self.DANACH).apps.get_model(
+            "objekte", "Objekt"
+        )
+        self.assertIsNone(modell.objects.get(pk=alt.pk).zuletzt_gesehen)
 
     def test_die_migration_loescht_das_objekt_nicht(self):
         """Geleert wird die Spalte, nicht die Zeile."""
@@ -15573,3 +15591,411 @@ class SichtungMigrationTests(TestCase):
         executor.loader.build_graph()
         executor.migrate([self.DANACH])
         self.assertEqual(Sichtung.objects.count(), 0)
+
+
+# =========================================================================
+# Immowelt-Titelregel, PLZ-Feld, Etikett "Ortsteil" (15.09.)
+# =========================================================================
+
+
+class ImmoweltTitelregelTests(TestCase):
+    """Zeugen 1 bis 8: Ortsteil, Ort, PLZ und Objekttyp aus dem Immowelt-Titel.
+
+    Gemessen wird AM ANGELEGTEN OBJEKT, auf dem ganzen Weg: Vorschau aufrufen,
+    absenden, was dort steht, das Objekt aus der Datenbank holen. Ein Zeuge
+    gegen die Vorschauseite waere blind - jeder Ortsname steht auch im
+    uebergebenen Titel, und der steht ebenfalls auf der Seite. Ein Zeuge nur an
+    der Funktion saehe nicht, ob die PLZ im Formular steht und beim Absenden
+    ankommt.
+    """
+
+    #: Die acht Belege aus dem Bestand vom 15.09.:
+    #: `(Titel, Ortsteil, Ort, PLZ, Objekttyp)`.
+    #:
+    #: Die PLZ des letzten Titels war im Screenshot abgeschnitten und ist in
+    #: der Spezifikation als `54347` ergaenzt. Im lokalen Bestand liegt kein
+    #: Immowelt-Objekt - nachgeprueft ist der Wert deshalb nicht.
+    BELEGE = (
+        (
+            "Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg (22395)",
+            "Bergstedt", "Hamburg", "22395", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 170 m² 1450000 € zum Kauf Volksdorf,Hamburg (22359)",
+            "Volksdorf", "Hamburg", "22359", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 2490000 € zum Kauf Berchtesgaden,Berchtesgaden (83471)",
+            "", "Berchtesgaden", "83471", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 124 m² 257000 € zum Kauf Roßfeld,Crailsheim (74564)",
+            "Roßfeld", "Crailsheim", "74564", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 118 m² 429000 € zum Kauf Heidingsfeld,Würzburg (97084)",
+            "Heidingsfeld", "Würzburg", "97084", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 120 m² 150000 € zum Kauf Niederelsungen,Wolfhagen (34466)",
+            "Niederelsungen", "Wolfhagen", "34466", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 115 m² 290000 € zum Kauf Neu Lüdershagen,Wendorf (18442)",
+            "Neu Lüdershagen", "Wendorf", "18442", Objekttyp.HAUS,
+        ),
+        (
+            "Haus 90 m² 167500 € zum Kauf Rosenkreuzstr. 7,Neumagen,Neumagen-Dhron (54347)",
+            "Neumagen", "Neumagen-Dhron", "54347", Objekttyp.HAUS,
+        ),
+    )
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+        self._lauf = 0
+
+    # --- Handgriffe -------------------------------------------------------
+
+    def _post_rumpf(self, antwort):
+        """Derselbe Rundlauf wie in `UebernahmeTests`: zurueck geht der
+        gerenderte Text, nicht der Rohwert."""
+        formular = antwort.context["form"]
+        daten = {}
+        for name, feld in formular.fields.items():
+            gerendert = feld.widget.format_value(formular[name].value())
+            if isinstance(gerendert, list):
+                gerendert = gerendert[0] if gerendert else ""
+            daten[name] = "" if gerendert is None else gerendert
+        for verstecktes in ("url", "portal", "inserats_id", "bilder"):
+            daten[verstecktes] = antwort.context[verstecktes]
+        return daten
+
+    def _uebernehmen(self, titel, url=None):
+        """Vorschau aufrufen, absenden, was dort steht - und das Objekt holen.
+
+        Ohne ausdrueckliche Adresse bekommt jeder Aufruf eine eigene:
+        derselbe Schluessel liefe beim zweiten Mal in die Dublettenpruefung.
+        `get()` und nicht `first()`: legt der POST nichts an, faellt der Zeuge
+        laut, statt gegen `None` zu vergleichen.
+        """
+        self._lauf += 1
+        url = url or f"https://www.immowelt.de/expose/beleg-{self._lauf}"
+        antwort = self.client.get("/uebernehmen/", {"url": url, "titel": titel})
+        self.client.post("/uebernehmen/", self._post_rumpf(antwort))
+        return Objekt.objects.get(url=url)
+
+    def _angaben(self, objekt):
+        return (objekt.stadtteil, objekt.ort, objekt.plz, objekt.objekttyp)
+
+    # --- Zeuge 1: die acht Belege, je Angabe ein Zeuge ---------------------
+
+    def test_jeder_beleg_traegt_seinen_ortsteil(self):
+        for titel, ortsteil, _, _, _ in self.BELEGE:
+            with self.subTest(titel=titel):
+                self.assertEqual(self._uebernehmen(titel).stadtteil, ortsteil)
+
+    def test_jeder_beleg_traegt_seinen_ort(self):
+        for titel, _, ort, _, _ in self.BELEGE:
+            with self.subTest(titel=titel):
+                self.assertEqual(self._uebernehmen(titel).ort, ort)
+
+    def test_jeder_beleg_traegt_seine_plz(self):
+        for titel, _, _, plz, _ in self.BELEGE:
+            with self.subTest(titel=titel):
+                self.assertEqual(self._uebernehmen(titel).plz, plz)
+
+    def test_jeder_beleg_traegt_seinen_objekttyp(self):
+        for titel, _, _, _, objekttyp in self.BELEGE:
+            with self.subTest(titel=titel):
+                self.assertEqual(self._uebernehmen(titel).objekttyp, objekttyp)
+
+    def test_der_gleichheitsbeleg_traegt_keine_flaeche(self):
+        """Riegel gegen blinde Belege: Berchtesgaden traegt die Last doppelt.
+
+        Er belegt den Gleichheitsfall UND einen Titel ohne Flaechenangabe.
+        Kaeme jemand auf die Idee, die Testdaten zu "vervollstaendigen", bliebe
+        Zeuge 1 gruen und die Regel duerfte die Flaeche wieder voraussetzen.
+        """
+        titel = self.BELEGE[2][0]
+        self.assertEqual(
+            ("m²" in titel, titel.count("Berchtesgaden")), (False, 2)
+        )
+
+    # --- Zeuge 2: fehlende Marke -----------------------------------------
+
+    #: Beleg 1 ohne ` zum Kauf `. Alles, woraus ein Rueckfall schoepfen
+    #: koennte, steht noch drin: der Typ vorn, der Adressteil, die Klammer mit
+    #: fuenf Ziffern am Ende. Ein Titel, der ohnehin nichts hergibt, liesse
+    #: den Zeugen nach dem Ausbau des Riegels gruen.
+    OHNE_MARKE = "Haus 70 m² 435000 € Bergstedt,Hamburg (22395)"
+
+    def test_ohne_marke_bleiben_alle_vier_felder_leer(self):
+        self.assertEqual(
+            self._angaben(self._uebernehmen(self.OHNE_MARKE)), ("", "", "", "")
+        )
+
+    # --- Zeuge 3: fehlende oder abweichende Klammer ------------------------
+
+    OHNE_KLAMMER = "Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg"
+    ABWEICHENDE_KLAMMERN = (
+        "Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg (2239)",
+        "Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg (223950)",
+    )
+
+    def test_ohne_klammer_bleibt_die_plz_leer(self):
+        self.assertEqual(self._uebernehmen(self.OHNE_KLAMMER).plz, "")
+
+    def test_ohne_klammer_stehen_ortsteil_und_ort(self):
+        objekt = self._uebernehmen(self.OHNE_KLAMMER)
+        self.assertEqual((objekt.stadtteil, objekt.ort), ("Bergstedt", "Hamburg"))
+
+    def test_eine_abweichende_klammer_laesst_die_plz_leer(self):
+        for titel in self.ABWEICHENDE_KLAMMERN:
+            with self.subTest(titel=titel):
+                self.assertEqual(self._uebernehmen(titel).plz, "")
+
+    def test_eine_abweichende_klammer_landet_nicht_im_ort(self):
+        """Der Zeuge, der faellt, wenn die Klammer nur bei gelesener PLZ
+        abgeschnitten wird - dann stuende `Hamburg (2239)` im Ort."""
+        for titel in self.ABWEICHENDE_KLAMMERN:
+            with self.subTest(titel=titel):
+                objekt = self._uebernehmen(titel)
+                self.assertEqual(
+                    (objekt.stadtteil, objekt.ort), ("Bergstedt", "Hamburg")
+                )
+
+    # --- Zeuge 4: Objekttyp ausserhalb der Auswahl -------------------------
+
+    EINFAMILIENHAUS = (
+        "Einfamilienhaus 120 m² 150000 € zum Kauf Niederelsungen,Wolfhagen (34466)"
+    )
+
+    def test_ein_objekttyp_ausserhalb_der_auswahl_bleibt_leer(self):
+        """Leer - und ausdruecklich NICHT `sonstiges`.
+
+        Der Vergleich gegen `""` faellt bei beidem: bei einer Zuordnung
+        `Einfamilienhaus -> haus` genauso wie bei einem Rueckfall auf
+        `sonstiges`.
+        """
+        self.assertEqual(self._uebernehmen(self.EINFAMILIENHAUS).objekttyp, "")
+
+    def test_der_uebrige_titel_mit_fremdem_typ_wird_trotzdem_gelesen(self):
+        """Riegel gegen einen Zeugen im Vakuum: der Titel wurde wirklich
+        ausgewertet. Sonst maesse der Zeuge darueber ein Objekt, an dem gar
+        nichts gelesen wurde - und dessen Typ waere aus jedem Grund leer."""
+        objekt = self._uebernehmen(self.EINFAMILIENHAUS)
+        self.assertEqual(
+            (objekt.stadtteil, objekt.ort, objekt.plz),
+            ("Niederelsungen", "Wolfhagen", "34466"),
+        )
+
+    # --- Zeuge 5: ein Segment allein ---------------------------------------
+
+    EIN_SEGMENT = "Haus 120 m² 150000 € zum Kauf Wolfhagen (34466)"
+
+    def test_ein_segment_allein_fuellt_den_ort(self):
+        self.assertEqual(self._uebernehmen(self.EIN_SEGMENT).ort, "Wolfhagen")
+
+    def test_ein_segment_allein_laesst_den_ortsteil_leer(self):
+        self.assertEqual(self._uebernehmen(self.EIN_SEGMENT).stadtteil, "")
+
+    # --- Zeuge 6: rein numerisches vorletztes Segment ----------------------
+
+    #: Das vorletzte Segment IST numerisch - `7`. Fehlte der Fall in den
+    #: Daten, bliebe der Zeuge nach dem Ausbau des Riegels gruen.
+    HAUSNUMMER = "Haus 90 m² 167500 € zum Kauf Rosenkreuzstr.,7,Neumagen-Dhron (54347)"
+
+    def test_ein_numerisches_vorletztes_segment_laesst_den_ortsteil_leer(self):
+        self.assertEqual(self._uebernehmen(self.HAUSNUMMER).stadtteil, "")
+
+    def test_ein_numerisches_vorletztes_segment_laesst_den_ort_stehen(self):
+        """Verworfen wird nur der Ortsteil."""
+        self.assertEqual(self._uebernehmen(self.HAUSNUMMER).ort, "Neumagen-Dhron")
+
+    # --- Zeuge 7: fuehrende Null --------------------------------------------
+
+    FUEHRENDE_NULL = "Wohnung 60 m² 250000 € zum Kauf Innere Altstadt,Dresden (01067)"
+
+    def test_eine_plz_mit_fuehrender_null_bleibt_zeichenkette(self):
+        """Durch Vorschau, Formular, POST und Datenbank. Als Zahl gespeichert,
+        kaeme `1067` zurueck, und der Vergleich fiele."""
+        self.assertEqual(self._uebernehmen(self.FUEHRENDE_NULL).plz, "01067")
+
+    # --- Zeuge 8: Idealista bleibt unberuehrt ------------------------------
+
+    IDEALISTA_INSERAT = "https://www.idealista.com/inmueble/12345/"
+    IDEALISTA_BELEG = (
+        "Wohnung zu verkaufen in Calle San Pancracio, 5, "
+        "Zona Puerto Deportivo, Fuengirola — idealista"
+    )
+
+    def test_idealista_leitet_ortsteil_und_ort_nach_dieser_runde_unveraendert_ab(self):
+        """Ein Beleg vom 14.09. auf dem ganzen Weg - Strasse, Hausnummer,
+        Lage, Gemeinde. Die Idealista-Regel wurde am 15.09. nicht angefasst;
+        dieser Zeuge misst, dass das auch fuer ihren Aufruf in der Uebernahme
+        gilt."""
+        objekt = self._uebernehmen(self.IDEALISTA_BELEG, url=self.IDEALISTA_INSERAT)
+        self.assertEqual(
+            (objekt.stadtteil, objekt.ort), ("Zona Puerto Deportivo", "Fuengirola")
+        )
+
+    def test_ein_immowelt_titel_unter_idealista_adresse_liefert_nichts(self):
+        """Die Immowelt-Regel greift NUR bei Portal `immowelt`.
+
+        Der Titel ist ein belegter Immowelt-Titel. Liefe die Regel am Titel
+        statt am Portal, stuenden hier Bergstedt, Hamburg, 22395 und `haus`.
+        """
+        objekt = self._uebernehmen(self.BELEGE[0][0], url=self.IDEALISTA_INSERAT)
+        self.assertEqual(self._angaben(objekt), ("", "", "", ""))
+
+    # --- Neuanlage UND Ergaenzung ------------------------------------------
+
+    def test_beim_ergaenzen_kommen_die_angaben_am_bestandsobjekt_an(self):
+        """Die Regel greift auch beim Ergaenzen - in leere Felder.
+
+        Das Bestandsobjekt traegt einen EIGENEN Titel. Bestandswert gewinnt,
+        der Titel im Formular bleibt `Haus` - abgeleitet wird trotzdem aus dem
+        Titel, den das Lesezeichen uebergibt, und genau das misst der Zeuge.
+        """
+        url = "https://www.immowelt.de/expose/bestand"
+        Objekt.objects.create(
+            url=url, portal=Portal.IMMOWELT, inserats_id="bestand", titel="Haus"
+        )
+        objekt = self._uebernehmen(self.BELEGE[0][0], url=url)
+        self.assertEqual(
+            self._angaben(objekt), ("Bergstedt", "Hamburg", "22395", Objekttyp.HAUS)
+        )
+
+
+class ImmoweltTitelangabenTests(SimpleTestCase):
+    """Die reine Funktion und ihre Tabellen - was am Objekt nicht zu sehen ist."""
+
+    BELEG = "Haus 70 m² 435000 € zum Kauf Bergstedt,Hamburg (22395)"
+
+    def _angaben(self, titel):
+        return portale.angaben_aus_titel(Portal.IMMOWELT, titel)
+
+    # --- Tabellen -----------------------------------------------------------
+
+    def test_nur_immowelt_traegt_titelangaben(self):
+        """Strukturzeuge wie `test_nur_idealista_traegt_eine_titelregel`."""
+        self.assertEqual(list(portale.ANGABEN_AUS_TITEL), [portale.PORTAL_IMMOWELT])
+
+    def test_ein_portal_ohne_regel_liefert_vier_leere_angaben(self):
+        """Auch bei einem belegten Immowelt-Titel: die Regel haengt am Portal."""
+        for portal in (Portal.IDEALISTA, Portal.IMMOSCOUT24, Portal.SONSTIGES, ""):
+            with self.subTest(portal=portal):
+                self.assertEqual(
+                    portale.angaben_aus_titel(portal, self.BELEG),
+                    dict.fromkeys(portale.ANGABEN, ""),
+                )
+
+    def test_die_objekttypen_sind_genau_die_auswahlwerte(self):
+        """KEINE Abbildungstabelle - strukturell und nicht per Absprache.
+
+        Faellt bei jedem Eintrag, der kein Auswahlwert ist (`einfamilienhaus`),
+        bei jedem fehlenden und bei jeder Umbenennung in `choices.py`.
+        """
+        self.assertEqual(
+            portale.OBJEKTTYPEN,
+            {beschriftung.casefold(): wert for wert, beschriftung in Objekttyp.choices},
+        )
+
+    def test_die_angaben_sind_felder_des_vorschauformulars(self):
+        """Riegel gegen eine stille Drift: `portale.py` nennt die Felder als
+        nackte Zeichenketten. Stuende dort ein Name, den das Formular nicht
+        kennt, schriebe `_vorbelegen()` in ein Feld, das es nicht gibt - und
+        nichts meldete sich."""
+        for name in portale.ANGABEN:
+            with self.subTest(feld=name):
+                self.assertIn(name, forms.UebernahmeForm.base_fields)
+
+    def test_die_regel_liefert_immer_alle_vier_schluessel(self):
+        for titel in (self.BELEG, "", "Haus 70 m² 435000 € Hamburg (22395)"):
+            with self.subTest(titel=titel):
+                self.assertEqual(list(self._angaben(titel)), list(portale.ANGABEN))
+
+    # --- Regeln, die kein Beleg einzeln traegt -----------------------------
+
+    def test_es_zaehlt_das_letzte_vorkommen_der_marke(self):
+        """Am ERSTEN Vorkommen getrennt, stuende `70 m² 435000 € zum Kauf
+        Bergstedt` im Ortsteil."""
+        titel = "Haus zum Kauf 70 m² 435000 € zum Kauf Bergstedt,Hamburg (22395)"
+        self.assertEqual(self._angaben(titel)["stadtteil"], "Bergstedt")
+
+    def test_gross_und_kleinschreibung_des_typs_zaehlt_nicht(self):
+        for wort in ("HAUS", "haus", "hAuS"):
+            with self.subTest(wort=wort):
+                titel = self.BELEG.replace("Haus", wort, 1)
+                self.assertEqual(self._angaben(titel)["objekttyp"], Objekttyp.HAUS)
+
+    def test_grundstueck_ergibt_den_schluessel_und_nicht_die_beschriftung(self):
+        """Die einzige Stelle, an der Beschriftung und Schluessel mehr als in
+        der Schreibweise auseinandergehen."""
+        titel = "Grundstück 800 m² 90000 € zum Kauf Wolfhagen (34466)"
+        self.assertEqual(self._angaben(titel)["objekttyp"], Objekttyp.GRUNDSTUECK)
+
+    def test_ein_zu_langer_ort_bleibt_leer_und_der_ortsteil_steht(self):
+        zu_lang = "H" * (portale.ORTSFELD_LAENGE + 1)
+        angaben = self._angaben(f"Haus 435000 € zum Kauf Bergstedt,{zu_lang} (22395)")
+        self.assertEqual((angaben["stadtteil"], angaben["ort"]), ("Bergstedt", ""))
+
+    def test_ein_zu_langer_ortsteil_bleibt_leer_und_der_ort_steht(self):
+        zu_lang = "B" * (portale.ORTSFELD_LAENGE + 1)
+        angaben = self._angaben(f"Haus 435000 € zum Kauf {zu_lang},Hamburg (22395)")
+        self.assertEqual((angaben["stadtteil"], angaben["ort"]), ("", "Hamburg"))
+
+    def test_leerraum_am_rand_des_titels_stoert_nicht(self):
+        """Das Lesezeichen trimmt den og:Titel, `document.title` als Rueckfall
+        aber nicht. Ohne das Trimmen bliebe hier die PLZ leer und die Klammer
+        im Ort."""
+        self.assertEqual(
+            self._angaben(f"  {self.BELEG} \n"),
+            {"stadtteil": "Bergstedt", "ort": "Hamburg", "plz": "22395", "objekttyp": "haus"},
+        )
+
+    def test_eine_klammer_ohne_ziffern_bleibt_im_ort(self):
+        """ENTSCHEIDUNG vom 15.09., nicht belegt: abgeschnitten wird nur eine
+        Klammer aus Ziffern. Ein Gemeindename mit Klammer bleibt ganz - eine
+        Regel "jede Klammer ab" liesse hier still `Frankfurt` stehen."""
+        angaben = self._angaben("Haus 100 m² 200000 € zum Kauf Frankfurt (Oder)")
+        self.assertEqual((angaben["ort"], angaben["plz"]), ("Frankfurt (Oder)", ""))
+
+
+class PlzOrtsteilDatenblockTests(TestCase):
+    """Zeuge 9: PLZ- und Ortsteil-Zeile im Datenblock, auch leer.
+
+    Eingegrenzt auf `dl.daten` und am PAAR gemessen. "Ortsteil" steht nach
+    dieser Runde auch im Bearbeiten-Formular; ein Zeuge auf das blosse Wort
+    waere blind.
+    """
+
+    def setUp(self):
+        self.person = Person.objects.create_user("steffen", password="lang-genug-123")
+        self.client.force_login(self.person)
+
+    def _datenblock(self, **felder):
+        objekt = Objekt.objects.create(url="https://beispiel.de/1", **felder)
+        return paare(self.client.get(f"/objekt/{objekt.pk}/"), "daten")
+
+    def test_die_plz_zeile_steht_auch_leer(self):
+        block = self._datenblock()
+        self.assertEqual((block.get("PLZ"), block.klassen.get("PLZ")), ("—", ["fehlt"]))
+
+    def test_die_ortsteil_zeile_steht_auch_leer(self):
+        block = self._datenblock()
+        self.assertEqual(
+            (block.get("Ortsteil"), block.klassen.get("Ortsteil")), ("—", ["fehlt"])
+        )
+
+    def test_die_plz_zeile_traegt_ihren_wert(self):
+        """Die Gegenprobe: ohne sie bliebe der Zeuge fuer die leere Zeile gruen,
+        wenn die Zeile IMMER den Strich zeigte. Mit fuehrender Null, damit auch
+        die Anzeige sie nicht verliert."""
+        block = self._datenblock(plz="01067")
+        self.assertEqual((block.get("PLZ"), block.klassen.get("PLZ")), ("01067", []))
+
+    def test_die_plz_steht_unmittelbar_vor_dem_ortsteil(self):
+        reihenfolge = self._datenblock().reihenfolge
+        self.assertEqual(reihenfolge[reihenfolge.index("PLZ") + 1], "Ortsteil")

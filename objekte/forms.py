@@ -69,6 +69,11 @@ class ObjektForm(forms.ModelForm):
             "portal",
             "inserats_id",
             "titel",
+            # Vor dem Ortsteil, wie im Datenblock der Objektansicht (15.09.).
+            # Steht die PLZ nicht in dieser Liste, faellt sie auch aus dem
+            # Vorschauformular der Uebernahme - und eine aus dem Titel
+            # vorbelegte PLZ ginge beim Absenden still verloren.
+            "plz",
             # Vor `ort`, weil die Ortsebenen von fein nach grob stehen -
             # dieselbe Reihenfolge wie in der Unterzeile der Liste.
             "stadtteil",

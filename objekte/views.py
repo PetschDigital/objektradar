@@ -19,6 +19,7 @@ from .forms import ObjektFilterForm, ObjektForm, UebernahmeForm
 from .lesezeichen import skript_fuer
 from .models import Bild, Notiz, Objekt, Votum
 from .portale import (
+    angaben_aus_titel,
     ist_bekannte_domain,
     land_aus_portal,
     ort_und_stadtteil,
@@ -1426,6 +1427,20 @@ class UebernehmenView(View):
             werte["ort"] = ort
         if stadtteil:
             werte["stadtteil"] = stadtteil
+
+        # Ortsteil, Ort, PLZ und Objekttyp aus dem Immowelt-Titel (15.09.).
+        # Eigene Regel und eigene Tabelle, siehe `angaben_aus_titel()`; fuer
+        # jedes andere Portal kommt alles leer zurueck. Die Aufrufe hier und
+        # darueber ueberschneiden sich nicht: fuer Immowelt liefert
+        # `ort_und_stadtteil()` nichts, fuer Idealista diese hier nichts.
+        #
+        # Leeres faellt weg wie oben, jedes Feld einzeln: ein leerer Wert ist
+        # keine Vorbelegung und beim Bestandsobjekt kein Hinweis. Was bleibt,
+        # laeuft durch `_hinweise()` und `_vorbelegen()` - der Bestandswert
+        # gewinnt auch hier.
+        for name, wert in angaben_aus_titel(portal, daten.get("titel", "")).items():
+            if wert:
+                werte[name] = wert
 
         # Das Land folgt aus dem Portal und wird gar nicht gelesen. Es steht
         # trotzdem HIER und nicht weiter unten: was in `werte` landet, laeuft
